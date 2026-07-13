@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "DinoDigger",
+  "project_id": "328d73cb-461e-4aab-859b-7ad90e0f4252"
+}
