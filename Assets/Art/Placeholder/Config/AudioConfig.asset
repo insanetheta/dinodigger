@@ -1,0 +1,30 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2298b84fe40094177989e98a26935b7e, type: 3}
+  m_Name: AudioConfig
+  m_EditorClassIdentifier: 
+  Music: {fileID: 8300000, guid: 1c60ecabd86c94d06adcb97bc6ac44aa, type: 3}
+  Tap: {fileID: 8300000, guid: 24fce8fc23fb94051bac4e8c3539fe2b, type: 3}
+  Move: {fileID: 8300000, guid: ed2af839437804d66893f8e3a27551f8, type: 3}
+  Dig: {fileID: 8300000, guid: 3eaf60f25d66348bc834eeed00202e91, type: 3}
+  Crumble: {fileID: 8300000, guid: e40c3576e873b4115a59f631a52c69b5, type: 3}
+  ItemPop: {fileID: 8300000, guid: 6e86074e9b6954c43bf282bf3866698a, type: 3}
+  Chime: {fileID: 8300000, guid: d7e34e5fc88a244f4b52f5d5000a9e4b, type: 3}
+  Hatch: {fileID: 8300000, guid: ae88cdfb68a59450cb36b1852f7c579c, type: 3}
+  Roar: {fileID: 8300000, guid: 66481d257016d4e95837333af590896c, type: 3}
+  Eat: {fileID: 8300000, guid: 0b5226e022f5e48689bf19775d1975f1, type: 3}
+  Grow: {fileID: 8300000, guid: 4b40bafc9f5204926ba4b2d6c725ddd5, type: 3}
+  TreasureCollect: {fileID: 8300000, guid: 88e3e571cec874e9d9186865f7d092b6, type: 3}
+  Honk: {fileID: 8300000, guid: ac5bef01c0d414a7ebb28d33fb1621bd, type: 3}
+  Heart: {fileID: 8300000, guid: 4ce8ba2a94bed4c719c6a088e7f44192, type: 3}
+  MusicVolume: 0.5
+  SfxVolume: 0.9

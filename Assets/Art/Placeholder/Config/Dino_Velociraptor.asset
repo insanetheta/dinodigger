@@ -1,0 +1,54 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cd06c98be5e654eeeacf898ee93aca68, type: 3}
+  m_Name: Dino_Velociraptor
+  m_EditorClassIdentifier: 
+  Type: 8
+  DisplayName: Velociraptor
+  Dance: 8
+  BodyColor: {r: 0.62, g: 0.72, b: 0.8, a: 1}
+  EggColor: {r: 0.62, g: 0.72, b: 0.8, a: 1}
+  EggSprite: {fileID: 21300000, guid: d1c7fc958a876463e8465b3cd8aeb0a5, type: 3}
+  WalkSprites:
+  - {fileID: 21300000, guid: 7fd706bef24ac4e78aca3c042774130e, type: 3}
+  - {fileID: 21300000, guid: 4dd97ba5cc40f4757ae6cfca0da33f9c, type: 3}
+  - {fileID: 21300000, guid: 4ad0bccb5c66a458eb4e33dba70df8a2, type: 3}
+  - {fileID: 21300000, guid: f49028a06f4964870beb803edeba837e, type: 3}
+  - {fileID: 21300000, guid: 2e7d8a2bd09d446229b465af9bc4cfb1, type: 3}
+  - {fileID: 21300000, guid: 823086e2a348447b986b37d7170395b4, type: 3}
+  - {fileID: 21300000, guid: 7866d68113da743a19329b17d3a2ebf0, type: 3}
+  - {fileID: 21300000, guid: 9b12bfa9361de4953808b6f4691d9be5, type: 3}
+  BabySprites:
+  - {fileID: 21300000, guid: ca6d8410b2ed2454ca1f2cef7bf9c9f3, type: 3}
+  - {fileID: 21300000, guid: 06eb9cc8410bd42e087cd82a1e4743a8, type: 3}
+  - {fileID: 21300000, guid: 24fc151aec9ee4e92a5aed97c1b9c19e, type: 3}
+  - {fileID: 21300000, guid: 9c5af1efcf90a4479bd62bb5b1af59a0, type: 3}
+  - {fileID: 21300000, guid: 1905589dbb973433e8b42b9c64220c6f, type: 3}
+  - {fileID: 21300000, guid: 39f48b3f24d9b4a7e95741f7b7402280, type: 3}
+  - {fileID: 21300000, guid: d67aab5cf02b54b19aae3fa68e03ad2f, type: 3}
+  - {fileID: 21300000, guid: 56322d98bfda243da9c9d94177fd627f, type: 3}
+  KidSprites:
+  - {fileID: 21300000, guid: 7ad9924509e1b430199d1de34480a442, type: 3}
+  - {fileID: 21300000, guid: db9685222aa9b4b9c9c2ea7b995096f3, type: 3}
+  - {fileID: 21300000, guid: ea366eaf03ad34b4486cf596ec084b29, type: 3}
+  - {fileID: 21300000, guid: 9686bf5d2374044eb9267544112837cf, type: 3}
+  - {fileID: 21300000, guid: 11c51b204fb714b13baafc8ccb8ff7ff, type: 3}
+  - {fileID: 21300000, guid: fedf9081a4cf344fe86a2f67e0a095e8, type: 3}
+  - {fileID: 21300000, guid: fc1b91340d6414d4fbea7a0c21a2dea3, type: 3}
+  - {fileID: 21300000, guid: 91e73dd488dcd488dab08b43e750a461, type: 3}
+  IdleSprite: {fileID: 21300000, guid: 2e7d8a2bd09d446229b465af9bc4cfb1, type: 3}
+  WalkASprites: []
+  WalkBSprites: []
+  BabyWalkASprites: []
+  BabyWalkBSprites: []
+  KidWalkASprites: []
+  KidWalkBSprites: []

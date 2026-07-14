@@ -1,0 +1,66 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4ed83a430057e4798830869cf8f79c6a, type: 3}
+  m_Name: PlaceholderLibrary
+  m_EditorClassIdentifier: 
+  GrassTile: {fileID: 11400000, guid: e05ff42ae7e864a53aa2ebf785c318d0, type: 2}
+  PathTile: {fileID: 11400000, guid: 0223a1f57166c4ae19f15798c278b6c2, type: 2}
+  WaterTile: {fileID: 11400000, guid: 5f1450db1c5c64554a1e2e464bdda05b, type: 2}
+  BridgeTile: {fileID: 11400000, guid: 249562cc355f44f168e543cee10448a3, type: 2}
+  MoundTile: {fileID: 11400000, guid: 297cefaea05ef46dab890cc79756a35a, type: 2}
+  TreeTile: {fileID: 11400000, guid: 2c3fac2f6d2394f42bfe25aec87345b8, type: 2}
+  RockTile: {fileID: 11400000, guid: e165eb770290b4814bb6c5ce8e0ea667, type: 2}
+  BackhoeDir:
+  - {fileID: 21300000, guid: 1e7b162d67df549069140250028aea45, type: 3}
+  - {fileID: 21300000, guid: cac34cbc06fa146b2b3f20a7695cd001, type: 3}
+  - {fileID: 21300000, guid: 081b50a3f0232471e93e988c19c9c93a, type: 3}
+  - {fileID: 21300000, guid: 1210ca81db7784b74addb9c97f657794, type: 3}
+  - {fileID: 21300000, guid: 58697643d64fa4e67884158c6d63e893, type: 3}
+  - {fileID: 21300000, guid: 78dfd24b589e54812b8cd8a646031149, type: 3}
+  - {fileID: 21300000, guid: 82d38a0707fa84ae0b15c92d9a6155f2, type: 3}
+  - {fileID: 21300000, guid: bbc77658b144f4e298038b83ff6400b2, type: 3}
+  BackhoeBody: {fileID: 21300000, guid: 081b50a3f0232471e93e988c19c9c93a, type: 3}
+  ScoopArm: {fileID: 21300000, guid: a93c983e06eeb4795ab9f2a4319884d8, type: 3}
+  DigBodySprite: {fileID: 21300000, guid: b8b71b7cd808a41cb8a1521ec53ae4c6, type: 3}
+  BoomSprite: {fileID: 21300000, guid: f48ffd43843974b3cbe938d4490f39ac, type: 3}
+  StickSprite: {fileID: 21300000, guid: 3d3fd9e14a4d54f799bb2826031ef720, type: 3}
+  BucketSprite: {fileID: 21300000, guid: 56092610cf5ca4669882190d5b35be01, type: 3}
+  MoundSprite: {fileID: 21300000, guid: ba8f1f6237bb44f59b131592af5dd9ab, type: 3}
+  NestSprite: {fileID: 21300000, guid: a681d1186e9bf4d4b822522950312bf3, type: 3}
+  EggAssemblySprites:
+  - {fileID: 21300000, guid: 9fb8d1eda038644948c5edf2b7f13938, type: 3}
+  - {fileID: 21300000, guid: 5426e773ab80e4f218ba01c9a6cd8b29, type: 3}
+  - {fileID: 21300000, guid: 00b283cecdf404bbdbaad8eef9070595, type: 3}
+  - {fileID: 21300000, guid: f0d0fffc57b404ae8bd540d7e4ceb653, type: 3}
+  - {fileID: 21300000, guid: c1a9c817d38484be29aa0cf89fa265a8, type: 3}
+  DirtStates:
+  - {fileID: 21300000, guid: da0938df3687a4a3eb564faeca52469c, type: 3}
+  - {fileID: 21300000, guid: b2589efb5cbfd413096ac36d96865a6b, type: 3}
+  - {fileID: 21300000, guid: 09bccae3a7be54c6397b747ec74d4675, type: 3}
+  DigBackground: {fileID: 21300000, guid: 15d8d2a167cae4da58cda5b720686a08, type: 3}
+  FruitSprites:
+  - {fileID: 21300000, guid: c1673ff39a92c4c188e1f6b21f872025, type: 3}
+  - {fileID: 21300000, guid: 37e1ee2d5b26148a69b3a6be4a7a4841, type: 3}
+  - {fileID: 21300000, guid: 23f2ff43519a147b9b6f25f9b2573b42, type: 3}
+  - {fileID: 21300000, guid: aad3cb468645b408491c982a6e9149e6, type: 3}
+  TreasureSprites:
+  - {fileID: 21300000, guid: 97a92f78d4c394d1ca60935f3abf9edb, type: 3}
+  - {fileID: 21300000, guid: 0fd2a149ee6794fbe94f6991fe4c966d, type: 3}
+  - {fileID: 21300000, guid: cddfa97f0e6bc48a8ba40ec02f5e8d82, type: 3}
+  - {fileID: 21300000, guid: 7a0a9be7e2fc14b60b0315f925a72f37, type: 3}
+  ShardSprite: {fileID: 21300000, guid: 9eadc7aea1d834ca0a1abe6b10709412, type: 3}
+  StarParticle: {fileID: 21300000, guid: 1e83911eeed82416888274d1f0794094, type: 3}
+  HeartParticle: {fileID: 21300000, guid: 61a01d4e5e8214be29055122ed5f8b04, type: 3}
+  CrumbParticle: {fileID: 21300000, guid: 6ba7d2b40cba041828410e8481bb93ec, type: 3}
+  TreasureIcon: {fileID: 21300000, guid: e7f24df6b8ef74b1abf25f3eb79cd77e, type: 3}
+  MuteIcon: {fileID: 21300000, guid: e08db8ffafe194406b01004c76100083, type: 3}
+  SoundIcon: {fileID: 21300000, guid: a8404785c44974bdc889da3be1ae0b75, type: 3}

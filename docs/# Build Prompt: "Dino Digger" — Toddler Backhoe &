@@ -1,0 +1,120 @@
+# Build Prompt: "Dino Digger" — Toddler Backhoe & Dinosaur Game
+
+Copy everything below this line into your coding agent.
+
+---
+
+## Project Overview
+
+Build a Unity game for toddlers (ages 2–3) called **Dino Digger**. The player controls a friendly cartoon backhoe on an isometric map, taps to move it around, digs up dinosaur eggs and other treasures, hatches the eggs into baby dinosaurs, and feeds the dinos fruit to grow them.
+
+**Targets:** iOS, Android, and WebGL from a single Unity project. Landscape (tablet) orientation only.
+
+**Design philosophy:** Every tap does something delightful. No fail states, no timers, no text the child must read, no menus deeper than one level. Big touch targets (minimum ~120px at 1080p). Chunky, saturated, cartoon art. Constant gentle positive feedback (sparkles, bounces, happy sounds).
+
+## Tech Requirements
+
+
+Unity 2022 LTS or newer, Universal Render Pipeline (2D).
+2D isometric tilemap (Unity's Isometric Z-as-Y Tilemap) for the overworld.
+All characters are 2D sprites with **8-directional facing** (N, NE, E, SE, S, SW, W, NW). Sprite direction is chosen from the movement vector; use a simple utility that maps a normalized direction to one of 8 sprite sets.
+Input: single-touch tap only. Mouse click works identically in the editor/WebGL.
+No IAP, no ads, no analytics, no network calls at runtime. Fully offline.
+Save progress (hatched dinos, growth stages, collected treasure count) locally with a simple JSON save file via `Application.persistentDataPath`; use PlayerPrefs fallback on WebGL.
+Audio: simple AudioManager with SFX pool and one looping background music track, with a parent-accessible mute toggle.
+
+
+## Core Game Loop
+
+
+**Roam (isometric overworld):** The backhoe idles on an isometric grass/dirt map. The child taps anywhere walkable → backhoe pathfinds/drives there (straight-line steering is fine for v1; avoid water tiles). While moving, the sprite switches among the 8 directional sprites based on heading. Dig spots are visible as slightly raised dirt mounds with a subtle sparkle so they're discoverable.
+**Dig (side-view mini-game):** When the backhoe arrives at a dig mound, the camera transitions (quick, smooth ~0.5s wipe or zoom) to a **side-view cutaway** of the ground: backhoe on the surface, 4–6 layers of dirt below shown as a grid of chunky dirt tiles. The child taps any dirt tile → the backhoe arm animates, the scoop swings to that spot, and the tile breaks apart with a satisfying crumble + particle burst. Buried items are partially visible (a hint of eggshell or fruit color peeking through dirt) so the child learns to aim, but random tapping still always works.
+**Discover:** When a buried item is fully uncovered, the scoop lifts it out and it **pops up out of the ground in a happy arc**, the view transitions back to isometric, and the item lands and bounces on the grass near the backhoe with sparkles and a chime.
+**Hatch:** If the item is a dino egg, it wobbles 2–3 times where it landed, then cracks and hatches immediately into a baby dinosaur (no requirements to hatch — instant payoff). Confetti + happy roar.
+**Grow:** Fruit dug up sits on the ground. Tap a fruit → nearest hungry dino runs over and eats it (munch animation, hearts). After eating enough fruit, the dino grows to the next size with a fun "poof + sparkle" grow animation. **Three growth stages:** baby → kid → big. Fruit needed: 2 to reach kid, 3 more to reach big.
+**Companions:** Hatched dinos loosely follow the backhoe around the overworld with idle wandering. Tapping a dino makes it do a happy dance/roar with hearts. Big (stage 3) dinos help dig: when the player enters dig mode, one big dino appears beside the backhoe in the side view and each player tap also clears one adjacent tile (visualized as the dino swiping/stomping).
+
+
+## Content for v1
+
+**Diggable items** (weighted random per dig site, each site holds 2–4 items):
+
+Dino eggs (~35%) — egg color/pattern telegraphs which dino is inside.
+Fruit (~40%) — apples, bananas, berries, watermelon slices.
+Treasure (~25%) — gold coins, gems, an old boot (silly), a bone. Treasure flies to a corner "collection" counter with a coin sound. Purely for delight; no economy.
+
+
+**Dinosaurs (4 types):**
+
+T-Rex (green) — dance: stomp + roar
+Triceratops (orange) — dance: head shake
+Brachiosaurus / long-neck (blue) — dance: neck sway
+Stegosaurus (purple) — dance: tail wag
+
+
+Each dino needs: 8-direction walk sprites, idle, eat, dance, and grow-poof — at all 3 sizes (sizes can be uniform sprite scaling in v1, with scale factors 1.0 / 1.35 / 1.8, so one sprite set per dino is enough to ship).
+
+**Map:** One handcrafted isometric island, roughly 24×24 tiles: grass, dirt paths, a pond (unwalkable), a few trees and rocks as obstacles, 8–10 dig mounds. Dig mounds respawn in a new random valid location ~20 seconds after being dug out so the game never runs dry.
+
+## Scene / Code Structure
+
+
+`Scenes/Main.unity` — single scene; dig mode is an overlay/sub-view, not a scene load.
+Managers (plain C#, single GameManager MonoBehaviour wiring them up): `GameStateManager` (Roam / Transition / Dig states), `SaveManager`, `AudioManager`, `SpawnManager` (dig mound respawns).
+`BackhoeController` — tap-to-move, 8-dir sprite resolution, arrival detection triggering dig mode.
+`DigModeController` — builds the dirt grid, handles tile taps, scoop arm animation (simple 2-bone or frame-based animation is fine), item reveal and launch-back-to-overworld handoff.
+`DinoController` — follow behavior (offset slots around the backhoe so dinos don't stack), hunger/growth state, tap reactions.
+`ItemPickup` — fruit/treasure/egg behavior on the overworld.
+Keep everything event-driven with a lightweight static event bus (`OnItemDug`, `OnEggHatched`, `OnDinoGrew`) so systems stay decoupled.
+
+
+## Art & Asset Pipeline
+
+Use a two-track pipeline: free CC0 packs for environment/props, AI-generated character sheets for the backhoe and dinos.
+
+### Track 1 — Free downloadable assets (fetch these directly)
+
+Kenney (kenney.nl) assets are CC0 (no attribution required) and downloadable as direct zip links — fetch and unzip them into `Assets/Art/Kenney/`:
+
+**Isometric tiles:** https://kenney.nl/assets/isometric-blocks (grass, dirt, water blocks for the tilemap)
+**Nature/props:** https://kenney.nl/assets/isometric-miniature-farm and https://kenney.nl/assets/isometric-miniature-nature style packs for trees, rocks, fences
+**UI:** https://kenney.nl/assets/ui-pack (big rounded buttons ideal for toddler UI)
+**Audio:** https://kenney.nl/assets/digital-audio and https://kenney.nl/assets/interface-sounds for taps/chimes; use a CC0 track from https://opengameart.org for background music (filter license = CC0)
+
+
+If a specific pack URL 404s, browse kenney.nl/assets?category=2d for the current isometric packs and pick equivalents. OpenGameArt.org and itch.io free packs (check license is CC0/CC-BY) are the fallback sources.
+
+### Track 2 — Gemini-generated character sprites
+
+Use the Gemini API (image generation model, e.g. `gemini-2.0-flash-exp` image output or the current Imagen endpoint) with the developer's API key (read from environment variable `GEMINI_API_KEY`; never hardcode it).
+
+**Key technique for consistent 8-direction sprites:** generate ONE character turnaround sheet per character in a SINGLE image, then slice it. Same character in all 8 views in one generation keeps the design consistent; separate generations will drift.
+
+Prompt template per character:
+
+"Sprite sheet for a 2D isometric video game, single character shown in 8 rotational views arranged in a 4x2 grid on a plain solid magenta background (#FF00FF). Character: [friendly yellow cartoon backhoe excavator with big cute eyes on the cab window / chubby happy baby green T-Rex / ...]. Chunky toddler-friendly cartoon style, thick dark outlines, bright saturated colors, soft shading, no text, no drop shadows, each view centered in its grid cell, views in order: front, front-right, right, back-right, back, back-left, left, front-left. Consistent character size across all views."
+
+Then write a small Python or C# editor script that: slices the 4×2 grid into 8 sprites, chroma-keys out the magenta background to alpha, trims, and imports them into Unity at a consistent pixels-per-unit. Also generate: egg sprites (4 colors), fruit set, treasure set, dirt-tile crack states (3 damage stages), and particle sprites (star, heart, dirt crumb) — these are single images, not turnarounds.
+
+For animation in v1, keep it cheap: squash-and-stretch, bobbing, and rotation via code/DOTween on the static directional sprites reads as lively enough for toddlers. Frame-by-frame animation can come later.
+
+## Feel & Polish Checklist
+
+
+Everything that appears or is tapped should scale-bounce (DOTween punch-scale).
+Particle bursts on: dig, item pop, hatch, eat, grow, treasure collect.
+Distinct happy SFX per event; short musical sting on hatch and grow.
+Camera gently eases/follows the backhoe with a small deadzone.
+Idle attract: if no input for ~15s, the backhoe honks and a nearby dig mound sparkles bigger to invite a tap.
+Parent gate on the mute/settings button (e.g., "hold for 3 seconds") so toddlers can't change settings.
+
+
+## Deliverables
+
+
+Complete Unity project, buildable for iOS, Android, WebGL.
+Asset download + Gemini generation scripts (`Tools/` folder) with a README so sprites can be regenerated.
+Short README covering project structure and how to add a new dino type (should be: one turnaround sheet + one config entry).
+
+
+Build the overworld roam + dig mini-game first as a playable vertical slice with placeholder art, then run the asset pipeline, then add dinos/growth, then polish.

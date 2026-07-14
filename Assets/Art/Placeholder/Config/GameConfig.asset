@@ -1,0 +1,56 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cee990a49e45349fc9f86520078f434b, type: 3}
+  m_Name: GameConfig
+  m_EditorClassIdentifier: 
+  Dinos:
+  - {fileID: 11400000, guid: 62b79e69e016d4117a9cff6c72ab3942, type: 2}
+  - {fileID: 11400000, guid: 3356dcee657ec453fa783d94c9144059, type: 2}
+  - {fileID: 11400000, guid: 736fb40cc236e48bbb596eceddea706a, type: 2}
+  - {fileID: 11400000, guid: 273b118c129bf4777a5225603b6118c0, type: 2}
+  - {fileID: 11400000, guid: 1285b8f85104d443482298556e8c0edf, type: 2}
+  - {fileID: 11400000, guid: 3736a0c4eee734707bebeb707d803804, type: 2}
+  - {fileID: 11400000, guid: 986146b8a1fd24ed98a0ad2d3d85a6c0, type: 2}
+  - {fileID: 11400000, guid: 327903daac07c423286c1fa18eb4ecb3, type: 2}
+  - {fileID: 11400000, guid: 97858f644071447f7ad0152d49ff6b47, type: 2}
+  StageScales:
+  - 1
+  - 1.15
+  - 1.3
+  FruitToKid: 2
+  FruitToBig: 3
+  MoundRespawnSeconds: 20
+  MinItemsPerSite: 2
+  MaxItemsPerSite: 4
+  EggWeight: 0.35
+  FruitWeight: 0.4
+  TreasureWeight: 0.25
+  FruitVariants: 4
+  TreasureVariants: 4
+  DigRows: 5
+  DigColumns: 7
+  DirtHealth: 3
+  BackhoeSpeed: 3.5
+  BackhoeArriveDistance: 0.15
+  DinoFollowSpeed: 3
+  DinoFollowSlack: 0.4
+  DinoWanderRadius: 1.2
+  DinoEatSpeed: 4
+  RoamOrthoSize: 5.5
+  DigOrthoSize: 4.2
+  CeremonyOrthoSize: 4
+  CameraFollowLerp: 3
+  CameraDeadzone: {x: 1.2, y: 0.8}
+  TransitionSeconds: 0.5
+  ShardsPerHatch: 20
+  IdleAttractSeconds: 15
+  ParentGateHoldSeconds: 3

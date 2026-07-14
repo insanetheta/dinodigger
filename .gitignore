@@ -1,5 +1,44 @@
-
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
 .beads-credential-key
+
+# ===== Unity =====
+/Library/
+/Temp/
+/Obj/
+/obj/
+/Build/
+/Builds/
+/Logs/
+/UserSettings/
+/MemoryCaptures/
+/Recordings/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.vs/
+.idea/
+.consulo/
+crashlytics-build.properties
+
+# ===== Secrets — never commit =====
+Tools/.openrouter_key
+*.openrouter_key
+
+# ===== Regenerable art-pipeline intermediates (~208MB; rebuild via Tools/ scripts) =====
+Tools/raw/
+Tools/venv/
+
+# ===== OS / tooling =====
+.DS_Store
+.playwright-mcp/

@@ -1,0 +1,54 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cd06c98be5e654eeeacf898ee93aca68, type: 3}
+  m_Name: Dino_Spinosaurus
+  m_EditorClassIdentifier: 
+  Type: 6
+  DisplayName: Spinosaurus
+  Dance: 6
+  BodyColor: {r: 0.7, g: 0.8, b: 0.25, a: 1}
+  EggColor: {r: 0.7, g: 0.8, b: 0.25, a: 1}
+  EggSprite: {fileID: 21300000, guid: 2475752cb97f34f47b069b2836451196, type: 3}
+  WalkSprites:
+  - {fileID: 21300000, guid: 8aaa4fb40f9fd47ee8d6faa2af3495bc, type: 3}
+  - {fileID: 21300000, guid: c479f5d73a1084823a1eb541a672a287, type: 3}
+  - {fileID: 21300000, guid: 315ce9c23ec10483f89c70a84aeb3b18, type: 3}
+  - {fileID: 21300000, guid: 41f6a78289c244788a7b0336a0ccbfaa, type: 3}
+  - {fileID: 21300000, guid: a11031ece59ae4f6daf6491d19ac1138, type: 3}
+  - {fileID: 21300000, guid: 67caf34d9ab5a4441887004c21846593, type: 3}
+  - {fileID: 21300000, guid: b7628633d070d4432b4b41fede86f067, type: 3}
+  - {fileID: 21300000, guid: 042916964ae0540299033a5653b20726, type: 3}
+  BabySprites:
+  - {fileID: 21300000, guid: 13c25862e5f90472397f96cc27f13ff0, type: 3}
+  - {fileID: 21300000, guid: e3517c58b4aa34c75b6cecaa801aece9, type: 3}
+  - {fileID: 21300000, guid: 71856075c5bb044b79e1d11a2b5899db, type: 3}
+  - {fileID: 21300000, guid: c8e8fb0f403f547b99f417d5d3c9a168, type: 3}
+  - {fileID: 21300000, guid: 043701e5b3fe24d39bbdb66b4a0d1ce6, type: 3}
+  - {fileID: 21300000, guid: 53ee80a64459e4a5384c71310bbea139, type: 3}
+  - {fileID: 21300000, guid: 61fb0459814a144879db2214857f35dd, type: 3}
+  - {fileID: 21300000, guid: 15c54ba24212f4f67bed6597559e8952, type: 3}
+  KidSprites:
+  - {fileID: 21300000, guid: 25571ad9a3bd540cb94aab27fe966031, type: 3}
+  - {fileID: 21300000, guid: d8c0139f408c445b0a999a3f3594a55f, type: 3}
+  - {fileID: 21300000, guid: da4eab2b4b72746448361b5cb7946532, type: 3}
+  - {fileID: 21300000, guid: 23e6319adab164785991be84daa8787c, type: 3}
+  - {fileID: 21300000, guid: 02c77e85d9d6943e488cebd5294fa86b, type: 3}
+  - {fileID: 21300000, guid: 56d1bd7ec193a40ee88cd97edf766c26, type: 3}
+  - {fileID: 21300000, guid: 814436e624dc54653ae3469b248cac66, type: 3}
+  - {fileID: 21300000, guid: f8f3e46e675574a3b949d00ef5aca2ae, type: 3}
+  IdleSprite: {fileID: 21300000, guid: a11031ece59ae4f6daf6491d19ac1138, type: 3}
+  WalkASprites: []
+  WalkBSprites: []
+  BabyWalkASprites: []
+  BabyWalkBSprites: []
+  KidWalkASprites: []
+  KidWalkBSprites: []

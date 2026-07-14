@@ -1,0 +1,102 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cd06c98be5e654eeeacf898ee93aca68, type: 3}
+  m_Name: Dino_TRex
+  m_EditorClassIdentifier: 
+  Type: 0
+  DisplayName: TRex
+  Dance: 0
+  BodyColor: {r: 0.36, g: 0.72, b: 0.36, a: 1}
+  EggColor: {r: 0.36, g: 0.72, b: 0.36, a: 1}
+  EggSprite: {fileID: 21300000, guid: 44c1be6a7977a4c10812a5fe1049c9ef, type: 3}
+  WalkSprites:
+  - {fileID: 21300000, guid: f5b4dd79275124358a249a724686a039, type: 3}
+  - {fileID: 21300000, guid: e9d1f81c2f68847af879e1ee0cd54416, type: 3}
+  - {fileID: 21300000, guid: 811442b71e60b450ca70d8a827f68373, type: 3}
+  - {fileID: 21300000, guid: 3d27c2b5bc6964c3197700414f378b55, type: 3}
+  - {fileID: 21300000, guid: 9b8eafede41c94104aa9c2168ffa9f48, type: 3}
+  - {fileID: 21300000, guid: 30fc9933145ad4546b6668ee033142f7, type: 3}
+  - {fileID: 21300000, guid: e5a6f3747f846469abc1a26965790699, type: 3}
+  - {fileID: 21300000, guid: 1ee5b6f23631a4a1e9a27753f1a486b9, type: 3}
+  BabySprites:
+  - {fileID: 21300000, guid: 0e270590ababe4b77aba6202d1da3cd6, type: 3}
+  - {fileID: 21300000, guid: 04a938777955d44ac9e71455ed9fb7bc, type: 3}
+  - {fileID: 21300000, guid: 9bc198548200846ce968a523ab867493, type: 3}
+  - {fileID: 21300000, guid: 71a5eef8ce2ae466d8e9537a49ea2889, type: 3}
+  - {fileID: 21300000, guid: 7f0d9b07a814e4b98838ac02d54c76ae, type: 3}
+  - {fileID: 21300000, guid: 70df74cdf13534cb895c82a37f95737b, type: 3}
+  - {fileID: 21300000, guid: 96f65978b32f742febc5d21330b69f96, type: 3}
+  - {fileID: 21300000, guid: ddd42601be5454d7b853796283becc79, type: 3}
+  KidSprites:
+  - {fileID: 21300000, guid: cf88e99ef30b54c8e840823619f0353a, type: 3}
+  - {fileID: 21300000, guid: c21df334223ac4e2eb67c992665d2559, type: 3}
+  - {fileID: 21300000, guid: 85d538d9e3fa3482688b7fb5e7e382d6, type: 3}
+  - {fileID: 21300000, guid: 8cdddc23677534a6f8230bf015ca220b, type: 3}
+  - {fileID: 21300000, guid: 83cdffb64334a4a3bae5cb6e5992fbbb, type: 3}
+  - {fileID: 21300000, guid: ea02fe2a642d24fe6ac451a3fe587a79, type: 3}
+  - {fileID: 21300000, guid: 49a093c4e26e94c338310fb27c747083, type: 3}
+  - {fileID: 21300000, guid: 31ae2325c4ce742c08c3fabe8ac0d76f, type: 3}
+  IdleSprite: {fileID: 21300000, guid: 9b8eafede41c94104aa9c2168ffa9f48, type: 3}
+  WalkASprites:
+  - {fileID: 21300000, guid: 19149757f70054deb9c65f9b8517dd5a, type: 3}
+  - {fileID: 21300000, guid: fc62883c757354a7d932f189fb3244de, type: 3}
+  - {fileID: 21300000, guid: 01697074775054561b35d7c0ecb0d40b, type: 3}
+  - {fileID: 21300000, guid: 61ce6666eba854e87b62cd626bb5afc7, type: 3}
+  - {fileID: 21300000, guid: 5b0ef0a0316a14fbe81a221b91993776, type: 3}
+  - {fileID: 21300000, guid: c8b4d72617a9d4e678f6734fe027b564, type: 3}
+  - {fileID: 21300000, guid: bcd13e96379744b31a12c6ade12ab5f1, type: 3}
+  - {fileID: 21300000, guid: f83873ab7edb44afb939a5985f6b4655, type: 3}
+  WalkBSprites:
+  - {fileID: 21300000, guid: 51042da265d8e43fc9d844e98a11d030, type: 3}
+  - {fileID: 21300000, guid: 8f013116c6dd74078ac5c0bf50f4b784, type: 3}
+  - {fileID: 21300000, guid: b9ecb12cb97ff4528a1660b30f101926, type: 3}
+  - {fileID: 21300000, guid: 467c0c647b5e247a788fe721dbf86886, type: 3}
+  - {fileID: 21300000, guid: 4cacf2937187e4868a5f8fe8e127f722, type: 3}
+  - {fileID: 21300000, guid: 9ea05199a02c8457eb149a1b8bfce30e, type: 3}
+  - {fileID: 21300000, guid: cde39250f238e48b08040dc6d6b477c9, type: 3}
+  - {fileID: 21300000, guid: 07a1f0f685c0640b89748f1851ccd4fb, type: 3}
+  BabyWalkASprites:
+  - {fileID: 21300000, guid: 02616a275e01f4fa1911796ffa104410, type: 3}
+  - {fileID: 21300000, guid: da2480d7a1faa4d6fa2f0928a9a2844e, type: 3}
+  - {fileID: 21300000, guid: d001ff87030e3498c9265c37996f0e14, type: 3}
+  - {fileID: 21300000, guid: 4aa5e7b30c8c04a89bfef7c0d4b5c20b, type: 3}
+  - {fileID: 21300000, guid: d779c06532938416bb2a971b8fc7c354, type: 3}
+  - {fileID: 21300000, guid: 334f80435b8ad41eaa4b05fdad3f6993, type: 3}
+  - {fileID: 21300000, guid: f7cc53dceac9a40cca50d09d3a3218bf, type: 3}
+  - {fileID: 21300000, guid: e38852f42b6254a52bd65f7041efa72e, type: 3}
+  BabyWalkBSprites:
+  - {fileID: 21300000, guid: 62b75a029153441669ab29b24f48cd1c, type: 3}
+  - {fileID: 21300000, guid: 12b9f9b0bcb8147a6a50eae627ef770c, type: 3}
+  - {fileID: 21300000, guid: 75ba787cebe854da2b1b9a203d748aae, type: 3}
+  - {fileID: 21300000, guid: 477163ff893744bfeb7df183b174fa19, type: 3}
+  - {fileID: 21300000, guid: cd5212a05513440909ea69499cd73498, type: 3}
+  - {fileID: 21300000, guid: e431134a70c034e1d9621af6ac422aa8, type: 3}
+  - {fileID: 21300000, guid: 3aeb024686ff74c6fa307eb7b073c752, type: 3}
+  - {fileID: 21300000, guid: a22a989a151174cb0911576da2df366c, type: 3}
+  KidWalkASprites:
+  - {fileID: 21300000, guid: 84cb42cb22d6c4f5185a3cfce1abafee, type: 3}
+  - {fileID: 21300000, guid: de4672d9c6c794780b2bfb19f01b8fbd, type: 3}
+  - {fileID: 21300000, guid: b8ead2eb626934a9881c9ae5c611b7fc, type: 3}
+  - {fileID: 21300000, guid: 026df5c2e27154305a723de7dacb45a2, type: 3}
+  - {fileID: 21300000, guid: c04a1a2d00e924ea98dc749a5fb33bd7, type: 3}
+  - {fileID: 21300000, guid: 1f8d5987b92a94e14abb352647403323, type: 3}
+  - {fileID: 21300000, guid: 9e7dcc0f723304c6d9b8b4db6bb962ea, type: 3}
+  - {fileID: 21300000, guid: 1f1b547074192438f81a82182b7cfdf9, type: 3}
+  KidWalkBSprites:
+  - {fileID: 21300000, guid: 88c30a5bf08e043809d11ed5f7b9eaa8, type: 3}
+  - {fileID: 21300000, guid: 2ac832e553a71482882157ddcd70a127, type: 3}
+  - {fileID: 21300000, guid: e093f0bba98e24400b29d244be7a3cbb, type: 3}
+  - {fileID: 21300000, guid: 5fca09892ba0c41ab8a35bd8bc385dc9, type: 3}
+  - {fileID: 21300000, guid: 9b84a71cb2d0441849faaee724745a5e, type: 3}
+  - {fileID: 21300000, guid: 9d21b2795bd1d4731bb5cc1b0a6d3416, type: 3}
+  - {fileID: 21300000, guid: e75599c4c47944f16b228303ce0f1e80, type: 3}
+  - {fileID: 21300000, guid: b75ec71992caa495897c9e30756e7692, type: 3}

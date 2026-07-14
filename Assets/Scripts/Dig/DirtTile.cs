@@ -1,0 +1,162 @@
+using UnityEngine;
+using DinoDigger.Config;
+using DinoDigger.Core;
+
+namespace DinoDigger.Dig
+{
+    /// <summary>
+    /// One chunky dirt tile in the dig grid. Takes damage across 3 crack states
+    /// and crumbles away. May hide a buried item that "peeks" through once cracked.
+    /// </summary>
+    public class DirtTile : MonoBehaviour, ITappable
+    {
+        private SpriteRenderer _dirt;
+        private SpriteRenderer _peek;
+        private ParticleSystem _crumbs;
+        private DigModeController _owner;
+        private PlaceholderLibrary _lib;
+
+        private int _maxHealth = 3;
+        private int _damage;
+        private bool _destroyed;
+        private Color _peekTint = Color.white;
+
+        public int Row { get; private set; }
+        public int Col { get; private set; }
+        public bool HasItem { get; private set; }
+        public bool IsDestroyed => _destroyed;
+
+        // TEST HOOKS for the integration runner (damage progression + peek visibility).
+        internal int TestDamage => _damage;
+        internal int TestMaxHealth => _maxHealth;
+        internal Sprite TestDirtSprite => _dirt != null ? _dirt.sprite : null;
+        internal bool TestPeekEnabled => _peek != null && _peek.enabled;
+        internal float TestPeekAlpha => _peek != null ? _peek.color.a : 0f;
+
+        public void Build(DigModeController owner, PlaceholderLibrary lib, int row, int col,
+            int maxHealth, ParticleSystem crumbs)
+        {
+            _owner = owner;
+            _lib = lib;
+            Row = row;
+            Col = col;
+            _maxHealth = Mathf.Max(1, maxHealth);
+            _crumbs = crumbs;
+
+            _dirt = gameObject.GetComponent<SpriteRenderer>();
+            if (_dirt == null)
+            {
+                _dirt = gameObject.AddComponent<SpriteRenderer>();
+            }
+
+            _dirt.sortingOrder = 10;
+            RefreshSprite();
+
+            // Peek child renders just IN FRONT of the dirt (higher sorting order) so
+            // a faint hint of the buried item shows through it. Sitting behind the
+            // opaque dirt (the old order 8 < 10) meant it never rendered at all.
+            var peekGo = new GameObject("Peek");
+            peekGo.transform.SetParent(transform, false);
+            _peek = peekGo.AddComponent<SpriteRenderer>();
+            _peek.sortingOrder = 11;
+            _peek.enabled = false;
+        }
+
+        public void SetPeek(Sprite itemSprite, Color tint)
+        {
+            HasItem = true;
+            _peekTint = tint;
+            if (_peek != null)
+            {
+                _peek.sprite = itemSprite;
+                // Clear color hint visible from the start (2x boosted per playtest
+                // feedback); strengthens further as the dirt cracks.
+                _peek.color = new Color(tint.r, tint.g, tint.b, 0.55f);
+                _peek.transform.localScale = Vector3.one * 0.7f;
+                _peek.enabled = true;
+            }
+        }
+
+        public void OnTapped(Vector2 worldPoint)
+        {
+            _owner?.OnTileTapped(this);
+        }
+
+        /// <summary>Apply one hit. Returns true when this hit destroys the tile.</summary>
+        public bool Damage()
+        {
+            if (_destroyed)
+            {
+                return false;
+            }
+
+            _damage++;
+            if (_crumbs != null)
+            {
+                _crumbs.transform.position = transform.position;
+                _crumbs.Emit(10);
+            }
+
+            Tween.PunchScale(transform, 0.18f, 0.18f);
+
+            if (_damage >= _maxHealth)
+            {
+                Crumble();
+                return true;
+            }
+
+            RefreshSprite();
+            RevealPeek();
+            return false;
+        }
+
+        private void RevealPeek()
+        {
+            // The hint is visible from the start; brighten it as the dirt cracks.
+            if (HasItem && _peek != null)
+            {
+                _peek.enabled = true;
+                float a = Mathf.Lerp(0.7f, 1f, (float)_damage / Mathf.Max(1, _maxHealth));
+                _peek.color = new Color(_peekTint.r, _peekTint.g, _peekTint.b, a);
+            }
+        }
+
+        private void Crumble()
+        {
+            _destroyed = true;
+            if (_dirt != null)
+            {
+                _dirt.enabled = false;
+            }
+
+            var col = GetComponent<Collider2D>();
+            if (col != null)
+            {
+                col.enabled = false;
+            }
+
+            if (_peek != null)
+            {
+                _peek.enabled = false; // item is now uncovered / about to pop
+            }
+        }
+
+        private void RefreshSprite()
+        {
+            if (_dirt == null || _lib == null)
+            {
+                return;
+            }
+
+            // Map damage 0..max-1 across the 3 crack-state sprites.
+            int stateCount = 3;
+            int state = _maxHealth <= 1 ? 0
+                : Mathf.Clamp(Mathf.FloorToInt((float)_damage / _maxHealth * stateCount), 0, stateCount - 1);
+            Sprite s = _lib.Dirt(state);
+            if (s != null)
+            {
+                _dirt.sprite = s;
+            }
+        }
+    }
+}
