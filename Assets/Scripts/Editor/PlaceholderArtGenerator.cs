@@ -77,6 +77,12 @@ namespace DinoDigger.EditorTools
                 WriteEggAssembly($"egg_assembly_{i}", i / 4f, spritePaths);
             }
 
+            // --- Dino Town: one building's 4 construction states + finished ---
+            for (int i = 0; i < 5; i++)
+            {
+                WriteBuildingState($"building_state_{i}", i, spritePaths);
+            }
+
             // --- Fruit (apple/banana/berry/watermelon) ---
             WriteRoundItem("fruit_0", new Color(0.9f, 0.2f, 0.2f), spritePaths);   // apple
             WriteRoundItem("fruit_1", new Color(0.95f, 0.85f, 0.2f), spritePaths); // banana(ish)
@@ -238,6 +244,12 @@ namespace DinoDigger.EditorTools
             for (int i = 0; i < 5; i++)
             {
                 lib.EggAssemblySprites[i] = LoadSprite(SpritePath($"egg_assembly_{i}"));
+            }
+
+            lib.BuildingStates = new Sprite[5];
+            for (int i = 0; i < 5; i++)
+            {
+                lib.BuildingStates[i] = LoadSprite(SpritePath($"building_state_{i}"));
             }
 
             lib.StarParticle = LoadSprite(SpritePath("fx_star"));
@@ -544,6 +556,80 @@ namespace DinoDigger.EditorTools
             if (fraction >= 0.98f)
             {
                 FillCircle(px, s, s, cx + 11f, cy + 13f, 5f, new Color32(255, 255, 255, 235)); // glint
+            }
+
+            SaveSprite(name, px, s, s, paths);
+        }
+
+        /// <summary>One Dino Town building construction state (the Pebble Playground
+        /// placeholder). <paramref name="state"/> 0..3 = ground-break / foundation / frame /
+        /// walls, 4 = finished (leaf roof + sign). Follows the doc's silhouette arc: the
+        /// shape grows taller and more complete at each state — chunky stone + log + leaf
+        /// with a thick dark outline, matching the toy-box style clause.</summary>
+        private static void WriteBuildingState(string name, int state, List<string> paths)
+        {
+            int s = SpriteSize;
+            var px = NewCanvas(s, s);
+            Color32 stone = new Color32(154, 160, 174, 255);
+            Color32 stoneDark = new Color32(109, 116, 132, 255);
+            Color32 log = new Color32(154, 98, 52, 255);
+            Color32 leaf = new Color32(79, 174, 68, 255);
+            Color32 edge = new Color32(43, 32, 22, 255);
+            Color32 gold = new Color32(243, 190, 46, 255);
+            Color32 dirt = new Color32(150, 110, 66, 255);
+
+            // Soft ground shadow (bottom of the canvas = y small).
+            FillEllipse(px, s, s, s / 2f, 20f, 44f, 10f, new Color32(0, 0, 0, 45), new Color32(0, 0, 0, 45));
+
+            if (state == 0)
+            {
+                // Ground-breaking: a roped-off dirt plot with two survey stakes.
+                FillRect(px, s, s, 24, 22, s - 48, 10, dirt);
+                DrawRectOutline(px, s, s, 24, 22, s - 48, 10, edge, 3);
+                FillRect(px, s, s, 30, 30, 6, 26, log);
+                FillRect(px, s, s, s - 36, 30, 6, 26, log);
+                for (int x = 33; x < s - 33; x += 12)
+                {
+                    DrawLineThick(px, s, s, x, 54, x + 6, 54, edge, 2); // dashed rope
+                }
+            }
+            else
+            {
+                // Foundation slab underlies every later state.
+                FillRect(px, s, s, 28, 22, s - 56, 18, stone);
+                DrawRectOutline(px, s, s, 28, 22, s - 56, 18, edge, 3);
+                DrawLineThick(px, s, s, s / 2, 22, s / 2, 40, stoneDark, 2);
+            }
+
+            if (state == 2)
+            {
+                // Frame: two log posts + a top beam, full height, no walls.
+                FillRect(px, s, s, 34, 40, 9, 42, log);
+                DrawRectOutline(px, s, s, 34, 40, 9, 42, edge, 2);
+                FillRect(px, s, s, s - 43, 40, 9, 42, log);
+                DrawRectOutline(px, s, s, s - 43, 40, 9, 42, edge, 2);
+                FillRect(px, s, s, 30, 80, s - 60, 9, log);
+                DrawRectOutline(px, s, s, 30, 80, s - 60, 9, edge, 2);
+            }
+
+            if (state >= 3)
+            {
+                // Stone walls fill the frame; a log door is cut.
+                FillRect(px, s, s, 30, 40, s - 60, 46, stone);
+                DrawRectOutline(px, s, s, 30, 40, s - 60, 46, edge, 3);
+                DrawLineThick(px, s, s, 30, 62, s - 30, 62, stoneDark, 2);
+                FillRect(px, s, s, s / 2 - 11, 40, 22, 26, log);
+                DrawRectOutline(px, s, s, s / 2 - 11, 40, 22, 26, edge, 3);
+            }
+
+            if (state >= 4)
+            {
+                // Finished: big leaf roof + a gold rooftop glyph (open for business).
+                FillTriangle(px, s, s, 22, 86, s - 22, 86, s / 2, 118, leaf);
+                DrawLineThick(px, s, s, 22, 86, s / 2, 118, edge, 3);
+                DrawLineThick(px, s, s, s - 22, 86, s / 2, 118, edge, 3);
+                DrawLineThick(px, s, s, 22, 86, s - 22, 86, edge, 3);
+                FillCircleOutline(px, s, s, s / 2f, 100f, 7f, gold, edge, 2f);
             }
 
             SaveSprite(name, px, s, s, paths);

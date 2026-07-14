@@ -56,6 +56,13 @@ namespace DinoDigger.Testing
                 new TestCase("ParadeOnce",           30f, Case_ParadeOnce),
                 new TestCase("StreamsConnectivity",  15f, Case_StreamsConnectivity),
                 new TestCase("DuckCatch",            20f, Case_DuckCatch),
+                new TestCase("TownAvoidsMoundAndStream", 25f, Case_TownAvoidsMoundAndStream),
+                new TestCase("TownWiredInScene",         10f, Case_TownWiredInScene),
+                new TestCase("CoinsAutoSpendStartsBuild",    25f, Case_CoinsAutoSpendStartsBuild),
+                new TestCase("BuildAdvancesThroughStates",   45f, Case_BuildAdvancesThroughStates),
+                new TestCase("BuilderCommutesFromMeadow",    45f, Case_BuilderCommutesFromMeadow),
+                new TestCase("BuildingFinishesAndCelebrates", 50f, Case_BuildingFinishesAndCelebrates),
+                new TestCase("PlayerControlUnaffectedByBuild", 45f, Case_PlayerControlUnaffectedByBuild),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }
@@ -1992,6 +1999,65 @@ namespace DinoDigger.Testing
             ctx.Assert(!meadow.ContainsOuter(m.transform.position),
                 "respawned mound landed inside the meadow");
             ctx.Log($"{mounds.Count} build mounds + 1 forced respawn all outside the meadow");
+        }
+
+        // The cleared town district must contain no mound, stream/water, or tree/rock
+        // at build time, and mound respawns must never land inside it (it is walkable
+        // grass, so the guard is by district rect, not walkability). Mirrors
+        // MoundsAvoidMeadow's build-time + forced-respawn structure.
+        private IEnumerator Case_TownAvoidsMoundAndStream(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            OverworldMap map = gm.TestMap;
+            ctx.Assert(map != null, "no overworld map");
+            ctx.Assert(map.TestHasTownDistrict,
+                "no town district on the map (rebuild via DinoDigger/Build Main Scene)");
+
+            RectInt d = map.TestTownDistrict;
+
+            // 1) Every district cell is clear, walkable grass: has ground, no
+            //    water (pond/stream), no obstacle (tree/rock).
+            for (int x = d.xMin; x < d.xMax; x++)
+            {
+                for (int y = d.yMin; y < d.yMax; y++)
+                {
+                    var cell = new Vector3Int(x, y, 0);
+                    ctx.Assert(map.TestHasGround(cell),
+                        $"district cell {cell} has no ground tile (should be grass)");
+                    ctx.Assert(!map.TestHasWater(cell),
+                        $"district cell {cell} carries water (a stream/pond cut into the district)");
+                    ctx.Assert(map.ObstacleAt(cell) == null,
+                        $"district cell {cell} has a tree/rock obstacle");
+                }
+            }
+
+            // 2) No build-time mound sits inside the district.
+            IReadOnlyList<DigMound> mounds = gm.TestMounds;
+            ctx.Assert(mounds != null && mounds.Count > 0, "no mounds in the scene");
+            for (int i = 0; i < mounds.Count; i++)
+            {
+                if (mounds[i] != null)
+                {
+                    ctx.Assert(!map.InTownDistrict(mounds[i].transform.position),
+                        $"build-time mound {i} sits inside the town district");
+                }
+            }
+
+            // 3) Forced respawns must respect the exclusion too. Cycle several so the
+            //    random cell draw is genuinely exercised against the small district.
+            gm.TestConfig.MoundRespawnSeconds = 1f; // restored by the runner
+            for (int r = 0; r < 8; r++)
+            {
+                DigMound m = FarthestActiveMound(gm);
+                ctx.Assert(m != null, "no active mound to respawn");
+                gm.Spawn.ScheduleRespawn(m);
+                yield return ctx.WaitUntil(() => m.IsActive);
+                ctx.Assert(!map.InTownDistrict(m.transform.position),
+                    $"respawn {r} landed inside the town district at {m.transform.position}");
+            }
+
+            ctx.Log($"town district {d.width}x{d.height} clear of mounds/streams/trees at " +
+                    "build + 8 forced respawns all outside");
         }
 
         // Buddy Brachiosaurus near a tapped tree: walks over, neck-sways, and

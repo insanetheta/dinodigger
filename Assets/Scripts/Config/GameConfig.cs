@@ -77,6 +77,25 @@ namespace DinoDigger.Config
                  "(states-1)), e.g. 0/5/10/15/20 at requirement 20, tighter at 5.")]
         public int[] ShardsPerHatchProgression = { 5, 8, 15, 20 };
 
+        [Header("Dino Town (idle builder)")]
+        [Tooltip("Curated build-price curve for the town, buildings 1..N (indexed 0-based). " +
+                 "Coins auto-spend on the next building the moment the wallet clears its price. " +
+                 "Phase 1 builds only entry [0] (Pebble Playground). Values from the design doc's " +
+                 "roster: 10/25/50/90/150/240/380/490/600 (~x1.6 step).")]
+        public int[] TownBuildingPrices = { 10, 25, 50, 90, 150, 240, 380, 490, 600 };
+
+        [Tooltip("Seconds of builder WORK time to advance one construction state (0->1->2->3->finished). " +
+                 "Timing is driven by the crew, not a clock: worked time only accrues while builders are " +
+                 "on site. A bigger crew banks it faster (dt * working-builder count).")]
+        public float TownSecondsPerBuildState = 8f;
+
+        [Tooltip("Max NON-BUDDY resident dinos drafted onto one construction site. If none are available " +
+                 "the build simply waits — buddies and the player backhoe are NEVER drafted.")]
+        public int TownMaxBuilders = 2;
+
+        [Tooltip("Walk-speed multiplier for a resident commuting from the meadow to a build site.")]
+        public float TownBuilderCommuteSpeed = 1.1f;
+
         [Header("Feel")]
         public float IdleAttractSeconds = 15f;
         public float ParentGateHoldSeconds = 3f;
@@ -123,6 +142,20 @@ namespace DinoDigger.Config
                 case GrowthStage.Big: return FruitToKid + FruitToBig;
                 default: return 0;
             }
+        }
+
+        /// <summary>Curated price of the town building at <paramref name="index"/> in build
+        /// order (clamped). Returns a huge value if the curve is empty so nothing ever
+        /// auto-starts without a configured price.</summary>
+        public int TownBuildingPrice(int index)
+        {
+            if (TownBuildingPrices == null || TownBuildingPrices.Length == 0)
+            {
+                return int.MaxValue;
+            }
+
+            index = Mathf.Clamp(index, 0, TownBuildingPrices.Length - 1);
+            return Mathf.Max(0, TownBuildingPrices[index]);
         }
 
         public DinoDefinition GetDino(DinoType type)

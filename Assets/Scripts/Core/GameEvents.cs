@@ -43,6 +43,11 @@ namespace DinoDigger.Core
         public static event Action<Vector3Int> TreeTapped;   // obstacle cell of the tapped tree
         public static event Action ParadeStarted;            // all-four-species-Big celebration
 
+        // ---- Dino Town (idle builder) ----
+        public static event Action<int> TownBuildStarted;       // building index whose site just broke ground
+        public static event Action<int> BuildingStateAdvanced;  // new construction-state index (1..3)
+        public static event Action<int> BuildingFinished;       // building index that just completed
+
         /// <summary>
         /// Where a dug egg shard should fly to. Set by the nest system (bl6.4) once
         /// a nest exists in the meadow; when null, shard collection falls back to a
@@ -65,6 +70,9 @@ namespace DinoDigger.Core
         public static void RaiseIdleAttract() => IdleAttract?.Invoke();
         public static void RaiseTreeTapped(Vector3Int cell) => TreeTapped?.Invoke(cell);
         public static void RaiseParadeStarted() => ParadeStarted?.Invoke();
+        public static void RaiseTownBuildStarted(int buildingIndex) => TownBuildStarted?.Invoke(buildingIndex);
+        public static void RaiseBuildingStateAdvanced(int state) => BuildingStateAdvanced?.Invoke(state);
+        public static void RaiseBuildingFinished(int buildingIndex) => BuildingFinished?.Invoke(buildingIndex);
 
         /// <summary>
         /// Clear every subscription. Called on GameManager teardown so stale
@@ -88,6 +96,9 @@ namespace DinoDigger.Core
             IdleAttract = null;
             TreeTapped = null;
             ParadeStarted = null;
+            TownBuildStarted = null;
+            BuildingStateAdvanced = null;
+            BuildingFinished = null;
         }
     }
 }

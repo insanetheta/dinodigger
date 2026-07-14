@@ -51,10 +51,10 @@ MonoBehaviour:
   CameraFollowLerp: 3
   CameraDeadzone: {x: 1.2, y: 0.8}
   TransitionSeconds: 0.5
-  ShardsPerHatchProgression:
-  - 5
-  - 8
-  - 15
-  - 20
+  ShardsPerHatchProgression: 05000000080000000f00000014000000
+  TownBuildingPrices: 0a00000019000000320000005a00000096000000f00000007c010000ea01000058020000
+  TownSecondsPerBuildState: 8
+  TownMaxBuilders: 2
+  TownBuilderCommuteSpeed: 1.1
   IdleAttractSeconds: 15
   ParentGateHoldSeconds: 3

@@ -65,6 +65,12 @@ namespace DinoDigger.Config
         [Tooltip("Sparkly egg-shell piece dug once every egg species is owned (flies to the nest).")]
         public Sprite ShardSprite;
 
+        [Header("Dino Town")]
+        [Tooltip("Building construction states, index 0..3 = ground-break/foundation/frame/walls, " +
+                 "index 4 = finished. The Pebble Playground placeholder for phase 1; real generated " +
+                 "art can replace these in place with no code change.")]
+        public Sprite[] BuildingStates = new Sprite[5];
+
         [Header("Particles")]
         public Sprite StarParticle;
         public Sprite HeartParticle;
@@ -88,6 +94,11 @@ namespace DinoDigger.Config
         public Sprite Dirt(int state)
         {
             return Pick(DirtStates, state);
+        }
+
+        public Sprite BuildingState(int state)
+        {
+            return Pick(BuildingStates, state);
         }
 
         private static Sprite Pick(Sprite[] arr, int i)

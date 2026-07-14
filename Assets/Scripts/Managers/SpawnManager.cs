@@ -93,7 +93,8 @@ namespace DinoDigger.Managers
                 }
 
                 Vector3 world = _map.CellCenter(cell);
-                if (!IsOccupied(world, mound) && !TooCloseToBackhoe(world) && !InMeadow(world))
+                if (!IsOccupied(world, mound) && !TooCloseToBackhoe(world) &&
+                    !InMeadow(world) && !InTownDistrict(world))
                 {
                     mound.Respawn(world);
                     return;
@@ -107,6 +108,13 @@ namespace DinoDigger.Managers
         private bool InMeadow(Vector3 world)
         {
             return _meadow != null && _meadow.ContainsOuter(world);
+        }
+
+        // Mounds never respawn inside the cleared town district (walkable grass, so
+        // not caught by walkability). Sourced from the map, which SceneBuilder wires.
+        private bool InTownDistrict(Vector3 world)
+        {
+            return _map != null && _map.InTownDistrict(world);
         }
 
         private bool TooCloseToBackhoe(Vector3 world)

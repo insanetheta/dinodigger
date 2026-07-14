@@ -84,7 +84,7 @@ namespace DinoDigger.EditorTools
             var streamNetwork = gridGo.AddComponent<StreamNetwork>();
 
             // ---- Paint island ----
-            char[,] map = BuildMap(out RectInt meadowRect);
+            char[,] map = BuildMap(out RectInt meadowRect, out RectInt districtRect);
             Vector3Int startCell = FindStartCell(map); // resolved before mounds so we can keep them clear of it
 
             // Carve meandering 1-tile streams (north coast -> pond, pond -> south
@@ -92,12 +92,17 @@ namespace DinoDigger.EditorTools
             // run the MANDATORY post-gen connectivity check so no walkable region is
             // ever orphaned.
             var streamCourses = new List<List<Vector3Int>>();
-            CarveStreams(map, meadowRect, startCell, streamCourses);
+            CarveStreams(map, meadowRect, districtRect, startCell, streamCourses);
             EnsureStreamConnectivity(map, startCell, streamCourses);
 
             var moundCells = new List<Vector3Int>();
-            PaintMap(map, ground, water, obstacles, lib, moundCells, startCell, meadowRect);
+            PaintMap(map, ground, water, obstacles, lib, moundCells, startCell, meadowRect, districtRect);
             streamNetwork.Configure(grid, streamCourses);
+
+            // Tell the map about the cleared town district so mound RESPAWNS steer clear
+            // of it too (the district is walkable grass, so it isn't excluded by
+            // walkability — SpawnManager reads this rect, mirroring the meadow guard).
+            overworldMap.SetTownDistrict(districtRect);
 
             // ---- Overworld root ----
             var overworldRoot = new GameObject("Overworld");
@@ -105,6 +110,10 @@ namespace DinoDigger.EditorTools
             // ---- Dino meadow (fenced home area, NE quadrant) + egg-shard nest ----
             MeadowArea meadowArea = CreateMeadow(grid, overworldMap, overworldRoot.transform,
                 meadowRect, lib, out NestController nest);
+
+            // ---- Town district (cleared building plots beside the meadow) ----
+            TownController town = CreateTown(grid, overworldMap, overworldRoot.transform,
+                districtRect, lib, config);
 
             // ---- Backhoe ----
             var backhoeGo = new GameObject("Backhoe");
@@ -272,6 +281,7 @@ namespace DinoDigger.EditorTools
             Wire(gm, "_meadow", meadowArea);
             Wire(gm, "_nest", nest);
             WireMoundList(gm, "_mounds", mounds);
+            Wire(gm, "_town", town);
 
             // ---- Save + register scene ----
             EditorSceneManager.MarkSceneDirty(scene);
@@ -287,12 +297,18 @@ namespace DinoDigger.EditorTools
         // Meadow patch size (cells, including the decorative fence ring).
         private const int MeadowSize = 7;
 
-        private static char[,] BuildMap(out RectInt meadowRect)
+        // Town district size (cells): a cleared ~8x6 building plot beside the meadow.
+        private const int DistrictW = 8;
+        private const int DistrictH = 6;
+
+        private static char[,] BuildMap(out RectInt meadowRect, out RectInt districtRect)
         {
             // Deterministic "handcrafted" island: grass ellipse, carved pond,
             // a crossing path, scattered trees/rocks. Legend:
             //   ~ ocean  G grass  P path  W water  T tree  R rock
             //   M meadow grass (reserved: fenced dino home, no trees/rocks/mounds)
+            //   D town-district grass (reserved: cleared building plots, same
+            //     exclusions as 'M' — no trees/rocks/streams/mounds ever generate in it)
             var m = new char[N, N];
             var rng = new System.Random(1337);
             Vector2 c = new Vector2((N - 1) * 0.5f, (N - 1) * 0.5f);
@@ -370,7 +386,12 @@ namespace DinoDigger.EditorTools
             // paths — the search only accepts all-'G' windows).
             meadowRect = ReserveMeadow(m);
 
-            // Scatter trees and rocks on plain grass (not path/pond/meadow).
+            // Reserve the town district next (screen-SW of the meadow, along the path
+            // so the commute reads). Like the meadow, it is reserved BEFORE obstacles
+            // scatter and BEFORE streams carve so it stays clear, walkable grass.
+            districtRect = ReserveDistrict(m, meadowRect);
+
+            // Scatter trees and rocks on plain grass (not path/pond/meadow/district).
             for (int x = 0; x < N; x++)
             {
                 for (int y = 0; y < N; y++)
@@ -461,9 +482,85 @@ namespace DinoDigger.EditorTools
             return new RectInt(x0, y0, MeadowSize, MeadowSize);
         }
 
+        /// <summary>Reserve the cleared town district: a DistrictW x DistrictH all-grass
+        /// window placed to the SCREEN-SOUTH-WEST of the meadow (in this IsometricZAsY
+        /// grid, screen-SW is decreasing cell X at the meadow's Y band — so the town sits
+        /// beside the meadow with the vertical path running between them for the builder
+        /// commute). Scans X inward from just west of the meadow to the first all-grass
+        /// fit, nudging Y around the meadow rows. Falls back to scanning the whole island,
+        /// then to a stamp near the meadow, so the build never fails. Marked 'D'.</summary>
+        private static RectInt ReserveDistrict(char[,] m, RectInt meadow)
+        {
+            // Preferred: just west of the meadow, X scanned inward toward the pond,
+            // Y nudged to overlap the meadow's rows (kept in bounds).
+            for (int x0 = meadow.xMin - DistrictW; x0 >= 0; x0--)
+            {
+                foreach (int yOff in new[] { 0, -1, 1, -2, 2 })
+                {
+                    int y0 = Mathf.Clamp(meadow.yMin + yOff, 0, N - DistrictH);
+                    if (IsAllGrassRect(m, x0, y0, DistrictW, DistrictH))
+                    {
+                        return MarkDistrict(m, x0, y0);
+                    }
+                }
+            }
+
+            // Fallback: anywhere on the island (row-major, from the SW corner).
+            for (int y0 = 0; y0 <= N - DistrictH; y0++)
+            {
+                for (int x0 = 0; x0 <= N - DistrictW; x0++)
+                {
+                    if (IsAllGrassRect(m, x0, y0, DistrictW, DistrictH))
+                    {
+                        return MarkDistrict(m, x0, y0);
+                    }
+                }
+            }
+
+            // Last resort: stamp a window just west of the meadow (converts whatever is
+            // there to district grass — still walkable, still cleared).
+            int fx = Mathf.Clamp(meadow.xMin - DistrictW - 1, 0, N - DistrictW);
+            int fy = Mathf.Clamp(meadow.yMin, 0, N - DistrictH);
+            return MarkDistrict(m, fx, fy);
+        }
+
+        private static bool IsAllGrassRect(char[,] m, int x0, int y0, int w, int h)
+        {
+            if (x0 < 0 || y0 < 0 || x0 + w > N || y0 + h > N)
+            {
+                return false;
+            }
+
+            for (int x = x0; x < x0 + w; x++)
+            {
+                for (int y = y0; y < y0 + h; y++)
+                {
+                    if (m[x, y] != 'G')
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static RectInt MarkDistrict(char[,] m, int x0, int y0)
+        {
+            for (int x = x0; x < x0 + DistrictW; x++)
+            {
+                for (int y = y0; y < y0 + DistrictH; y++)
+                {
+                    m[x, y] = 'D';
+                }
+            }
+
+            return new RectInt(x0, y0, DistrictW, DistrictH);
+        }
+
         private static void PaintMap(char[,] m, Tilemap ground, Tilemap water, Tilemap obstacles,
             PlaceholderLibrary lib, List<Vector3Int> moundCells, Vector3Int startCell,
-            RectInt meadowRect)
+            RectInt meadowRect, RectInt districtRect)
         {
             var grassCandidates = new List<Vector3Int>();
 
@@ -481,6 +578,12 @@ namespace DinoDigger.EditorTools
                             break;
                         case 'M':
                             // Meadow: plain walkable grass, but NEVER a mound candidate.
+                            ground.SetTile(cell, lib != null ? lib.GrassTile : null);
+                            break;
+                        case 'D':
+                            // Town district: cleared walkable grass (dinos + player can
+                            // stroll through; buildings add their own colliders later),
+                            // but NEVER a mound candidate.
                             ground.SetTile(cell, lib != null ? lib.GrassTile : null);
                             break;
                         case 'P':
@@ -518,7 +621,7 @@ namespace DinoDigger.EditorTools
             }
 
             // Choose 9 spread-out mound cells from plain grass/path candidates.
-            PickMounds(grassCandidates, 12, moundCells, startCell, meadowRect);
+            PickMounds(grassCandidates, 12, moundCells, startCell, meadowRect, districtRect);
 
             Debug.Log($"[SceneBuilder] PaintMap done: lib={(lib == null ? "NULL" : "ok")} " +
                       $"grassTile={(lib != null && lib.GrassTile != null ? "ok" : "NULL")} " +
@@ -527,7 +630,7 @@ namespace DinoDigger.EditorTools
         }
 
         private static void PickMounds(List<Vector3Int> candidates, int count, List<Vector3Int> outCells,
-            Vector3Int startCell, RectInt meadowRect)
+            Vector3Int startCell, RectInt meadowRect, RectInt districtRect)
         {
             var rng = new System.Random(4242);
             int guard = 0;
@@ -545,6 +648,13 @@ namespace DinoDigger.EditorTools
                 // Never inside (or on the fence of) the dino meadow. Candidates
                 // already exclude 'M' cells; this guards against future map edits.
                 if (meadowRect.Contains(new Vector2Int(pick.x, pick.y)))
+                {
+                    continue;
+                }
+
+                // Never inside the cleared town district (buildings go there).
+                // Candidates already exclude 'D' cells; guards future map edits.
+                if (districtRect.Contains(new Vector2Int(pick.x, pick.y)))
                 {
                     continue;
                 }
@@ -614,14 +724,14 @@ namespace DinoDigger.EditorTools
         /// course is ordered coast -> pond and appended to <paramref name="courses"/>, so
         /// the duck spawner floats ducks from the coast down the full length of the stream
         /// into the pond.</summary>
-        private static void CarveStreams(char[,] m, RectInt meadow, Vector3Int start,
+        private static void CarveStreams(char[,] m, RectInt meadow, RectInt district, Vector3Int start,
             List<List<Vector3Int>> courses)
         {
             // North / east / south coasts all feed the single pond (15,31): three
             // continuous ribbons converging like a little delta.
-            CarveOne(m, courses, CoastSource(m, 'N', PondCenter.x), PondCenter, meadow, start);
-            CarveOne(m, courses, CoastSource(m, 'E', 20), PondCenter, meadow, start);
-            CarveOne(m, courses, CoastSource(m, 'S', 20), PondCenter, meadow, start);
+            CarveOne(m, courses, CoastSource(m, 'N', PondCenter.x), PondCenter, meadow, district, start);
+            CarveOne(m, courses, CoastSource(m, 'E', 20), PondCenter, meadow, district, start);
+            CarveOne(m, courses, CoastSource(m, 'S', 20), PondCenter, meadow, district, start);
         }
 
         /// <summary>Pick a coastal SOURCE for a stream: scanning inward from the given
@@ -691,9 +801,9 @@ namespace DinoDigger.EditorTools
         /// course stores ALL its cells — including any that later become bridges — the
         /// duck's path stays continuous even where the stream is decked over.</summary>
         private static void CarveOne(char[,] m, List<List<Vector3Int>> courses,
-            Vector2Int src, Vector2Int goal, RectInt meadow, Vector3Int start)
+            Vector2Int src, Vector2Int goal, RectInt meadow, RectInt district, Vector3Int start)
         {
-            List<Vector2Int> route = AStarStream(m, src, goal, meadow, start);
+            List<Vector2Int> route = AStarStream(m, src, goal, meadow, district, start);
             if (route == null || route.Count == 0)
             {
                 return; // no route on the open island (shouldn't happen) — skip, never erase
@@ -751,7 +861,7 @@ namespace DinoDigger.EditorTools
         /// clearing instead of dead-ending on them. A tiny per-cell deterministic jitter gives
         /// a natural wobble without ever breaking continuity.</summary>
         private static List<Vector2Int> AStarStream(char[,] m, Vector2Int src, Vector2Int goal,
-            RectInt meadow, Vector3Int start)
+            RectInt meadow, RectInt district, Vector3Int start)
         {
             var came = new Dictionary<Vector2Int, Vector2Int>();
             var g = new Dictionary<Vector2Int, float> { [src] = 0f };
@@ -786,7 +896,7 @@ namespace DinoDigger.EditorTools
                 for (int i = 0; i < Step4.Length; i++)
                 {
                     Vector2Int nb = cur + Step4[i];
-                    if (!RoutableForStream(m, nb, meadow, start))
+                    if (!RoutableForStream(m, nb, meadow, district, start))
                     {
                         continue;
                     }
@@ -824,9 +934,10 @@ namespace DinoDigger.EditorTools
         /// <summary>A cell a stream ribbon may flow into: in bounds, not forbidden (meadow /
         /// start clearing), and grass / path / existing stream-or-bridge / pond water. Trees,
         /// rocks and open ocean are excluded, so the ribbon routes AROUND them.</summary>
-        private static bool RoutableForStream(char[,] m, Vector2Int c, RectInt meadow, Vector3Int start)
+        private static bool RoutableForStream(char[,] m, Vector2Int c, RectInt meadow, RectInt district,
+            Vector3Int start)
         {
-            if (!InBounds(c) || ForbiddenForStream(c, meadow, start))
+            if (!InBounds(c) || ForbiddenForStream(c, meadow, district, start))
             {
                 return false;
             }
@@ -854,11 +965,17 @@ namespace DinoDigger.EditorTools
         private static int Manhattan(Vector2Int a, Vector2Int b) =>
             Mathf.Abs(a.x - b.x) + Mathf.Abs(a.y - b.y);
 
-        private static bool ForbiddenForStream(Vector2Int c, RectInt meadow, Vector3Int start)
+        private static bool ForbiddenForStream(Vector2Int c, RectInt meadow, RectInt district,
+            Vector3Int start)
         {
             if (meadow.Contains(new Vector2Int(c.x, c.y)))
             {
                 return true; // never cut through the dino meadow
+            }
+
+            if (district.Contains(new Vector2Int(c.x, c.y)))
+            {
+                return true; // never cut through the cleared town district
             }
 
             // 3-cell clear ring around the backhoe start so no stream can box it in.
@@ -1123,6 +1240,61 @@ namespace DinoDigger.EditorTools
             nest = CreateNest(grid, go.transform, nestCell, lib);
 
             return area;
+        }
+
+        // Town plot layout inside the district (local cell offsets). Four 2x2-cell
+        // building plots in a 2x2 arrangement with a 1-cell margin and gaps between,
+        // reading front-to-back / left-to-right (0=SW, 1=SE, 2=NW, 3=NE). Each pair is
+        // the SW-most cell of a 2x2 block; the plot's world center is the middle of
+        // that block. Kept small + centered so an 8x6 district holds all four with
+        // clear spacing (buildings import ~2.2 world units wide).
+        private static readonly Vector2Int[] PlotLocalCells =
+        {
+            new Vector2Int(1, 1), // SW: cells (1..2, 1..2)
+            new Vector2Int(5, 1), // SE: cells (5..6, 1..2)
+            new Vector2Int(1, 4), // NW: cells (1..2, 4..5)
+            new Vector2Int(5, 4), // NE: cells (5..6, 4..5)
+        };
+
+        /// <summary>Create the Dino Town district: a "Town" root at the district center
+        /// carrying the data-only <see cref="TownArea"/> (center + the four curated plot
+        /// world-positions + footprint radius) and the <see cref="TownController"/> build
+        /// queue that watches the wallet and breaks ground on those plots. Buildings the
+        /// controller spawns at runtime parent under this same root. Returns the wired
+        /// controller so BuildMainScene can strict-wire it into GameManager._town.</summary>
+        private static TownController CreateTown(Grid grid, OverworldMap map, Transform parent,
+            RectInt district, PlaceholderLibrary lib, GameConfig config)
+        {
+            var go = new GameObject("Town");
+            go.transform.SetParent(parent, false);
+
+            int cx = (district.xMin + district.xMax - 1) / 2;
+            int cy = (district.yMin + district.yMax - 1) / 2;
+            Vector3 center = grid.GetCellCenterWorld(new Vector3Int(cx, cy, 0));
+            go.transform.position = center;
+
+            // Building plots: the world center of each curated 2x2-block, in build order.
+            var plotWorlds = new List<Vector3>(PlotLocalCells.Length);
+            float reach = 0f;
+            for (int i = 0; i < PlotLocalCells.Length; i++)
+            {
+                Vector2Int p = PlotLocalCells[i];
+                var swCell = new Vector3Int(district.xMin + p.x, district.yMin + p.y, 0);
+                var neCell = new Vector3Int(swCell.x + 1, swCell.y + 1, 0);
+                Vector3 plot = (grid.GetCellCenterWorld(swCell) +
+                                grid.GetCellCenterWorld(neCell)) * 0.5f;
+                plotWorlds.Add(plot);
+                reach = Mathf.Max(reach, Vector3.Distance(center, plot));
+            }
+
+            // Footprint radius: reach the farthest plot plus a ~1-unit margin so
+            // ContainsWorld covers the whole cleared district, not just the plot centers.
+            var area = go.AddComponent<TownArea>();
+            area.Configure(map, center, plotWorlds, reach + 1f);
+
+            var town = go.AddComponent<TownController>();
+            town.Configure(area, lib, config);
+            return town;
         }
 
         /// <summary>Build the egg-shard nest prop: a twig-ring base with the assembling

@@ -15,10 +15,37 @@ namespace DinoDigger.Overworld
         [SerializeField] private Tilemap _water;
         [SerializeField] private Tilemap _obstacles;
 
+        // Cleared town-district cell rect (set by SceneBuilder). The district is
+        // walkable grass — dinos and the player stroll through it — so it is NOT
+        // excluded by walkability; this rect lets mound respawns steer clear of it,
+        // mirroring the meadow guard. Empty (size 0) when there is no town.
+        [SerializeField] private RectInt _townDistrict;
+        [SerializeField] private bool _hasTownDistrict;
+
         private readonly List<Vector3Int> _walkableCache = new List<Vector3Int>();
         private bool _cacheBuilt;
 
         public Grid Grid => _grid;
+
+        /// <summary>SceneBuilder wires the cleared town-district cell rect here.</summary>
+        public void SetTownDistrict(RectInt districtCells)
+        {
+            _townDistrict = districtCells;
+            _hasTownDistrict = districtCells.width > 0 && districtCells.height > 0;
+        }
+
+        /// <summary>True when the world point falls inside the cleared town district.
+        /// False when no town exists. Used to keep mound respawns out of the plots.</summary>
+        public bool InTownDistrict(Vector3 world)
+        {
+            if (!_hasTownDistrict)
+            {
+                return false;
+            }
+
+            Vector3Int c = WorldToCell(world);
+            return _townDistrict.Contains(new Vector2Int(c.x, c.y));
+        }
 
         public void Configure(Grid grid, Tilemap ground, Tilemap water, Tilemap obstacles)
         {
@@ -225,6 +252,10 @@ namespace DinoDigger.Overworld
         {
             return _water != null && _water.GetTile(cell) != null;
         }
+
+        // TEST HOOK: the cleared town-district cell rect + whether one exists.
+        internal RectInt TestTownDistrict => _townDistrict;
+        internal bool TestHasTownDistrict => _hasTownDistrict;
 
         // ------------------------------------------------------------ pathfinding
 

@@ -493,6 +493,26 @@ SPRITES = [
     # each roll frame to the idle backhoe facing via the same union-box crop the
     # strides use, and mirrors the right-side facings. ----
     {"name": "backhoe_roll", "category": "roll", "outdir": "backhoe", "base": "backhoe"},
+
+    # ---- Dino Town buildings (DinoDigger-5li.3). category "town": generate ONE
+    # finished building (fresh gen, toy-box style, NO face on the structure), then
+    # "un-build" it down a construction ladder by chained img2img edits — the same
+    # proven technique the de-age/stride pipelines use, pointed at construction. Each
+    # earlier state removes more of the structure (walls -> frame -> foundation ->
+    # bare dirt). Raw files land at raw/<name>_{done,s3,s2,s1,s0}.png; the slicer
+    # chroma-keys + trims each to Generated/town/<name>_<state>.png. ----
+    {
+        "name": "pebble_playground", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style toddler PLAYGROUND, a single "
+            "structure centered in the frame, built entirely from natural prehistoric "
+            "materials: a ring of big smooth rounded grey boulders enclosing it, a "
+            "slide made from one big flat tilted polished stone slab, a see-saw made "
+            "of a long pale dinosaur bone balanced across a round rock, and big bright "
+            "green leaf canopies on wooden poles for shade. Chunky, rounded, colorful, "
+            "sturdy and inviting. It is a BUILDING/playset, an object only — it has NO "
+            "face, no eyes, no mouth and is not a character"),
+    },
 ]
 
 SPRITES_BY_NAME = {s["name"]: s for s in SPRITES}
@@ -511,6 +531,61 @@ PART_STYLE = (
     "else on it, no gradient, no vignette. The subject casts NO shadow at all: no "
     "drop shadow, no ground shadow, no contact shadow. "
 )
+
+
+# Style for BUILDINGS/props (town). Same chunky toy-box outline language as STYLE,
+# but the "big cute expressive eyes" character cue is stripped (it turned buildings
+# into faces) and the subject is pinned to be an inanimate structure.
+BUILDING_STYLE = (
+    "Chunky toddler-friendly cartoon style building for a preschool game. Thick bold "
+    "dark outlines, bright saturated colors, soft simple cel shading, rounded "
+    "friendly chunky shapes, cheerful and inviting. Flat 2D game sprite look. It is "
+    "an inanimate BUILDING / playset structure, an object only: absolutely NO face, "
+    "no eyes, no mouth, no character features. Absolutely no text, no letters, no "
+    "numbers, no words, no logos, no watermark. The entire background must be a "
+    "single solid flat pure magenta color #FF00FF (RGB 255,0,255) with nothing else "
+    "on it, no gradient, no vignette. The subject casts NO shadow at all: no drop "
+    "shadow, no ground shadow, no contact shadow - the area directly under and around "
+    "the subject is pure flat magenta with nothing on it. "
+)
+
+# --- Town construction-ladder strategy (DinoDigger-5li.3) -----------------------
+# Un-build the finished building down four earlier construction states by chained
+# img2img edits (each seeded from the next-more-complete state, so removal is
+# gradual and identity/site stay put — the de-age chain, pointed at construction).
+# Order matters: s3 is edited from the finished image, then s2 from s3, etc.
+TOWN_STATES = ["s3", "s2", "s1", "s0"]
+TOWN_SEED = {"s3": "done", "s2": "s3", "s1": "s2", "s0": "s1"}
+TOWN_UNBUILD = {
+    "s3": ("Show this SAME playground at an EARLIER construction stage, NEARLY "
+           "FINISHED but still a building site: the boulder ring and the main frame "
+           "are up and most pieces are in place, but a few final parts are still "
+           "MISSING (one or two leaf canopies not yet added, the slide slab only "
+           "half mounted), and a couple of wooden scaffolding poles and stacked "
+           "loose stones sit beside it. Keep the EXACT same location, footprint, "
+           "camera angle, art style, colors and outline; only make it look slightly "
+           "less complete, like it is almost done being built."),
+    "s2": ("Show this SAME playground HALF BUILT: only the basic skeleton FRAME is "
+           "standing — the ring of foundation boulders and a few bare upright wooden "
+           "support poles / partial stone walls — with big obvious GAPS where the "
+           "slide, see-saw and leaf canopies will go (those are NOT built yet). A few "
+           "scaffolding poles and piles of loose stones and logs lie around the site. "
+           "Keep the EXACT same location, footprint, camera angle, art style, colors "
+           "and outline; only strip it back to a half-finished frame."),
+    "s1": ("Show this SAME building site at the FOUNDATION stage: nothing is standing "
+           "up yet — just flat grey rectangular stone FOUNDATION SLABS laid out on the "
+           "ground in the building's footprint, with a few stacked stones and logs and "
+           "one or two short corner stakes. NO walls, NO frame, NO slide, NO see-saw, "
+           "NO canopies. Keep the EXACT same location, footprint, camera angle, art "
+           "style, colors and outline; only show bare foundation slabs on the ground."),
+    "s0": ("Show this SAME spot at GROUND-BREAKING, before any building: just a bare "
+           "brown DIRT PATCH cleared on the grass in the building's footprint, marked "
+           "out with a few thin wooden corner STAKES and string between them, plus a "
+           "small pile of dirt and one dropped stone tool. Absolutely NOTHING is built "
+           "— no slabs, no walls, no frame, no structure at all, only a marked-out "
+           "dirt patch with stakes. Keep the EXACT same location, footprint, camera "
+           "angle, art style, colors and outline."),
+}
 
 
 def item_prompt(spec: dict) -> str:
@@ -987,7 +1062,82 @@ def generate_imgedit(spec: dict, force: bool, retries: int = 2) -> str:
     return "saved"
 
 
+def town_finished_prompt(spec: dict) -> str:
+    """Fresh single-subject generation of the finished building (no reference)."""
+    return (f"Generate an image. {BUILDING_STYLE}Draw {spec['finished_subject']}. "
+            f"One single centered structure, its whole base/footprint visible. "
+            f"Solid flat magenta #FF00FF background.")
+
+
+def town_unbuild_prompt(state: str) -> str:
+    """img2img prompt that un-builds the supplied reference to an earlier state."""
+    return (f"Generate an image. Here is a reference picture of a cartoon stone-age "
+            f"playground building. {TOWN_UNBUILD[state]} It stays a single centered "
+            f"structure with its base/footprint in the same place. {BUILDING_STYLE}"
+            f"Solid flat magenta #FF00FF background.")
+
+
+def generate_town(spec: dict, force: bool, retries: int = 2) -> str:
+    """Generate the finished building then un-build it down the construction ladder
+    by chained img2img edits. Raw files land at raw/<name>_{done,s3,s2,s1,s0}.png.
+    Resumes: only missing states are regenerated unless --force (delete a bad state
+    and re-run to redo just that link + everything downstream of it). Returns
+    'saved' | 'skipped' | 'failed'."""
+    name = spec["name"]
+
+    def raw(state: str) -> str:
+        return os.path.join(RAW_DIR, f"{name}_{state}.png")
+
+    all_paths = [raw("done")] + [raw(st) for st in TOWN_STATES]
+    if all(os.path.exists(p) for p in all_paths) and not force:
+        print(f"[skip] {name} town (finished + {len(TOWN_STATES)} states exist)")
+        return "skipped"
+
+    ok = True
+
+    # 1) Finished building — fresh generation, reference for the un-build ladder.
+    done_path = raw("done")
+    if force or not os.path.exists(done_path):
+        b64 = _attempt(town_finished_prompt(spec), None, f"{name}_done", retries)
+        if not b64:
+            print(f"       FAILED {name}_done (finished building)")
+            return "failed"
+        _save_raw(b64, done_path)
+        time.sleep(2)
+    else:
+        print(f"[skip] {name}_done (exists, used as reference)")
+
+    # 2) Chained un-build down the ladder (done -> s3 -> s2 -> s1 -> s0).
+    for state in TOWN_STATES:
+        out = raw(state)
+        if os.path.exists(out) and not force:
+            print(f"[skip] {name}_{state} (exists)")
+            continue
+
+        seed_state = TOWN_SEED[state]
+        seed_path = raw(seed_state)
+        if not os.path.exists(seed_path):
+            print(f"       FAILED {name}_{state}: seed {seed_path} missing",
+                  file=sys.stderr)
+            ok = False
+            continue
+
+        with open(seed_path, "rb") as f:
+            seed_b64 = base64.b64encode(f.read()).decode()
+        b64 = _attempt(town_unbuild_prompt(state), seed_b64, f"{name}_{state}", retries)
+        if not b64:
+            print(f"       FAILED {name}_{state}")
+            ok = False
+            continue
+        _save_raw(b64, out)
+        time.sleep(2)
+
+    return "saved" if ok else "failed"
+
+
 def generate_one(spec: dict, force: bool) -> str:
+    if spec["category"] == "town":
+        return generate_town(spec, force)
     if spec["category"] == "turnaround":
         return generate_turnaround(spec, force)
     if spec["category"] == "stages":
@@ -1022,6 +1172,8 @@ def main():
                 detail = f"strides={'+'.join(STRIDES)} x[{'+'.join(sstages)}] img2img +mirror"
             elif s["category"] == "roll":
                 detail = f"roll={'+'.join(ROLL_POSES)} img2img({s['base']}_<DIR>) +mirror"
+            elif s["category"] == "town":
+                detail = f"done + un-build[{'+'.join(TOWN_STATES)}] img2img chain"
             elif s["category"] == "background":
                 detail = f"single -> {s['outfile']}"
             elif s["category"] == "imgedit":
@@ -1055,7 +1207,7 @@ def main():
         # delete a bad frame and re-run to regenerate just that one) instead of
         # redoing the whole set.
         force = args.force or (bool(args.only) and
-                               spec["category"] not in ("stages", "strides", "roll"))
+                               spec["category"] not in ("stages", "strides", "roll", "town"))
         result = generate_one(spec, force)
         tally[result] += 1
         if result == "failed":

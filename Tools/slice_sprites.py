@@ -34,7 +34,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_sprites import (  # noqa: E402
     SPRITES, SPRITES_BY_NAME, RAW_DIR, GEN_DIRS, MIRROR, STAGES, STRIDES,
-    ROLL_POSES)
+    ROLL_POSES, TOWN_STATES)
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 GENERATED_DIR = os.path.normpath(
@@ -436,7 +436,33 @@ def slice_imgedit(spec: dict, pad: int) -> list[str]:
     return [out]
 
 
+def slice_town(spec: dict, pad: int) -> list[str]:
+    """Slice the finished building + its construction states (DinoDigger-5li.3).
+
+    Each raw state (raw/<name>_{done,s3,s2,s1,s0}.png) is chroma-keyed + trimmed
+    like one item cell and written to Generated/town/<name>_<state>.png. Trimming is
+    per-state (the silhouette genuinely grows taller each stage); the importer gives
+    every state a bottom-center pivot so they share a ground line and grow upward."""
+    name = spec["name"]
+    outdir = os.path.join(GENERATED_DIR, spec["outdir"])
+    os.makedirs(outdir, exist_ok=True)
+    written = []
+    for state in ["done"] + TOWN_STATES:
+        raw = os.path.join(RAW_DIR, f"{name}_{state}.png")
+        if not os.path.exists(raw):
+            print(f"       MISSING {raw}", file=sys.stderr)
+            continue
+        keyed = trim(chroma_key(Image.open(raw)), pad)
+        out = os.path.join(outdir, f"{name}_{state}.png")
+        keyed.save(out)
+        written.append(out)
+        print(f"       {out}  ({keyed.width}x{keyed.height})")
+    return written
+
+
 def slice_one(spec: dict, pad: int) -> list[str]:
+    if spec["category"] == "town":
+        return slice_town(spec, pad)
     if spec["category"] == "turnaround":
         return slice_turnaround(spec, pad)
     if spec["category"] == "stages":

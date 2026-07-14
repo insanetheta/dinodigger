@@ -22,7 +22,7 @@ namespace DinoDigger.Overworld
     /// </summary>
     public class DinoController : MonoBehaviour, ITappable
     {
-        private enum Mode { Idle, Follow, Stroll, Travel, Eat, Dance, Nap, Parade }
+        private enum Mode { Idle, Follow, Stroll, Travel, Eat, Dance, Nap, Parade, Work }
 
         private const float ArriveEps = 0.09f;       // world units: snap + stop here
         private const float WaypointEps = 0.18f;     // advance to next route point
@@ -84,6 +84,13 @@ namespace DinoDigger.Overworld
         private float _napTimer;
         private float _napPuffTimer;
 
+        // Builder work (town construction): a resident stays put at the site and bobs.
+        private float _workBobTimer;
+        // True from the moment a builder is dispatched (GoWork) until it either arrives
+        // and starts working or is recalled — so a still-COMMUTING builder can be turned
+        // around, not just one that has already clocked in.
+        private bool _headingToWork;
+
         // Parade.
         private Vector3 _paradeCenter;
         private float _paradePhase;
@@ -104,7 +111,11 @@ namespace DinoDigger.Overworld
 
         /// <summary>Busy with a directed activity — the superpower scans skip these.</summary>
         public bool IsBusy => _mode == Mode.Eat || _mode == Mode.Dance ||
-                              _mode == Mode.Travel || _mode == Mode.Parade || _carried != null;
+                              _mode == Mode.Travel || _mode == Mode.Parade ||
+                              _mode == Mode.Work || _carried != null;
+
+        /// <summary>Working a town construction site (a NON-buddy resident builder).</summary>
+        public bool IsWorking => _mode == Mode.Work;
 
         /// <summary>Currently hauling a pickup on its head (Trike courier run).</summary>
         public bool IsCarrying => _carried != null;
@@ -127,6 +138,7 @@ namespace DinoDigger.Overworld
             _def != null ? Direction8.Pick(_def.StrideSprites(stage, phase), dir, null) : null;
         internal bool TestHasStrides => _strideA != null || _strideB != null;
         internal int TestWalkFrame => _walkFrame;
+        internal bool TestWorking => _mode == Mode.Work;
 
         private void Awake()
         {
@@ -189,6 +201,7 @@ namespace DinoDigger.Overworld
             _slot = slot;
             CancelNap();
             _onTravelArrived = null;
+            _headingToWork = false; // dropped from any pending build commute
             if (_mode != Mode.Eat && _mode != Mode.Dance)
             {
                 _mode = Mode.Idle; // the follow check re-engages on its own next frame
@@ -259,6 +272,9 @@ namespace DinoDigger.Overworld
                     break;
                 case Mode.Parade:
                     TickParade();
+                    break;
+                case Mode.Work:
+                    TickWork();
                     break;
                 case Mode.Dance:
                     break; // driven by tweens
@@ -595,6 +611,76 @@ namespace DinoDigger.Overworld
             float ang = _paradePhase + _paradeElapsed * (Mathf.PI * 2f / 6f);
             Vector3 target = _paradeCenter + new Vector3(Mathf.Cos(ang) * 2.4f, Mathf.Sin(ang) * 1.5f, 0f);
             MoveTowards(target, _config.DinoFollowSpeed * 1.15f);
+        }
+
+        // --------------------------------------------------------- builder work
+
+        /// <summary>Commute to a town build site, then WORK it: on arrival the dino enters
+        /// a stay-put work loop (bobbing in place, counted as busy) that — unlike Idle —
+        /// never sends a resident home. Reuses the existing WalkTo travel + BFS movement.
+        /// Only ever called for NON-buddy residents by <see cref="TownController"/>; the
+        /// player backhoe and walk buddies are never routed here.</summary>
+        public void GoWork(Vector3 site, float speedMul, Action onWorking)
+        {
+            _headingToWork = true;
+            WalkTo(site, speedMul, () =>
+            {
+                EnterWork();
+                onWorking?.Invoke();
+            });
+        }
+
+        private void EnterWork()
+        {
+            CancelNap();
+            _onReachedFood = null;
+            _onTravelArrived = null;
+            _headingToWork = false; // arrived: Mode.Work now represents the assignment
+            _mode = Mode.Work;
+            _workBobTimer = UnityEngine.Random.Range(0.2f, 0.6f);
+            ResetWalkAnim();
+        }
+
+        /// <summary>Working: hold position (writes NO position — a builder never drifts
+        /// home or toward anything), bobbing every so often to sell the hammering loop.</summary>
+        private void TickWork()
+        {
+            _workBobTimer -= Time.deltaTime;
+            if (_workBobTimer <= 0f)
+            {
+                _workBobTimer = UnityEngine.Random.Range(0.55f, 0.95f);
+                Tween.PunchScale(transform, 0.14f, 0.4f);
+            }
+        }
+
+        /// <summary>Clock out of a build assignment. Recalls a builder that has ARRIVED and
+        /// is working (<see cref="Mode.Work"/>) AND one that is still COMMUTING to the site
+        /// (<see cref="_headingToWork"/>) — the latter is critical: if a commute is left
+        /// running when the build finishes, its pending arrival callback clocks the dino in
+        /// at an abandoned plot and it bobs there forever, never coming home.
+        /// <paramref name="celebrate"/> plays the tap dance first (only meaningful for a
+        /// builder actually on-site) which then resumes the resident role and trots home;
+        /// otherwise the dino heads straight home. A no-op if not on a build assignment.</summary>
+        public void StopWork(bool celebrate)
+        {
+            bool working = _mode == Mode.Work;
+            if (!working && !_headingToWork)
+            {
+                return;
+            }
+
+            _headingToWork = false; // recalled: cancel any in-flight commute intent
+
+            if (celebrate && working)
+            {
+                Dance(); // Dance -> ResumeRole -> walk back to the meadow
+            }
+            else
+            {
+                // A still-commuting builder can't dance on a site it never reached; send it
+                // straight home (ResumeRole overrides the pending commute + arrival callback).
+                ResumeRole();
+            }
         }
 
         // ----------------------------------------------------------------- carry

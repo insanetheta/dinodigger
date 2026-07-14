@@ -55,6 +55,22 @@ namespace DinoDigger.EditorTools
         private static readonly Vector2 StickBasePin = new Vector2(0.1162f, 0.5026f);
         private const float BucketTargetH = 0.72f;   // toothed bucket height
 
+        // Town buildings are sized by WIDTH so each footprint reads at a consistent
+        // ~2.2 world units across regardless of raw resolution: PPU = sourceWidth / 2.2.
+        // All construction states share the width target + a bottom-center pivot so they
+        // sit on one ground line and grow upward as the silhouette gets taller.
+        private const float BuildingTargetW = 2.2f;
+
+        // Pebble Playground (DinoDigger-5li.3) construction states, ASCENDING
+        // completeness: s0 (ground-breaking dirt) .. s3 (nearly done) then the finished
+        // building. Sliced by Tools/slice_sprites.py to Generated/town/.
+        private static readonly string[] PebblePlaygroundStates =
+        {
+            "town/pebble_playground_s0", "town/pebble_playground_s1",
+            "town/pebble_playground_s2", "town/pebble_playground_s3",
+            "town/pebble_playground_done",
+        };
+
         // Dig-mode background is sized by WIDTH so it covers the whole camera view.
         // During dig the camera uses GameConfig.DigOrthoSize (3.2) => visible width at
         // 16:10 is 2 * 3.2 * 1.6 = 10.24 world units; the dig grid is 7 columns wide.
@@ -278,6 +294,22 @@ namespace DinoDigger.EditorTools
                 missing.Add(GenPath("digarm/digarm_bucket") + " (no readable source texture)");
             }
 
+            // Town buildings (DinoDigger-5li.3): PPU from WIDTH so each reads
+            // ~BuildingTargetW wide; bottom-center pivot so states share a ground line.
+            foreach (string rel in PebblePlaygroundStates)
+            {
+                string bp = GenPath(rel);
+                int bw = SourceWidth(bp);
+                if (bw > 0)
+                {
+                    ConfigureBuilding(bp, bw / BuildingTargetW, missing);
+                }
+                else
+                {
+                    missing.Add(bp + " (no readable source texture)");
+                }
+            }
+
             AssetDatabase.Refresh();
 
             // ------------------------------------------------ 2) DinoDefinitions
@@ -425,6 +457,12 @@ namespace DinoDigger.EditorTools
                     missing.Add(GenPath(digBgRel));
                 }
 
+                // Town building states (DinoDigger-5li.3) -> PlaceholderLibrary.BuildingStates
+                // (ordered s0..s3 then done: ground-break/foundation/frame/walls/finished).
+                lib.BuildingStates = LoadArray(PebblePlaygroundStates, missing);
+                wired.Add("Library: Pebble Playground states s0..s3+done " +
+                          $"(~{BuildingTargetW}u wide, bottom pivot)");
+
                 // Tilemap tiles + MoundSprite + icons intentionally left on placeholders.
                 EditorUtility.SetDirty(lib);
                 wired.Add("Library: backhoe 8-dir, fruit x4, treasure x4, dirt x3, particles x3");
@@ -560,6 +598,37 @@ namespace DinoDigger.EditorTools
             importer.ReadTextureSettings(s);
             s.spriteAlignment = (int)SpriteAlignment.Custom;
             s.spritePivot = pivot;
+            importer.SetTextureSettings(s);
+
+            importer.SaveAndReimport();
+        }
+
+        // Import a town building state: plain Simple sprite at an explicit PPU, with a
+        // BOTTOM-CENTER pivot so every construction state sits on the same ground line
+        // and the taller finished silhouette grows upward from that base.
+        private static void ConfigureBuilding(string assetPath, float ppu, List<string> missing)
+        {
+            var importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
+            if (importer == null)
+            {
+                missing.Add(assetPath);
+                return;
+            }
+
+            importer.textureType = TextureImporterType.Sprite;
+            importer.spriteImportMode = SpriteImportMode.Single;
+            importer.spritePixelsPerUnit = ppu;
+            importer.filterMode = FilterMode.Bilinear;
+            importer.mipmapEnabled = false;
+            importer.alphaIsTransparency = true;
+            importer.wrapMode = TextureWrapMode.Clamp;
+            importer.textureCompression = TextureImporterCompression.Compressed;
+            importer.maxTextureSize = 1024;
+            importer.spriteBorder = Vector4.zero;
+
+            var s = new TextureImporterSettings();
+            importer.ReadTextureSettings(s);
+            s.spriteAlignment = (int)SpriteAlignment.BottomCenter;
             importer.SetTextureSettings(s);
 
             importer.SaveAndReimport();

@@ -35,6 +35,7 @@ namespace DinoDigger.Core
         [SerializeField] private Transform _overworldRoot;
         [SerializeField] private MeadowArea _meadow;
         [SerializeField] private NestController _nest;
+        [SerializeField] private TownController _town;
         [SerializeField] private List<DigMound> _mounds = new List<DigMound>();
 
         [Header("Audio sources")]
@@ -241,6 +242,9 @@ namespace DinoDigger.Core
             TickIdleAttract(dt);
             TickSniffer(dt);
             TickCourier(dt);
+            // Ambient town builder: auto-spends coins + drives resident construction.
+            // Always ticks (you dig; they build) and never touches the player/backhoe.
+            _town?.Tick(dt);
         }
 
         private void TickIdleAttract(float dt)
@@ -1349,6 +1353,74 @@ namespace DinoDigger.Core
             });
         }
 
+        // ------------------------------------------------------------ dino town
+        // Hooks used by TownController. Money and the builder POOL both flow through
+        // here so there is a single source of truth — and so the town can only ever
+        // reach NON-buddy residents. There is deliberately NO hook that hands out the
+        // backhoe or a buddy: the player character can never be drafted to build.
+
+        /// <summary>The town wallet: the banked treasure count.</summary>
+        internal int TownWallet => Save != null ? Save.Data.TreasureCount : 0;
+
+        /// <summary>Spend a building's price from the wallet if affordable. On success the
+        /// save is written and the corner counter refreshed; returns false when broke.
+        /// The ONLY path by which the town consumes coins.</summary>
+        internal bool TownTrySpend(int amount)
+        {
+            if (Save == null || amount < 0 || Save.Data.TreasureCount < amount)
+            {
+                return false;
+            }
+
+            Save.Data.TreasureCount -= amount;
+            _treasureCounter?.SetCount(Save.Data.TreasureCount);
+            SaveNow();
+            return true;
+        }
+
+        /// <summary>Up to <paramref name="max"/> dinos eligible to build: NON-buddy meadow
+        /// residents that are not already working and not the ceremony baby. Buddies, the
+        /// ceremony dino, and (by construction — it is not a DinoController) the player
+        /// backhoe are all excluded. This is the structural guarantee behind the hard rule
+        /// that town construction is 100% NPC and never commandeers the player or a buddy.</summary>
+        internal List<DinoController> TownAcquireBuilders(int max)
+        {
+            var result = new List<DinoController>();
+            if (max <= 0)
+            {
+                return result;
+            }
+
+            for (int i = 0; i < _dinos.Count; i++)
+            {
+                DinoController d = _dinos[i];
+                if (d == null || d.IsBuddy || d.IsWorking || d == _ceremonyDino)
+                {
+                    continue;
+                }
+
+                if (_buddies.Contains(d))
+                {
+                    continue;
+                }
+
+                result.Add(d);
+                if (result.Count >= max)
+                {
+                    break;
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>Reuse the shared confetti burst for a building completion.</summary>
+        internal void TownSpawnConfetti(Vector3 pos) => SpawnConfetti(pos);
+
+        /// <summary>Reuse the shared particle-system factory for a build site's dust/crumbs.</summary>
+        internal ParticleSystem TownCreateParticles(Transform parent, Sprite sprite, Color color, float size) =>
+            CreateParticles(parent, sprite, color, size);
+
         // -------------------------------------------------------------- shards
 
         /// <summary>An egg shard was dug up: fly it to the nest (or a graceful
@@ -1769,6 +1841,7 @@ namespace DinoDigger.Core
         internal IReadOnlyList<DinoController> TestBuddies => _buddies;
         internal MeadowArea TestMeadow => _meadow;
         internal NestController TestNest => _nest;
+        internal TownController TestTown => _town;
         internal int TestSnifferPulses => _snifferPulses;
         internal bool TestParadeActive => _paradeActive;
         internal bool TestCeremonyActive => _ceremonyActive;
@@ -1869,6 +1942,17 @@ namespace DinoDigger.Core
             TryStartParade();
         }
 
+        /// <summary>TEST HOOK. Inject a town controller when the scene has none wired yet
+        /// (the town district is placed by a concurrent ticket). No-op if one already
+        /// exists, so a fully-built scene keeps its real town.</summary>
+        internal void TestInstallTown(TownController town)
+        {
+            if (_town == null)
+            {
+                _town = town;
+            }
+        }
+
         /// <summary>TEST HOOK. Route a world-space tap exactly like OnTap does
         /// (collider first, then tree tile, then backhoe move) without needing the
         /// point to be on screen.</summary>
@@ -1957,6 +2041,10 @@ namespace DinoDigger.Core
             _snifferPulses = 0;
             _courierScanTimer = 0f;
             _idleTimer = 0f;
+
+            // Town builder: clear any in-progress/finished sites cleanly (no save state
+            // in phase 1, so a reset fully wipes the town).
+            _town?.TestResetTown();
         }
 
         private void OnApplicationPause(bool paused)
