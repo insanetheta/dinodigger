@@ -245,7 +245,10 @@ namespace DinoDigger.Overworld
             float speed = _config != null ? _config.TownBuilderCommuteSpeed : 1.1f;
             int slot = _builders.IndexOf(d);
             Vector3 stand = _area.StandWorld(_activeIndex, Mathf.Max(0, slot));
-            d.GoWork(stand, speed, null);
+            // Pass the plot center (so the builder holds its mallet toward the structure)
+            // and the art library (so it can "put on" the hard hat). Both null-tolerant.
+            Vector3 building = _area.PlotWorld(_activeIndex);
+            d.GoWork(stand, building, speed, null, _library);
         }
 
         private void FinishSite(GameManager gm)

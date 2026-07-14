@@ -34,6 +34,12 @@ namespace DinoDigger.Overworld
         private const float NapAngle = -22f;         // lie-down lean (deg)
         private const float WalkAnimFps = 6f;        // walk-cycle frames/sec at base follow speed
 
+        // Builder construction-worker gear (DinoDigger-771).
+        private const float HatInsetFrac = 0.15f;    // hat sits this far below the head-bounds top
+        private const float HatTilt = -8f;           // jaunty tilt (deg)
+        private const float MalletHeightFrac = 0.6f; // mallet rides this far up the body bounds
+        private const float MalletSideFrac = 0.45f;  // ...and this far out toward the build site
+
         [SerializeField] private SpriteRenderer _renderer;
         [SerializeField] private ParticleSystem _hearts;
         [SerializeField] private ParticleSystem _poof;
@@ -91,6 +97,21 @@ namespace DinoDigger.Overworld
         // around, not just one that has already clocked in.
         private bool _headingToWork;
 
+        // Construction-worker gear (DinoDigger-771). Created lazily on the first GoWork
+        // from the art library (null-tolerant: no sprite -> no child object -> feature
+        // silently absent). Visibility is DERIVED from state every LateUpdate rather than
+        // toggled per exit-path: the hat shows while (_headingToWork || Work), the mallet
+        // only while Work. So EVERY path that leaves the build assignment — StopWork,
+        // BecomeBuddy, BecomeResident, ResumeRole, Dance, a recall mid-commute — hides the
+        // gear automatically the next frame simply by clearing _mode / _headingToWork; the
+        // gear can never strand on a non-builder.
+        private PlaceholderLibrary _library;
+        private GameObject _hat;
+        private SpriteRenderer _hatRenderer;
+        private GameObject _mallet;
+        private SpriteRenderer _malletRenderer;
+        private float _buildingX;                    // world-x of the site being built (mallet side)
+
         // Parade.
         private Vector3 _paradeCenter;
         private float _paradePhase;
@@ -139,6 +160,8 @@ namespace DinoDigger.Overworld
         internal bool TestHasStrides => _strideA != null || _strideB != null;
         internal int TestWalkFrame => _walkFrame;
         internal bool TestWorking => _mode == Mode.Work;
+        internal bool TestHatActive => _hat != null && _hat.activeSelf;
+        internal bool TestMalletActive => _mallet != null && _mallet.activeSelf;
 
         private void Awake()
         {
@@ -620,14 +643,123 @@ namespace DinoDigger.Overworld
         /// never sends a resident home. Reuses the existing WalkTo travel + BFS movement.
         /// Only ever called for NON-buddy residents by <see cref="TownController"/>; the
         /// player backhoe and walk buddies are never routed here.</summary>
-        public void GoWork(Vector3 site, float speedMul, Action onWorking)
+        public void GoWork(Vector3 site, Vector3 buildingCenter, float speedMul, Action onWorking,
+            PlaceholderLibrary library)
         {
+            _library = library;
+            _buildingX = buildingCenter.x; // which side the structure is on (mallet flip)
             _headingToWork = true;
+            EquipBuilderGear();            // "puts on" the hard hat for the commute + shift
             WalkTo(site, speedMul, () =>
             {
                 EnterWork();
                 onWorking?.Invoke();
             });
+        }
+
+        /// <summary>Lazily build the hard-hat + mallet child overlays from the art library.
+        /// Null-tolerant: a missing sprite means no child object is created, so the feature
+        /// is silently absent (placeholder-only / stale-library runs). Idempotent — reused
+        /// across repeated draftings. Visibility is handled in <see cref="LateUpdate"/>.</summary>
+        private void EquipBuilderGear()
+        {
+            if (_library == null)
+            {
+                return;
+            }
+
+            if (_hat == null && _library.HardHat != null)
+            {
+                _hat = new GameObject("BuilderHat");
+                _hat.transform.SetParent(transform, false);
+                _hatRenderer = _hat.AddComponent<SpriteRenderer>();
+                _hatRenderer.sprite = _library.HardHat;
+            }
+
+            if (_mallet == null && _library.ToolHammer != null)
+            {
+                _mallet = new GameObject("BuilderMallet");
+                _mallet.transform.SetParent(transform, false);
+                _malletRenderer = _mallet.AddComponent<SpriteRenderer>();
+                _malletRenderer.sprite = _library.ToolHammer;
+            }
+        }
+
+        /// <summary>Track the builder gear onto the body AFTER movement/tweens have run this
+        /// frame (bounds-following picks up the walk-cycle bounce and work bob for free), and
+        /// derive its visibility from the current mode — the single source of truth that keeps
+        /// the hat/mallet off any non-builder. Early-outs entirely for a dino that has never
+        /// been drafted (no gear objects), so ordinary dinos pay nothing.</summary>
+        private void LateUpdate()
+        {
+            if (_hat == null && _mallet == null)
+            {
+                return;
+            }
+
+            UpdateHat();
+            UpdateMallet();
+        }
+
+        // The hat is worn from dispatch (commute) through the whole shift; pinned to the
+        // top-center of the body bounds, inset down a little onto the head, one sort step
+        // above the dino, at a jaunty tilt.
+        private void UpdateHat()
+        {
+            if (_hat == null)
+            {
+                return;
+            }
+
+            bool want = (_headingToWork || _mode == Mode.Work) &&
+                        _hatRenderer != null && _hatRenderer.sprite != null;
+            if (_hat.activeSelf != want)
+            {
+                _hat.SetActive(want);
+            }
+
+            if (!want || _renderer == null)
+            {
+                return;
+            }
+
+            Bounds b = _renderer.bounds;
+            _hat.transform.position = new Vector3(
+                b.center.x, b.max.y - b.size.y * HatInsetFrac, transform.position.z);
+            _hat.transform.rotation = Quaternion.Euler(0f, 0f, HatTilt);
+            _hatRenderer.sortingOrder = _renderer.sortingOrder + 1;
+        }
+
+        // The mallet is held only while actually working; parked at the side of the body
+        // toward the structure (flipped by which side that is) and rocked by TickWork.
+        private void UpdateMallet()
+        {
+            if (_mallet == null)
+            {
+                return;
+            }
+
+            bool want = _mode == Mode.Work && _malletRenderer != null && _malletRenderer.sprite != null;
+            if (_mallet.activeSelf != want)
+            {
+                _mallet.SetActive(want);
+            }
+
+            if (!want || _renderer == null)
+            {
+                return;
+            }
+
+            Bounds b = _renderer.bounds;
+            float side = _buildingX >= transform.position.x ? 1f : -1f;
+            _mallet.transform.position = new Vector3(
+                b.center.x + side * b.size.x * MalletSideFrac,
+                b.min.y + b.size.y * MalletHeightFrac,
+                transform.position.z);
+            // Flip toward the site (parent scale is uniform-positive, so a -1 x mirrors it);
+            // rotation is left to the TickWork swing so we don't stomp it here.
+            _mallet.transform.localScale = new Vector3(side, 1f, 1f);
+            _malletRenderer.sortingOrder = _renderer.sortingOrder + 1;
         }
 
         private void EnterWork()
@@ -650,6 +782,13 @@ namespace DinoDigger.Overworld
             {
                 _workBobTimer = UnityEngine.Random.Range(0.55f, 0.95f);
                 Tween.PunchScale(transform, 0.14f, 0.4f);
+
+                // Rock the mallet in time with the work bob (rotation only — LateUpdate
+                // owns its position/scale, so the two never fight). No-op without a mallet.
+                if (_mallet != null && _mallet.activeSelf)
+                {
+                    Tween.ShakeRotation(_mallet.transform, 18f, 0.4f, 1);
+                }
             }
         }
 

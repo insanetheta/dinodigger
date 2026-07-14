@@ -71,6 +71,14 @@ namespace DinoDigger.Config
                  "art can replace these in place with no code change.")]
         public Sprite[] BuildingStates = new Sprite[5];
 
+        [Tooltip("Builder construction-worker props (DinoDigger-771): a yellow hard hat worn by a " +
+                 "drafted builder (center pivot), a stone mallet it holds on-site (center pivot), " +
+                 "and a striped barrier sign shown at an active build (bottom-center pivot). Any of " +
+                 "these left null = that prop is silently absent (placeholder-only / stale-library runs).")]
+        public Sprite HardHat;
+        public Sprite ToolHammer;
+        public Sprite ConstructionSign;
+
         [Header("Particles")]
         public Sprite StarParticle;
         public Sprite HeartParticle;

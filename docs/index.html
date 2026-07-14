@@ -3,21 +3,9 @@
   <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Unity Web Player | Dino Digger</title>
     <link rel="shortcut icon" href="TemplateData/favicon.ico">
     <link rel="stylesheet" href="TemplateData/style.css">
-    <style>
-      /* Manual mobile patch (see beads ticket): fill the viewport on small
-         screens regardless of UA detection. Move into a custom WebGL template. */
-      html, body { width: 100%; height: 100%; overflow: hidden; background: #231F20; }
-      @media (max-width: 900px), (pointer: coarse) {
-        #unity-container { position: fixed !important; left: 0 !important; top: 0 !important;
-          width: 100% !important; height: 100% !important; transform: none !important; }
-        #unity-canvas { width: 100% !important; height: 100% !important; }
-        #unity-footer { display: none; }
-      }
-    </style>
   </head>
   <body>
     <div id="unity-container" class="unity-desktop">

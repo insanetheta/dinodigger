@@ -61,6 +61,16 @@ namespace DinoDigger.EditorTools
         // sit on one ground line and grow upward as the silhouette gets taller.
         private const float BuildingTargetW = 2.2f;
 
+        // Construction-worker props (DinoDigger-771). Sized to read at a fixed WORLD
+        // size next to the chunky dinos: the hat is measured by WIDTH so it caps a
+        // head, the mallet by HEIGHT so it reads as a hand tool, and the ground sign
+        // by WIDTH. Hat + mallet keep the default CENTER pivot (ConfigureSprite) so the
+        // runtime overlay can pin them by bounds; the sign takes a BOTTOM-CENTER pivot
+        // (ConfigureBuilding) so it plants on the ground like a building.
+        private const float HardHatTargetW = 0.5f;
+        private const float ToolHammerTargetH = 0.45f;
+        private const float ConstructionSignTargetW = 0.8f;
+
         // Pebble Playground (DinoDigger-5li.3) construction states, ASCENDING
         // completeness: s0 (ground-breaking dirt) .. s3 (nearly done) then the finished
         // building. Sliced by Tools/slice_sprites.py to Generated/town/.
@@ -70,6 +80,11 @@ namespace DinoDigger.EditorTools
             "town/pebble_playground_s2", "town/pebble_playground_s3",
             "town/pebble_playground_done",
         };
+
+        // Construction-worker props (DinoDigger-771), transparent PNGs in Generated/town/.
+        private const string HardHatRel = "town/prop_hardhat";
+        private const string ToolHammerRel = "town/prop_tool_hammer";
+        private const string ConstructionSignRel = "town/prop_sign_construction";
 
         // Dig-mode background is sized by WIDTH so it covers the whole camera view.
         // During dig the camera uses GameConfig.DigOrthoSize (3.2) => visible width at
@@ -310,6 +325,43 @@ namespace DinoDigger.EditorTools
                 }
             }
 
+            // Construction-worker props (DinoDigger-771): hat/mallet import like the
+            // single items (plain Simple sprite, CENTER pivot) at a per-file PPU; the
+            // sign plants on the ground (bottom-center) like a building. Null-safe — a
+            // missing PNG is tracked and the runtime feature stays silently absent.
+            string hatPath = GenPath(HardHatRel);
+            int hatW = SourceWidth(hatPath);
+            if (hatW > 0)
+            {
+                ConfigureSprite(hatPath, hatW / HardHatTargetW, missing);
+            }
+            else
+            {
+                missing.Add(hatPath + " (no readable source texture)");
+            }
+
+            string hammerPath = GenPath(ToolHammerRel);
+            int hammerH = SourceHeight(hammerPath);
+            if (hammerH > 0)
+            {
+                ConfigureSprite(hammerPath, hammerH / ToolHammerTargetH, missing);
+            }
+            else
+            {
+                missing.Add(hammerPath + " (no readable source texture)");
+            }
+
+            string signPath = GenPath(ConstructionSignRel);
+            int signW = SourceWidth(signPath);
+            if (signW > 0)
+            {
+                ConfigureBuilding(signPath, signW / ConstructionSignTargetW, missing);
+            }
+            else
+            {
+                missing.Add(signPath + " (no readable source texture)");
+            }
+
             AssetDatabase.Refresh();
 
             // ------------------------------------------------ 2) DinoDefinitions
@@ -462,6 +514,14 @@ namespace DinoDigger.EditorTools
                 lib.BuildingStates = LoadArray(PebblePlaygroundStates, missing);
                 wired.Add("Library: Pebble Playground states s0..s3+done " +
                           $"(~{BuildingTargetW}u wide, bottom pivot)");
+
+                // Construction-worker props (DinoDigger-771). Direct assignment (no
+                // reflection); each stays null when its PNG is absent so the builder
+                // hat/mallet + build-site sign features silently no-op.
+                lib.HardHat = LoadSpriteTracked(HardHatRel, missing);
+                lib.ToolHammer = LoadSpriteTracked(ToolHammerRel, missing);
+                lib.ConstructionSign = LoadSpriteTracked(ConstructionSignRel, missing);
+                wired.Add("Library: builder props hat/hammer/sign (DinoDigger-771)");
 
                 // Tilemap tiles + MoundSprite + icons intentionally left on placeholders.
                 EditorUtility.SetDirty(lib);

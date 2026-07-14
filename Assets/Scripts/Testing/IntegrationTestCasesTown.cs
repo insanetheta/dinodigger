@@ -111,6 +111,14 @@ namespace DinoDigger.Testing
                 yield return ctx.WaitUntil(() => town.TestActiveSite != null);
                 BuildingController site = town.TestActiveSite;
 
+                // (DinoDigger-771) The "under construction" barrier sign is up while the site
+                // builds. Only meaningful once the art is imported (null sprite = no sign).
+                bool signOn = gm.TestLibrary != null && gm.TestLibrary.ConstructionSign != null;
+                if (signOn)
+                {
+                    ctx.Assert(site.TestSignActive, "construction sign not shown while the site is building");
+                }
+
                 // The crew commutes then works; the state climbs to finished.
                 yield return ctx.WaitUntil(() => site != null && site.IsFinished);
 
@@ -118,6 +126,14 @@ namespace DinoDigger.Testing
                     $"did not step through states 1..3 (saw: {Join(advanced)})");
                 ctx.Assert(site.State == BuildingController.ConstructionStates,
                     $"final state {site.State} != finished ({BuildingController.ConstructionStates})");
+
+                // ...and it pops away once the build finishes.
+                if (signOn)
+                {
+                    yield return ctx.WaitUntil(() => !site.TestSignActive);
+                    ctx.Assert(!site.TestSignActive, "construction sign persisted after the build finished");
+                }
+
                 ctx.Log($"crew advanced the build through states {Join(advanced)} to finished");
             }
             finally
@@ -160,6 +176,19 @@ namespace DinoDigger.Testing
                     "a drafted builder is a buddy (town must use non-buddy residents only)");
             }
 
+            // (DinoDigger-771) The hard-hat overlay is a construction-worker tell that must be
+            // on from the moment a builder is dispatched. Only meaningful when the art is
+            // imported — placeholder-only runs leave the sprite null and the feature absent.
+            bool hats = gm.TestLibrary != null && gm.TestLibrary.HardHat != null;
+            if (hats)
+            {
+                for (int i = 0; i < crew.Count; i++)
+                {
+                    ctx.Assert(crew[i] != null && crew[i].TestHatActive,
+                        "a freshly-drafted builder is not wearing its hard hat while commuting");
+                }
+            }
+
             // They commute out of the meadow and clock in at the site.
             yield return ctx.WaitUntil(() => AnyBuilderWorking(town));
             DinoController worker = FirstWorkingBuilder(town);
@@ -168,7 +197,24 @@ namespace DinoDigger.Testing
                 "working builder is still inside the meadow (never commuted)");
             ctx.Assert((worker.transform.position - town.TestArea.PlotWorld(0)).magnitude < 3f,
                 "working builder did not arrive near the build plot");
+            if (hats)
+            {
+                ctx.Assert(worker.TestHatActive, "working builder is not wearing its hard hat");
+            }
+
             ctx.Log("2 residents left the meadow, commuted to the site, and clocked in (no buddy/backhoe drafted)");
+
+            // ...and the hat comes off the instant the builder leaves the assignment. Recall the
+            // crew (StopWork via the town reset — dinos survive, unlike GameManager.TestReset),
+            // then confirm the still-alive worker's hat is gone: proving the exit-path removal.
+            if (hats)
+            {
+                town.TestResetTown();
+                yield return ctx.WaitFrames(2); // LateUpdate derives the hidden state from mode
+                ctx.Assert(worker != null && !worker.TestHatActive,
+                    "hard hat persisted after the builder was recalled off the build");
+            }
+
             gm.TestReset();
         }
 

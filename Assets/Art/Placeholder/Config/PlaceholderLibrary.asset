@@ -82,6 +82,9 @@ MonoBehaviour:
   - {fileID: 21300000, guid: c21c0496185e7458fa0099af13844325, type: 3}
   - {fileID: 21300000, guid: 12c94c1a017ad40b4892f88d39a51ee0, type: 3}
   - {fileID: 21300000, guid: 4d0f3d42387984c01bfa5a685f98b96a, type: 3}
+  HardHat: {fileID: 21300000, guid: d360f7b9ce2a4477d9d3ebbda1214afe, type: 3}
+  ToolHammer: {fileID: 21300000, guid: c300babd43f66490ba031d948ea3892e, type: 3}
+  ConstructionSign: {fileID: 21300000, guid: 8b23e0f19948b4b478b7390fd6f1a0f3, type: 3}
   StarParticle: {fileID: 21300000, guid: 1e83911eeed82416888274d1f0794094, type: 3}
   HeartParticle: {fileID: 21300000, guid: 61a01d4e5e8214be29055122ed5f8b04, type: 3}
   CrumbParticle: {fileID: 21300000, guid: 6ba7d2b40cba041828410e8481bb93ec, type: 3}
