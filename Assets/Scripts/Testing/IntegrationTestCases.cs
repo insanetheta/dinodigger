@@ -45,6 +45,7 @@ namespace DinoDigger.Testing
                 new TestCase("ParentGateMute",       10f, Case_ParentGateMute),
                 new TestCase("DinoIdleStable",       25f, Case_DinoIdleStable),
                 new TestCase("WalkAnimCycles",       30f, Case_WalkAnimCycles),
+                new TestCase("BackhoeRollCycles",    30f, Case_BackhoeRollCycles),
                 new TestCase("BuddyCapTwo",          35f, Case_BuddyCapTwo),
                 new TestCase("BuddySwapOnTap",       25f, Case_BuddySwapOnTap),
                 new TestCase("MeadowContainsResidents", 25f, Case_MeadowContainsResidents),
@@ -419,7 +420,17 @@ namespace DinoDigger.Testing
 
                 ctx.Assert(bh.Facing == expected,
                     $"drove {dirs[i]} but faced {bh.Facing} (expected {expected}) — compass flip?");
-                ctx.Assert(bh.TestSprite == bh.TestDirSprite(expected),
+
+                // The wheel-roll cycler (DinoDigger-682) may still have a ROLL frame up
+                // if the backhoe is sampled while it is mid-drive; accept the idle frame
+                // OR either roll phase for the expected facing (mirrors GrowthStageArt's
+                // stride tolerance). All three are direction-indexed, so a compass flip
+                // still fails loudly.
+                Sprite rendered = bh.TestSprite;
+                bool spriteForFacing = rendered == bh.TestDirSprite(expected) ||
+                    rendered == bh.TestRollDirSprite(0, expected) ||
+                    rendered == bh.TestRollDirSprite(1, expected);
+                ctx.Assert(spriteForFacing,
                     $"rendered sprite != wired array[{(int)expected}] ({expected}) after driving {dirs[i]}");
                 tested++;
                 if (Mathf.Abs(dirs[i].x) > 0.5f) { xAxisTested = true; } else { yAxisTested = true; }
@@ -444,19 +455,52 @@ namespace DinoDigger.Testing
             OverworldMap map = gm.TestMap;
             ctx.Assert(bh != null && map != null, "missing backhoe/map");
 
-            // ---- Backhoe: one straight leg, count facing changes across the drive. ----
+            // ---- Backhoe: one GENUINELY straight leg, count facing changes. ----
+            // The leg must have CORRIDOR line-of-sight the whole way, not merely a clear
+            // center ray: the backhoe drives via FindPath -> SmoothWaypoints, which
+            // collapses a route with corridor LOS into a SINGLE straight segment. A leg
+            // that only passes the single-ray test (FindAnyClearCardinalTarget) can still
+            // smooth into a grid STAIRCASE around a stream/bridge, whose every step is a
+            // legitimate facing change -> the "changed 4x" flake this case kept hitting.
+            // Relocate to vetted open ground that offers a corridor-straight leg first.
+            ctx.Assert(RelocateForStraightLeg(gm, map, bh, out Vector3 target),
+                "no corridor-straight leg available anywhere for the backhoe");
             Vector3 start = bh.transform.position;
-            ctx.Assert(FindAnyClearCardinalTarget(map, gm, start, out Vector3 target),
-                "no clear straight leg available for the backhoe");
+            ctx.Assert(map.HasCorridorLineOfSight(start, target),
+                "chosen backhoe leg is not corridor-straight (would smooth into a staircase)");
 
             bh.MoveTo(target);
             yield return ctx.WaitFrames(1);
+
+            // A straight leg legitimately SWEEPS the facing at drive start: the
+            // FacingSmoother EMAs the heading from the pre-drive facing through the
+            // intermediate sectors up to the leg's cardinal (e.g. S -> SE -> E = 2 changes),
+            // and may sweep once more on arrival deceleration. That is correct smoothing,
+            // NOT the per-frame seizure-jiggle this case guards (dozens of flips/sec). So
+            // ignore the start sweep: begin counting only once the facing first settles on
+            // the leg's expected cardinal, or after a 0.6s grace window (comfortably past
+            // the ~0.15s EMA time constant + 11° hysteresis), whichever comes first. Over
+            // the steady-state remainder a genuinely straight drive must hold ONE facing
+            // (allow a single change for arrival deceleration).
+            Dir8 expected = Direction8.FromVector((Vector2)(target - start));
+            const float graceSec = 0.6f;
+            float grace = 0f;
+            bool counting = false;
             Dir8 last = bh.Facing;
             int changes = 0;
             int guard = 0;
             while (bh.IsMoving && guard++ < 1200)
             {
-                if (bh.Facing != last)
+                if (!counting)
+                {
+                    grace += Time.deltaTime;
+                    if (bh.Facing == expected || grace >= graceSec)
+                    {
+                        counting = true;
+                        last = bh.Facing; // baseline the steady-state facing
+                    }
+                }
+                else if (bh.Facing != last)
                 {
                     changes++;
                     last = bh.Facing;
@@ -465,29 +509,50 @@ namespace DinoDigger.Testing
                 yield return null;
             }
 
-            ctx.Assert(changes <= 3, $"backhoe facing changed {changes}x on ONE straight leg (jiggle regression)");
+            ctx.Assert(changes <= 1,
+                $"backhoe facing changed {changes}x on the steady-state part of ONE straight leg (jiggle regression)");
 
             // ---- Dino: follow the moving backhoe ~3s, measure facing changes/sec. ----
+            // Same determinism guard: put the backhoe where corridor-straight legs
+            // exist so it leads the dino along straight paths (a staircasing backhoe
+            // makes the follower flap its facing legitimately), then spawn the dino
+            // beside the relocated backhoe.
             gm.TestReset();
+            RelocateForStraightLeg(gm, map, bh, out _);
             DinoController dino = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Baby);
             ctx.Assert(dino != null, "dino spawn failed");
             yield return ctx.WaitFrames(2);
 
+            // Same start-sweep exclusion as the backhoe half: when the dino first orients
+            // toward the moving backhoe its facing legitimately sweeps through intermediate
+            // sectors. Hold off counting for a 0.6s grace window (> the ~0.15s EMA + 11°
+            // hysteresis) so the initial orientation sweep is not scored as flapping. The
+            // rate is still averaged over the full 3s observation window (NOT the shortened
+            // post-grace window) so the threshold keeps the meaning it was calibrated with —
+            // this can only lower the measured rate versus counting from frame zero.
             Dir8 dlast = dino.TestFacing;
             int dchanges = 0;
             float elapsed = 0f;
+            const float dinoGraceSec = 0.6f;
             while (elapsed < 3f)
             {
                 if (!bh.IsMoving &&
-                    FindAnyClearCardinalTarget(map, gm, bh.transform.position, out Vector3 next))
+                    FindStraightCorridorTarget(map, gm, bh.transform.position, out Vector3 next))
                 {
-                    bh.MoveTo(next); // keep it moving so the dino actively follows
+                    bh.MoveTo(next); // keep it moving over a straight leg so the dino follows a straight path
                 }
 
-                if (dino.TestFacing != dlast)
+                if (elapsed >= dinoGraceSec)
                 {
-                    dchanges++;
-                    dlast = dino.TestFacing;
+                    if (dino.TestFacing != dlast)
+                    {
+                        dchanges++;
+                        dlast = dino.TestFacing;
+                    }
+                }
+                else
+                {
+                    dlast = dino.TestFacing; // keep the baseline current through the start sweep
                 }
 
                 elapsed += Time.deltaTime;
@@ -547,6 +612,15 @@ namespace DinoDigger.Testing
 
             for (int hit = 1; hit <= max; hit++)
             {
+                // The excavator arm bites one tile at a time and drops a same-tile
+                // re-tap while that bite is still in flight — wait until it is parked
+                // before each tap so every tap lands as a fresh bite.
+                yield return ctx.WaitUntil(() => dm.TestArmReady || tile.IsDestroyed);
+                if (tile.IsDestroyed)
+                {
+                    break;
+                }
+
                 int before = tile.TestDamage;
                 ctx.TapWorld(tile.transform.position);
                 yield return ctx.WaitUntil(() => tile.TestDamage > before || tile.IsDestroyed);
@@ -1021,14 +1095,20 @@ namespace DinoDigger.Testing
             // Scales are now SUBTLE (baby 1.0 / kid ~1.15 / big ~1.3) since per-stage ART
             // carries most of the growth; read the expected scale from config rather than
             // hardcoding, and confirm each ~0.15 step lands within tolerance.
+            // The tap-feed just fired an eat/grow punch-scale; let it decay so we read
+            // the RESTING stage scale, not a mid-tween overshoot (the 1.10-vs-1.00 flake).
+            yield return WaitForStableScale(ctx, dino);
             float baby = gm.TestConfig.StageScale(GrowthStage.Baby);
             ctx.Assert(Mathf.Abs(dino.transform.localScale.x - baby) < 0.05f,
                 $"baby scale {dino.transform.localScale.x:F2} != config {baby:F2}");
 
             float kid = gm.TestConfig.StageScale(GrowthStage.Kid);
             dino.Feed();
-            yield return ctx.WaitUntil(() => Mathf.Abs(dino.transform.localScale.x - kid) < 0.05f);
+            yield return ctx.WaitUntil(() => dino.Stage == GrowthStage.Kid);
+            yield return WaitForStableScale(ctx, dino); // let the grow tween + punch settle
             ctx.Assert(dino.Stage == GrowthStage.Kid, $"stage {dino.Stage} not Kid after 2 fruit");
+            ctx.Assert(Mathf.Abs(dino.transform.localScale.x - kid) < 0.05f,
+                $"kid scale {dino.transform.localScale.x:F2} != config {kid:F2}");
 
             float big = gm.TestConfig.StageScale(GrowthStage.Big);
             dino.Feed();
@@ -1036,8 +1116,11 @@ namespace DinoDigger.Testing
             dino.Feed();
             yield return ctx.WaitFrames(1);
             dino.Feed();
-            yield return ctx.WaitUntil(() => Mathf.Abs(dino.transform.localScale.x - big) < 0.05f);
+            yield return ctx.WaitUntil(() => dino.Stage == GrowthStage.Big);
+            yield return WaitForStableScale(ctx, dino);
             ctx.Assert(dino.Stage == GrowthStage.Big, $"stage {dino.Stage} not Big after 5 fruit");
+            ctx.Assert(Mathf.Abs(dino.transform.localScale.x - big) < 0.05f,
+                $"big scale {dino.transform.localScale.x:F2} != config {big:F2}");
 
             ctx.Log($"tap-fed then grew Baby->Kid(~{kid})->Big(~{big})");
             gm.TestReset();
@@ -1489,6 +1572,136 @@ namespace DinoDigger.Testing
 
             ctx.Log($"walk cycled through {seenStrides.Count} distinct stride frames " +
                     "with idle beats between, then settled back on the idle frame");
+
+            // NEW-species coverage (y85.2): prove the remaining-7 batch art is wired
+            // end-to-end by walking a velociraptor buddy through its own stride cycle.
+            gm.TestReset();
+            DinoController raptor = gm.TestSpawnDino(DinoType.Velociraptor, GrowthStage.Big);
+            ctx.Assert(raptor != null, "velociraptor spawn failed");
+            yield return ctx.WaitFrames(2);
+
+            ctx.Assert(raptor.TestStrideDirSprite(GrowthStage.Big, 0, Dir8.S) != null,
+                "velociraptor adult stride art missing (y85.2 batch not generated/imported)");
+
+            var raptorStrides = new HashSet<Sprite>();
+            for (int phase = 0; phase < 2; phase++)
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    Sprite s = raptor.TestStrideDirSprite(GrowthStage.Big, phase, (Dir8)i);
+                    if (s != null)
+                    {
+                        raptorStrides.Add(s);
+                    }
+                }
+            }
+
+            var raptorSeen = new HashSet<Sprite>();
+            float rElapsed = 0f;
+            while (rElapsed < 3f)
+            {
+                if (!bh.IsMoving &&
+                    FindAnyClearCardinalTarget(map, gm, bh.transform.position, out Vector3 rnext))
+                {
+                    bh.MoveTo(rnext);
+                }
+
+                if (!raptor.TestIsSettled)
+                {
+                    Sprite cur = raptor.TestSprite;
+                    if (cur != null && raptorStrides.Contains(cur))
+                    {
+                        raptorSeen.Add(cur);
+                    }
+                }
+
+                rElapsed += Time.deltaTime;
+                yield return null;
+            }
+
+            ctx.Assert(raptorSeen.Count >= 2,
+                $"velociraptor rendered only {raptorSeen.Count} distinct stride frames " +
+                "while walking (expected >= 2; y85.2 batch art)");
+            ctx.Log($"velociraptor buddy walk-cycled through {raptorSeen.Count} distinct " +
+                    "stride frames (y85.2 batch art wired)");
+            gm.TestReset();
+        }
+
+        // Drive the backhoe and assert its wheel-roll drive cycle alternates through
+        // the roll frames (idle->A->idle->B) and settles back to the idle facing
+        // frame when it stops (DinoDigger-682). Mirrors WalkAnimCycles' structure.
+        private IEnumerator Case_BackhoeRollCycles(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            BackhoeController bh = gm.TestBackhoe;
+            OverworldMap map = gm.TestMap;
+            ctx.Assert(bh != null && map != null, "missing backhoe/map");
+
+            ctx.Assert(bh.TestRollDirSprite(0, Dir8.S) != null,
+                "backhoe roll art missing (run the Tools pipeline, then DinoDigger/Import Generated Art)");
+
+            // Every roll sprite (both phases x 8 dirs) for identifying drive frames.
+            var rollSprites = new HashSet<Sprite>();
+            for (int phase = 0; phase < 2; phase++)
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    Sprite s = bh.TestRollDirSprite(phase, (Dir8)i);
+                    if (s != null)
+                    {
+                        rollSprites.Add(s);
+                    }
+                }
+            }
+
+            // Keep the backhoe driving ~3s (re-targeting clear legs) and sample the
+            // rendered sprite every frame it is in motion.
+            var seenRolls = new HashSet<Sprite>();
+            bool idleBeatSeen = false;
+            float elapsed = 0f;
+            while (elapsed < 3f)
+            {
+                if (!bh.IsMoving &&
+                    FindAnyClearCardinalTarget(map, gm, bh.transform.position, out Vector3 next))
+                {
+                    bh.MoveTo(next);
+                }
+
+                if (bh.IsMoving)
+                {
+                    Sprite cur = bh.TestSprite;
+                    if (cur != null && rollSprites.Contains(cur))
+                    {
+                        seenRolls.Add(cur);
+                    }
+                    else if (cur != null)
+                    {
+                        idleBeatSeen = true; // the idle beats of idle->A->idle->B
+                    }
+                }
+
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+
+            ctx.Assert(seenRolls.Count >= 2,
+                $"only {seenRolls.Count} distinct roll frames rendered while driving (expected >= 2)");
+            ctx.Assert(idleBeatSeen,
+                "idle frame never appeared mid-drive (cycle should be idle->A->idle->B)");
+
+            // Park: the backhoe stops and must be back on the plain idle facing frame
+            // (not frozen mid-roll).
+            yield return ctx.WaitUntil(() => !bh.IsMoving);
+            yield return ctx.WaitFrames(2);
+
+            ctx.Assert(bh.TestRollFrame == 0, "roll cycle did not settle to the idle frame");
+            Sprite idleExpected = bh.TestDirSprite(bh.Facing);
+            ctx.Assert(idleExpected == null || bh.TestSprite == idleExpected,
+                $"settled backhoe not on the idle facing frame (facing {bh.Facing})");
+
+            ctx.Log($"backhoe drive cycled through {seenRolls.Count} distinct roll frames " +
+                    "with idle beats between, then settled back on the idle frame");
             gm.TestReset();
         }
 
@@ -1666,13 +1879,61 @@ namespace DinoDigger.Testing
             ctx.Assert(FindTreeCell(gm, out Vector3Int treeCell, out Vector3 treeWorld),
                 "no tree tile found on the island");
 
-            // Stand the Brachio near the tree (within the ~3-unit power range) but
-            // far enough that its scaled tap collider can't swallow the tree tap.
-            Vector3 beside = WalkableNear(gm.TestMap, treeWorld + new Vector3(1.6f, -0.8f, 0f));
-            if ((beside - treeWorld).magnitude > 2.9f)
+            // Stand the Brachio NEAR the tree but far enough that the player's tap on the
+            // tree center is NOT swallowed by the dino's own tap collider. THE TIMEOUT BUG:
+            // this Grid is IsometricZAsY with cellSize (1, 0.5), so a cardinal-NEIGHBOUR
+            // cell center is only ~0.56 world units from the tree center — INSIDE the
+            // dino's 0.6-unit (× Kid stage scale ~1.15 ≈ 0.69) touch collider. Placing the
+            // Brachio right beside the tree made FindTappable(treeWorld) return the DINO,
+            // so the routed tree tap hit dino.OnTapped (it just danced) and OnTreeTapped
+            // NEVER ran — no fruit, deterministic timeout every run. Pick a walkable cell
+            // ~1.0–2.7 world units out: clear of the ~0.7 collider, still inside the
+            // 3-unit shake range. Scan by ACTUAL world distance (isometric steps vary per
+            // grid direction), nearest ring first.
+            Vector3 beside = treeWorld;
+            bool placed = false;
+            for (int ring = 1; ring <= 6 && !placed; ring++)
             {
-                beside = WalkableNear(gm.TestMap, treeWorld + new Vector3(0f, -1.3f, 0f));
+                for (int ox = -ring; ox <= ring && !placed; ox++)
+                {
+                    for (int oy = -ring; oy <= ring && !placed; oy++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(ox), Mathf.Abs(oy)) != ring)
+                        {
+                            continue; // ring perimeter only (nearest cells first)
+                        }
+
+                        var c = new Vector3Int(treeCell.x + ox, treeCell.y + oy, 0);
+                        if (!gm.TestMap.IsWalkableCell(c))
+                        {
+                            continue;
+                        }
+
+                        Vector3 w = gm.TestMap.CellCenter(c);
+                        float dm = (w - treeWorld).magnitude;
+                        if (dm >= 1.0f && dm <= 2.7f)
+                        {
+                            beside = w;
+                            placed = true;
+                        }
+                    }
+                }
             }
+
+            ctx.Assert(placed,
+                "no walkable cell 1.0-2.7 units from the tree (clear of the dino tap collider, inside shake range)");
+
+            // Park the backhoe on the NEAREST walkable cell to the tree BEFORE
+            // dropping the buddy in. A single buddy's follow slot sits ~1.4 units
+            // off the backhoe (SlotOffset(0) == (-1.4, 0)), so anchoring the backhoe
+            // at the tree keeps that slot inside the 3-unit shake range. With the
+            // backhoe parked far away (wherever an earlier case left it), the
+            // buddy-follow FSM immediately trots the Brachio back toward it and the
+            // shake silently no-ops (leaf rustle only) -> timeout.
+            gm.TestBackhoe.transform.position = WalkableNear(gm.TestMap, treeWorld);
+            Physics2D.SyncTransforms();
+            // Let the follow slot resolve next to the tree before we place the dino.
+            yield return ctx.WaitSecondsScaled(0.5f);
 
             brachio.transform.position = beside;
             Physics2D.SyncTransforms();
@@ -2032,9 +2293,42 @@ namespace DinoDigger.Testing
             int guard = 0;
             while (tile != null && !tile.IsDestroyed && dm.IsOpen && guard++ < 12)
             {
+                // Pace to the arm: a same-tile re-tap issued mid-bite is dropped by
+                // the dig queue, so wait until the arm is parked before each tap.
+                yield return ctx.WaitUntil(() =>
+                    tile == null || tile.IsDestroyed || !dm.IsOpen || dm.TestArmReady);
+                if (tile == null || tile.IsDestroyed || !dm.IsOpen)
+                {
+                    break;
+                }
+
                 int before = tile.TestDamage;
                 ctx.TapWorld(tile.transform.position);
                 yield return ctx.WaitUntil(() => tile == null || tile.IsDestroyed || tile.TestDamage > before || !dm.IsOpen);
+            }
+        }
+
+        /// <summary>Wait until the dino's uniform scale holds steady for ~0.3s of
+        /// scaled time, so a scale assertion reads the resting stage scale rather than
+        /// a mid-flight eat/grow punch-scale overshoot.</summary>
+        private IEnumerator WaitForStableScale(TestContext ctx, DinoController dino)
+        {
+            float last = dino.transform.localScale.x;
+            float stableFor = 0f;
+            while (stableFor < 0.3f)
+            {
+                yield return null;
+                float now = dino.transform.localScale.x;
+                if (Mathf.Abs(now - last) < 0.002f)
+                {
+                    stableFor += Time.deltaTime;
+                }
+                else
+                {
+                    stableFor = 0f;
+                }
+
+                last = now;
             }
         }
 
@@ -2295,6 +2589,91 @@ namespace DinoDigger.Testing
             return false;
         }
 
+        /// <summary>Like <see cref="FindClearCardinalTarget"/>, but requires CORRIDOR
+        /// line-of-sight for the WHOLE leg (map.HasCorridorLineOfSight), not just a single
+        /// center ray. That is exactly the test the backhoe's FindPath/string-pull uses to
+        /// collapse a route into one straight segment, so a leg that passes here is
+        /// guaranteed to drive straight (no grid staircase around a stream/bridge) and the
+        /// facing legitimately holds for the whole leg — the signal FacingStability guards.</summary>
+        private bool FindStraightCorridorTarget(OverworldMap map, GameManager gm, Vector3 start, out Vector3 target)
+        {
+            Vector2[] dirs =
+            {
+                new Vector2(1f, 0f), new Vector2(0f, 1f),
+                new Vector2(-1f, 0f), new Vector2(0f, -1f),
+            };
+            float[] dists = { 4f, 3.5f, 3f, 2.5f };
+            Vector3Int startCell = map.WorldToCell(start);
+            for (int d = 0; d < dirs.Length; d++)
+            {
+                for (int i = 0; i < dists.Length; i++)
+                {
+                    Vector3 probe = start + new Vector3(dirs[d].x, dirs[d].y, 0f) * dists[i];
+                    Vector3 w = map.NearestWalkable(probe, out bool found);
+                    if (!found || map.WorldToCell(w) == startCell)
+                    {
+                        continue;
+                    }
+
+                    if (NearActiveMound(gm, w, 1.2f))
+                    {
+                        continue;
+                    }
+
+                    // Clamped target must stay inside the cardinal's 22.5° sector so the
+                    // straight leg maps to one unambiguous screen-cardinal facing.
+                    Vector2 to = new Vector2(w.x - start.x, w.y - start.y);
+                    if (to.sqrMagnitude < 0.01f || Vector2.Dot(to.normalized, dirs[d]) < 0.93f)
+                    {
+                        continue;
+                    }
+
+                    if (!map.HasCorridorLineOfSight(start, w))
+                    {
+                        continue; // would smooth into a staircase — not a genuinely straight drive
+                    }
+
+                    target = w;
+                    return true;
+                }
+            }
+
+            target = start;
+            return false;
+        }
+
+        /// <summary>Teleport the backhoe to vetted open ground from which a
+        /// corridor-straight cardinal leg exists, and hand back that leg's target. Tries
+        /// the current spot first, then samples random walkable cells. Test-only: the
+        /// 48x48 island's spawn area (and wherever a prior case parked the backhoe) can be
+        /// too cluttered with streams/trees to offer a genuinely straight drive.</summary>
+        private bool RelocateForStraightLeg(GameManager gm, OverworldMap map, BackhoeController bh, out Vector3 target)
+        {
+            if (FindStraightCorridorTarget(map, gm, bh.transform.position, out target))
+            {
+                return true;
+            }
+
+            for (int attempt = 0; attempt < 300; attempt++)
+            {
+                if (!map.TryRandomWalkableCell(out Vector3Int cell))
+                {
+                    break;
+                }
+
+                Vector3 pos = map.CellCenter(cell);
+                if (FindStraightCorridorTarget(map, gm, pos, out target))
+                {
+                    bh.transform.position = pos;
+                    Physics2D.SyncTransforms();
+                    return true;
+                }
+            }
+
+            target = bh.transform.position;
+            return false;
+        }
+
         private bool FindBlockedPondCell(OverworldMap map, out Vector3Int cell)
         {
             // Scan the handcrafted pond region and return an interior water cell
@@ -2374,6 +2753,16 @@ namespace DinoDigger.Testing
                     }
 
                     Vector3 w = map.CellCenter(c);
+
+                    // An active mound (ITappable, ~0.7 collider) sitting within ~0.56
+                    // units of the tree on this isometric grid would swallow the routed
+                    // tree tap. Skip trees whose center a mound collider could cover so
+                    // the tap always reaches OnTreeTapped.
+                    if (NearActiveMound(gm, w, 0.8f))
+                    {
+                        continue;
+                    }
+
                     float sq = (w - bp).sqrMagnitude;
                     if (sq < bestSq)
                     {

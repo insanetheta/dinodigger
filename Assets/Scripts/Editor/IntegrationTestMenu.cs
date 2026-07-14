@@ -79,6 +79,18 @@ namespace DinoDigger.EditorTools
 
         private static void OnPlayModeChanged(PlayModeStateChange state)
         {
+            // With WebGL as the active build target the editor emulates WebGL's
+            // pause-when-hidden behavior: entering play mode UNFOCUSED freezes the player
+            // loop at frame ~1-2, so the runner's own runInBackground assignment (which
+            // happens in the player loop) never lands and the suite hangs. This editor
+            // callback runs on the editor loop, which stays alive when unfocused, so we
+            // set the flag here the moment play mode starts to unfreeze the player loop.
+            if (state == PlayModeStateChange.EnteredPlayMode)
+            {
+                Application.runInBackground = true;
+                return;
+            }
+
             if (state != PlayModeStateChange.EnteredEditMode)
             {
                 return;

@@ -20,9 +20,59 @@ namespace DinoDigger.EditorTools
     {
         private const string OutputDir = "docs";
 
+        /// <summary>Per-platform WebGL texture overrides: characters render at ~95-230
+        /// screen px, so 256px crunched textures are still oversampled and keep the single
+        /// data bundle under GitHub's 100MB per-file limit. The full-screen dig background
+        /// is the exception — it stays at 512 to avoid visible blur.</summary>
+        private const int WebGLMaxTex = 256;
+        private const int WebGLQuality = 40;
+        private const int DigBgMaxTex = 512;
+        private const string DigBgDir = "Assets/Art/Generated/digbg/";
+
+        private static void ApplyWebGLTextureOverrides()
+        {
+            string[] guids = AssetDatabase.FindAssets("t:Texture2D",
+                new[] { "Assets/Art" });
+            int changed = 0;
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+                if (importer == null)
+                {
+                    continue;
+                }
+
+                // Dig background fills the whole screen; keep it at full 512 to avoid blur.
+                bool isDigBg = path.StartsWith(DigBgDir, System.StringComparison.Ordinal);
+                int targetMaxTex = isDigBg ? DigBgMaxTex : WebGLMaxTex;
+
+                var settings = importer.GetPlatformTextureSettings("WebGL");
+                if (settings.overridden && settings.maxTextureSize == targetMaxTex &&
+                    settings.crunchedCompression && settings.compressionQuality == WebGLQuality)
+                {
+                    continue; // already applied
+                }
+
+                settings.overridden = true;
+                settings.maxTextureSize = targetMaxTex;
+                settings.format = TextureImporterFormat.Automatic;
+                settings.textureCompression = TextureImporterCompression.Compressed;
+                settings.crunchedCompression = true;
+                settings.compressionQuality = WebGLQuality;
+                importer.SetPlatformTextureSettings(settings);
+                importer.SaveAndReimport();
+                changed++;
+            }
+
+            Debug.Log($"[WebGLBuilder] WebGL texture overrides applied to {changed} textures");
+        }
+
         [MenuItem("DinoDigger/Build WebGL (docs)")]
         public static void Build()
         {
+            ApplyWebGLTextureOverrides();
+
             PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
             PlayerSettings.WebGL.decompressionFallback = true;
             PlayerSettings.WebGL.exceptionSupport = WebGLExceptionSupport.ExplicitlyThrownExceptionsOnly;

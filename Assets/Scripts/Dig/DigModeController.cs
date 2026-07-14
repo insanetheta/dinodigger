@@ -156,6 +156,15 @@ namespace DinoDigger.Dig
         internal bool TestHelperEnabled => _helperDino != null && _helperDino.enabled;
         internal ParticleSystem TestCrumbs => _crumbs;
 
+        // True when the excavator arm is parked and free to accept a fresh tap:
+        // no bite in flight and an empty dig queue. The arm bites ONE tile at a
+        // time and dedups a tile that is already the active/queued bite, so a
+        // same-tile re-tap issued mid-bite is silently dropped. Tests pace their
+        // taps to this so a re-tap can never be swallowed. Read-only; no player
+        // behavior change (a legacy scene with no arm rig stays permanently ready).
+        internal bool TestArmReady =>
+            _arm == ArmState.Idle && _activeTile == null && _digQueue.Count == 0;
+
         internal DirtTile TestTileAt(int r, int c)
         {
             if (_grid == null || r < 0 || r >= _rows || c < 0 || c >= _cols)

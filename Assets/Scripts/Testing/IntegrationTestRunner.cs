@@ -58,6 +58,11 @@ namespace DinoDigger.Testing
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void AutoStart()
         {
+            // Second layer against the WebGL "pause when unfocused" editor emulation:
+            // an unfocused editor freezes the player loop at frame ~1-2, so this must be
+            // the very first thing the runtime bootstrap does — before any frame is needed.
+            Application.runInBackground = true;
+
             if (!UnityEditor.EditorPrefs.GetBool(RunFlagKey, false))
             {
                 return;

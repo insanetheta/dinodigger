@@ -46,9 +46,57 @@ MonoBehaviour:
   - {fileID: 21300000, guid: e074bf9597e194a8fbd437d75b7d8eab, type: 3}
   - {fileID: 21300000, guid: 29688730dc6ac412c9c8d854b3e2a47a, type: 3}
   IdleSprite: {fileID: 21300000, guid: 91ee03b44144949a1ac4152f7a997430, type: 3}
-  WalkASprites: []
-  WalkBSprites: []
-  BabyWalkASprites: []
-  BabyWalkBSprites: []
-  KidWalkASprites: []
-  KidWalkBSprites: []
+  WalkASprites:
+  - {fileID: 21300000, guid: 4615f2ef31a484d93b9985fe80b8252e, type: 3}
+  - {fileID: 21300000, guid: bec95db3ef344457e912d064d95f857d, type: 3}
+  - {fileID: 21300000, guid: 81cdde416578b475db3a884bdd372f12, type: 3}
+  - {fileID: 21300000, guid: 3977dad9aa5dc4541845ab9683d6c0ea, type: 3}
+  - {fileID: 21300000, guid: 6f7709babd8e141d1be75c779fa8eb23, type: 3}
+  - {fileID: 21300000, guid: 2f23f396fce7e42829a6bb02564b3008, type: 3}
+  - {fileID: 21300000, guid: 07e769f19964b47458952683400ae48d, type: 3}
+  - {fileID: 21300000, guid: a90ad5ee474ea47c9989937b0c9ad346, type: 3}
+  WalkBSprites:
+  - {fileID: 21300000, guid: 4533d6001040b4f2eaef6d3cba10aff5, type: 3}
+  - {fileID: 21300000, guid: 1b0e3714219a54f25b169407980a376f, type: 3}
+  - {fileID: 21300000, guid: 7719e81eee58e41dc95798315bdb480c, type: 3}
+  - {fileID: 21300000, guid: 720d9ed9fd3f84fcd871364ddb9f56e5, type: 3}
+  - {fileID: 21300000, guid: 79178e4fba6214d14ac3a10601a0fa19, type: 3}
+  - {fileID: 21300000, guid: 692e1e08d0d21440a9abf0c11f9e9ced, type: 3}
+  - {fileID: 21300000, guid: ead79718ecdd741148a986af1929fe66, type: 3}
+  - {fileID: 21300000, guid: 46cf31722c0d94c0c9083920f8cd5034, type: 3}
+  BabyWalkASprites:
+  - {fileID: 21300000, guid: 615a89046c40047c8b9bdc876c2216bc, type: 3}
+  - {fileID: 21300000, guid: c18115f13be604e75b5fadd834688882, type: 3}
+  - {fileID: 21300000, guid: 9512badb911b4496e92d65c72dad90c7, type: 3}
+  - {fileID: 21300000, guid: 2707fbea9807344fc893962be199bf96, type: 3}
+  - {fileID: 21300000, guid: 58d87d5b57f35427cb938d48a94656ea, type: 3}
+  - {fileID: 21300000, guid: 84f27b9da6101492d951e78a5c7951f4, type: 3}
+  - {fileID: 21300000, guid: 1d7de3ea087ba42ecbf8cceb059f82fa, type: 3}
+  - {fileID: 21300000, guid: 767b8c56ca8484ea8b4d5c6a556d0b8c, type: 3}
+  BabyWalkBSprites:
+  - {fileID: 21300000, guid: 84668596fcca54fde8e288dc76e1b3c5, type: 3}
+  - {fileID: 21300000, guid: 0f57ee0f57d70495292feebf379fa0ab, type: 3}
+  - {fileID: 21300000, guid: 0cf13fafbea5a4311b303d384504d8db, type: 3}
+  - {fileID: 21300000, guid: 35ae7a9b4ee98475584928f21cfe332f, type: 3}
+  - {fileID: 21300000, guid: 8247b6017089c49658fbc2eea5bc8157, type: 3}
+  - {fileID: 21300000, guid: 2c54e8820d00841ed9947dd1f40123c4, type: 3}
+  - {fileID: 21300000, guid: 126243fe983164affb04bec75ec27074, type: 3}
+  - {fileID: 21300000, guid: f16e6c0976ca64be5b6672432e560314, type: 3}
+  KidWalkASprites:
+  - {fileID: 21300000, guid: 2ee6dc1d786ff4ec59802a55fcf5bdc8, type: 3}
+  - {fileID: 21300000, guid: 05ba3ba1e10ec402c930a7c82e0ae7d5, type: 3}
+  - {fileID: 21300000, guid: cf8c10fe69b9c4bf1a5a9121aff51ebe, type: 3}
+  - {fileID: 21300000, guid: e09141a938bbd410298bcec53da067f5, type: 3}
+  - {fileID: 21300000, guid: 0ac95ffabd628414795aec5c89a069f3, type: 3}
+  - {fileID: 21300000, guid: 71dc419f9164c4096a3bbed40f755d0b, type: 3}
+  - {fileID: 21300000, guid: 70961d9fadfb74d6d801b631d440c404, type: 3}
+  - {fileID: 21300000, guid: 9ff787159f2884a20b11d713c7bfd7a6, type: 3}
+  KidWalkBSprites:
+  - {fileID: 21300000, guid: 2b334fa67200a4245a0e722f6b5b73f7, type: 3}
+  - {fileID: 21300000, guid: 22e825ec6491c46b98f1af1d38737f1b, type: 3}
+  - {fileID: 21300000, guid: 584947f318f56442aaf7dc132fd2c5a7, type: 3}
+  - {fileID: 21300000, guid: 07995377c2f544e8ea31cce979a59cc2, type: 3}
+  - {fileID: 21300000, guid: 845a715d051724b7ebd1365df39dbb13, type: 3}
+  - {fileID: 21300000, guid: 0e94da3f59f3e4f6d8c6200ba4ceef30, type: 3}
+  - {fileID: 21300000, guid: 593f1e5225113425c821a1712bfcf958, type: 3}
+  - {fileID: 21300000, guid: 97aaa6eb8493345209a0fa6209cad751, type: 3}

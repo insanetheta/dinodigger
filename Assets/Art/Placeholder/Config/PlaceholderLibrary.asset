@@ -28,6 +28,24 @@ MonoBehaviour:
   - {fileID: 21300000, guid: 78dfd24b589e54812b8cd8a646031149, type: 3}
   - {fileID: 21300000, guid: 82d38a0707fa84ae0b15c92d9a6155f2, type: 3}
   - {fileID: 21300000, guid: bbc77658b144f4e298038b83ff6400b2, type: 3}
+  BackhoeRollA:
+  - {fileID: 21300000, guid: eeba54b3e898a46499535c54eeeeeb74, type: 3}
+  - {fileID: 21300000, guid: cce2f94a3f2e14dddbcf01757ca1d7cb, type: 3}
+  - {fileID: 21300000, guid: 68319c1cc6a244a3bb022cee967f6f54, type: 3}
+  - {fileID: 21300000, guid: cc2189fc0f1b44d51bf2d420cf4f70e7, type: 3}
+  - {fileID: 21300000, guid: e62fbef927fde42e1b0c620752af4206, type: 3}
+  - {fileID: 21300000, guid: 969eefee39eb347a19e0f33c62ad082f, type: 3}
+  - {fileID: 21300000, guid: 82166cf83d3994eff94024e4031dba67, type: 3}
+  - {fileID: 21300000, guid: db16f54cd2fc14dbf899a5c2652b2f1f, type: 3}
+  BackhoeRollB:
+  - {fileID: 21300000, guid: 6f63dbce612d846cc9ce66cfd55676d0, type: 3}
+  - {fileID: 21300000, guid: 21b20bbd9b1bb4265ba47cfae6f9e609, type: 3}
+  - {fileID: 21300000, guid: 50141451e788643b48d6b25baf101a96, type: 3}
+  - {fileID: 21300000, guid: afd6581881714479586b36c206de476f, type: 3}
+  - {fileID: 21300000, guid: 83205681b58ff49839296515c9f3f760, type: 3}
+  - {fileID: 21300000, guid: 71eac291991ba42218a188720a99389a, type: 3}
+  - {fileID: 21300000, guid: 5dd0aea2f35514ddd890d6854ae62eb4, type: 3}
+  - {fileID: 21300000, guid: b130f0e44d4964f4c9002f37bbd50140, type: 3}
   BackhoeBody: {fileID: 21300000, guid: 081b50a3f0232471e93e988c19c9c93a, type: 3}
   ScoopArm: {fileID: 21300000, guid: a93c983e06eeb4795ab9f2a4319884d8, type: 3}
   DigBodySprite: {fileID: 21300000, guid: b8b71b7cd808a41cb8a1521ec53ae4c6, type: 3}

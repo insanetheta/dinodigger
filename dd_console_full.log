@@ -1,0 +1,117 @@
+Total messages: 65 (Errors: 0, Warnings: 6)
+
+[LOG] You can reduce startup time if you configure your web server to add "Content-Encoding: br" response header when serving "Build/docs.framework.js.unityweb" file. @ https://insanetheta.github.io/dinodigger/Build/docs.loader.js:0
+[LOG] You can reduce startup time if you configure your web server to add "Content-Encoding: br" response header when serving "Build/docs.wasm.unityweb" file. @ https://insanetheta.github.io/dinodigger/Build/docs.loader.js:0
+[LOG] You can reduce startup time if you configure your web server to add "Content-Encoding: br" response header when serving "Build/docs.data.unityweb" file. @ https://insanetheta.github.io/dinodigger/Build/docs.loader.js:0
+[LOG] [UnityCache] 'https://insanetheta.github.io/dinodigger/Build/docs.data.unityweb' successfully downloaded and stored in the browser cache @ https://insanetheta.github.io/dinodigger/Build/docs.loader.js:0
+[LOG] [UnityMemory] Configuration Parameters - Can be set up in boot.config
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-allocator-temp-initial-block-size-main=262144"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-allocator-temp-initial-block-size-worker=262144"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-temp-allocator-size-audio-worker=65536"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-temp-allocator-size-background-worker=32768"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-bucket-allocator-granularity=16"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-bucket-allocator-bucket-count=8"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-bucket-allocator-block-size=4194304"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-bucket-allocator-block-count=1"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-main-allocator-block-size=16777216"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-thread-allocator-block-size=16777216"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-gfx-main-allocator-block-size=16777216"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-gfx-thread-allocator-block-size=16777216"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-cache-allocator-block-size=4194304"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-typetree-allocator-block-size=2097152"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-profiler-bucket-allocator-granularity=16"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-profiler-bucket-allocator-bucket-count=8"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-profiler-bucket-allocator-block-size=4194304"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-profiler-bucket-allocator-block-count=1"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-profiler-allocator-block-size=16777216"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-profiler-editor-allocator-block-size=1048576"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-temp-allocator-size-main=4194304"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-job-temp-allocator-block-size=2097152"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-job-temp-allocator-block-size-background=1048576"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]     "memorysetup-job-temp-allocator-reduction-small-platforms=262144"
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Input System module state changed to: Initialized.
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Physics::Module] Initialized fallback backend.
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Physics::Module] Id: 0xdecafbad
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Loading player data from data.unity3d
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Initialize engine version: 6000.0.61f1 (74a0adb02c31)
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Subsystems] Discovering subsystems at path UnitySubsystems
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Creating WebGL 2.0 context. @ https://insanetheta.github.io/dinodigger/Build/docs.loader.js:0
+[LOG] Renderer: WebKit WebGL
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Vendor:   WebKit
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Version:  OpenGL ES 3.0 (WebGL 2.0 (OpenGL ES 3.0 Chromium))
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] GLES:     3
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG]  EXT_clip_control EXT_color_buffer_float EXT_color_buffer_half_float EXT_conservative_depth EXT_depth_clamp EXT_disjoint_timer_query_webgl2 EXT_float_blend EXT_polygon_offset_clamp EXT_render_snorm EXT_texture_compression_bptc EXT_texture_compression_rgtc EXT_texture_filter_anisotropic EXT_texture_mirror_clamp_to_edge EXT_texture_norm16 KHR_parallel_shader_compile NV_shader_noperspective_interpolation OES_draw_buffers_indexed OES_sample_variables OES_shader_multisample_interpolation OES_texture_float_linear WEBGL_blend_func_extended WEBGL_clip_cull_distance WEBGL_compressed_texture_astc WEBGL_compressed_texture_etc WEBGL_compressed_texture_etc1 WEBGL_compressed_texture_pvrtc WEBGL_compressed_texture_s3tc WEBGL_compressed_texture_s3tc_srgb WEBGL_debug_renderer_info WEBGL_debug_shaders WEBGL_lose_context WEBGL_multi_draw WEBGL_polygon_mode WEBGL_provoking_vertex WEBGL_render_shared_exponent WEBGL_stencil_texturing GL_EXT_clip_control GL_EXT_color_buffer_float GL_EXT_color_buffer_half_float GL_EXT_conservative_
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] depth GL_EXT_depth_clamp GL_EXT_disjoint_timer_query_webgl2 GL_EXT_float_blend GL_EXT_polygon_offset_clamp GL_EXT_render_snorm GL_EXT_texture_compression_bptc GL_EXT_texture_compression_rgtc GL_EXT_texture_filter_anisotropic GL_EXT_texture_mirror_clamp_to_edge GL_EXT_texture_norm16 GL_KHR_parallel_shader_compile GL_NV_shader_noperspective_interpolation GL_OES_draw_buffers_indexed GL_OES_sample_variables GL_OES_shader_multisample_interpolation GL_OES_texture_float_linear GL_WEBGL_blend_func_extended GL_WEBGL_clip_cull_distance GL_WEBGL_compressed_texture_astc GL_WEBGL_compressed_texture_etc GL_WEBGL_compressed_texture_etc1 GL_WEBGL_compressed_texture_pvrtc GL_WEBGL_compressed_texture_s3tc GL_WEBGL_compressed_texture_s3tc_srgb GL_WEBGL_debug_renderer_info GL_WEBGL_debug_shaders GL_WEBGL_lose_context GL_WEBGL_multi_draw GL_WEBGL_polygon_mode GL_WEBGL_provoking_vertex GL_WEBGL_render_shared_exponent GL_WEBGL_stencil_texturing
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[WARNING] WebGL: INVALID_ENUM: getInternalformatParameter: invalid internalformat @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[WARNING] WebGL: INVALID_ENUM: getInternalformatParameter: invalid internalformat @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[WARNING] WebGL: INVALID_ENUM: getInternalformatParameter: invalid internalformat @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[WARNING] WebGL: INVALID_ENUM: getInternalformatParameter: invalid internalformat @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[WARNING] WebGL: INVALID_ENUM: getInternalformatParameter: invalid internalformat @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[WARNING] WebGL: INVALID_ENUM: getInternalformatParameter: invalid internalformat @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] OPENGL LOG: Creating OpenGL ES 3.0 graphics device ; Context level  <OpenGL ES 3.0> ; Context handle 1
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Physics::Module] Selected backend.
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Physics::Module] Name: PhysX
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Physics::Module] Id: 0xf2b8ea05
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Physics::Module] SDK Version: 4.1.2
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Physics::Module] Integration Version: 1.0.0
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] [Physics::Module] Threading Mode: Single-Threaded
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] ERROR: Shader  @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Hidden/CoreSRP/CoreCopy shader is not supported on this GPU (none of subshaders/fallbacks are suitable)
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] ERROR: Shader  @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Hidden/Universal/HDRDebugView shader is not supported on this GPU (none of subshaders/fallbacks are suitable)
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Input Manager initialize...
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Input System initialize...
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] UnloadTime: 0.700000 ms
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Audio context resumed after 0.549 seconds. @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] RenderGraph is now enabled.
+ @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8
+[LOG] Trying to get length of sound which is not loaded yet. @ blob:https://insanetheta.github.io/96a60e57-697f-4d48-9802-3cd11f30522b:8

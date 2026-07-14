@@ -115,7 +115,10 @@ namespace DinoDigger.Core
 
             if (_backhoe != null)
             {
-                _backhoe.Configure(_map, _config, _library != null ? _library.BackhoeDir : null);
+                _backhoe.Configure(_map, _config,
+                    _library != null ? _library.BackhoeDir : null,
+                    _library != null ? _library.BackhoeRollA : null,
+                    _library != null ? _library.BackhoeRollB : null);
             }
 
             if (_digMode != null)

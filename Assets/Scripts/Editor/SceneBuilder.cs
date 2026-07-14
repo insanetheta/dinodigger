@@ -240,6 +240,8 @@ namespace DinoDigger.EditorTools
             Wire(backhoe, "_map", overworldMap);
             Wire(backhoe, "_config", config);
             WireArray(backhoe, "_dirSprites", lib != null ? lib.BackhoeDir : null);
+            WireArray(backhoe, "_rollA", lib != null ? lib.BackhoeRollA : null);
+            WireArray(backhoe, "_rollB", lib != null ? lib.BackhoeRollB : null);
 
             Wire(digMode, "_root", digRootGo.transform);
             Wire(digMode, "_backhoeBody", bodySr);

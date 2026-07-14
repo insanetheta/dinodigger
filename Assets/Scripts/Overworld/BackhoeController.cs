@@ -16,6 +16,14 @@ namespace DinoDigger.Overworld
         [SerializeField] private GameConfig _config;
         [SerializeField] private Sprite[] _dirSprites = new Sprite[8];
 
+        // Wheel-roll drive frames (DinoDigger-682). Both empty/null -> the cycler is
+        // inert and the backhoe behaves exactly as before (static facing frame).
+        [SerializeField] private Sprite[] _rollA = new Sprite[8];
+        [SerializeField] private Sprite[] _rollB = new Sprite[8];
+        private float _rollClock;   // wraps 0..4 across the cycle
+        private int _rollFrame;     // 0 idle, 1 A, 2 idle, 3 B
+        private const float RollFps = 7f;
+
         private Vector3 _target;
         private bool _moving;
         private DigMound _pendingMound;
@@ -61,6 +69,12 @@ namespace DinoDigger.Overworld
         // rendered sprite equals the expected index of the directional array.
         internal Sprite TestDirSprite(Dir8 dir) => Direction8.Pick(_dirSprites, dir, null);
 
+        // TEST HOOKS for the roll drive cycle.
+        internal Sprite TestRollDirSprite(int phase, Dir8 dir) =>
+            Direction8.Pick(phase == 0 ? _rollA : _rollB, dir, null);
+        internal bool TestHasRoll => HasAny(_rollA) || HasAny(_rollB);
+        internal int TestRollFrame => _rollFrame;
+
         private void Awake()
         {
             if (_renderer == null)
@@ -74,13 +88,24 @@ namespace DinoDigger.Overworld
             ApplySprite();
         }
 
-        public void Configure(OverworldMap map, GameConfig config, Sprite[] dirSprites)
+        public void Configure(OverworldMap map, GameConfig config, Sprite[] dirSprites,
+            Sprite[] rollA = null, Sprite[] rollB = null)
         {
             _map = map;
             _config = config;
             if (dirSprites != null && dirSprites.Length > 0)
             {
                 _dirSprites = dirSprites;
+            }
+
+            if (rollA != null && rollA.Length > 0)
+            {
+                _rollA = rollA;
+            }
+
+            if (rollB != null && rollB.Length > 0)
+            {
+                _rollB = rollB;
             }
 
             ApplySprite();
@@ -148,6 +173,9 @@ namespace DinoDigger.Overworld
             }
 
             Vector3 pos = transform.position;
+
+            // Advance the wheel-roll cycle while driving (inert without roll art).
+            TickRoll();
 
             // Corner-cutting: as we move, skip ahead to the farthest waypoint we can
             // reach by a straight walkable line. Combined with the LOS smoothing in
@@ -316,6 +344,7 @@ namespace DinoDigger.Overworld
         private void GiveUp()
         {
             _moving = false;
+            ResetRoll(); // settled: back to the static facing frame, never mid-roll
             if (_pendingMound != null && _pendingMound.IsActive &&
                 (_pendingMound.transform.position - transform.position).sqrMagnitude
                     <= MoundDigRange * MoundDigRange)
@@ -357,6 +386,7 @@ namespace DinoDigger.Overworld
         private void Arrive()
         {
             _moving = false;
+            ResetRoll(); // settled: back to the static facing frame, never mid-roll
             if (_pendingMound != null && _pendingMound.IsActive)
             {
                 DigMound m = _pendingMound;
@@ -367,14 +397,72 @@ namespace DinoDigger.Overworld
 
         private void ApplySprite()
         {
-            if (_renderer != null)
+            if (_renderer == null)
             {
-                Sprite s = Direction8.Pick(_dirSprites, _facing, _renderer.sprite);
-                if (s != null)
+                return;
+            }
+
+            Sprite s = Direction8.Pick(_dirSprites, _facing, _renderer.sprite);
+
+            // Mid-roll drive frames (1 = A, 3 = B) in the current facing; keeps phase
+            // across a facing change. Missing roll art falls back to the facing frame,
+            // so a backhoe without roll art never changes behavior.
+            if (_rollFrame == 1 || _rollFrame == 3)
+            {
+                Sprite roll = Direction8.Pick(_rollFrame == 1 ? _rollA : _rollB, _facing, null);
+                if (roll != null)
                 {
-                    _renderer.sprite = s;
+                    s = roll;
                 }
             }
+
+            if (s != null)
+            {
+                _renderer.sprite = s;
+            }
+        }
+
+        /// <summary>Advance the drive cycle (idle -> rollA -> idle -> rollB at
+        /// ~<see cref="RollFps"/> fps). A backhoe with no roll art exits immediately,
+        /// keeping the pre-682 static behavior bit for bit.</summary>
+        private void TickRoll()
+        {
+            if (!HasAny(_rollA) && !HasAny(_rollB))
+            {
+                return; // no roll art: stay on the facing frame
+            }
+
+            _rollClock = Mathf.Repeat(_rollClock + Time.deltaTime * RollFps, 4f);
+            _rollFrame = (int)_rollClock;
+        }
+
+        /// <summary>Snap the drive cycle back to the idle frame (called on stop).</summary>
+        private void ResetRoll()
+        {
+            _rollClock = 0f;
+            if (_rollFrame != 0)
+            {
+                _rollFrame = 0;
+                ApplySprite();
+            }
+        }
+
+        private static bool HasAny(Sprite[] set)
+        {
+            if (set == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < set.Length; i++)
+            {
+                if (set[i] != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>Idle-attract honk wiggle.</summary>
