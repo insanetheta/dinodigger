@@ -90,7 +90,16 @@ namespace DinoDigger.Core
             new Dictionary<Config.DinoType, int>();
 
         // ---- Egg-shard nest ----
-        public int ShardsPerHatch => _config != null ? _config.ShardsPerHatch : 20;
+        /// <summary>How many shard-built eggs have already hatched. Derived, not stored:
+        /// it equals the number of owned shard-exclusive species (DinoType 4-8), which the
+        /// v3 save already captures via its Dinos list — so no new save field is needed.</summary>
+        public int ShardEggsHatched => CountOwnedShardSpecies();
+
+        /// <summary>Egg shards required for the NEXT shard hatch. Escalates with the number
+        /// of shard eggs already hatched (5 / 8 / 15 / 20, then 20), driving the ceremony
+        /// trigger, the remainder-carryover on hatch, and the nest assembly scaling.</summary>
+        public int ShardsPerHatch =>
+            _config != null ? _config.GetShardRequirement(ShardEggsHatched) : 20;
         public int ShardCount => Save != null ? Save.Data.ShardCount : 0;
 
         // ---------------------------------------------------------------- setup
@@ -1456,9 +1465,12 @@ namespace DinoDigger.Core
             Audio?.Roar();
 
             // Consume one nest's worth of shards, keeping any remainder toward the next.
+            // Capture the requirement BEFORE spawning the new dino below: the species is
+            // not yet owned here, so ShardsPerHatch still reflects the egg hatching NOW.
             if (Save != null)
             {
-                Save.Data.ShardCount = Mathf.Max(0, Save.Data.ShardCount - ShardsPerHatch);
+                int req = ShardsPerHatch;
+                Save.Data.ShardCount = Mathf.Max(0, Save.Data.ShardCount - req);
             }
 
             // Spawn AT the nest, Baby stage, forced RESIDENT: it waits in the meadow
@@ -1540,6 +1552,22 @@ namespace DinoDigger.Core
             }
 
             return owned;
+        }
+
+        /// <summary>How many shard-exclusive species are owned == shard eggs hatched.</summary>
+        private int CountOwnedShardSpecies()
+        {
+            bool[] owned = OwnedShardSpecies();
+            int n = 0;
+            for (int i = 0; i < owned.Length; i++)
+            {
+                if (owned[i])
+                {
+                    n++;
+                }
+            }
+
+            return n;
         }
 
         /// <summary>Pick a uniformly random shard-exclusive species that is NOT yet

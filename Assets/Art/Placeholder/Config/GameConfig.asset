@@ -51,6 +51,10 @@ MonoBehaviour:
   CameraFollowLerp: 3
   CameraDeadzone: {x: 1.2, y: 0.8}
   TransitionSeconds: 0.5
-  ShardsPerHatch: 20
+  ShardsPerHatchProgression:
+  - 5
+  - 8
+  - 15
+  - 20
   IdleAttractSeconds: 15
   ParentGateHoldSeconds: 3

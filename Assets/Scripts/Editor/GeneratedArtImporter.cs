@@ -674,13 +674,84 @@ namespace DinoDigger.EditorTools
             return found > 0 ? set : null;
         }
 
+        // ---- DinoDigger-bw4: generated-art diagonal-facing correction ----------
+        // ROOT CAUSE (art, not code): Tools/generate_sprites.py rotates the front (S)
+        // reference into every other facing with an AMBIGUOUS, character-relative
+        // instruction ("...so we see its front AND its RIGHT side"). The image model
+        // interprets "its right side" inconsistently — frequently as the character's
+        // ANATOMICAL right, which lands on SCREEN-LEFT — so a number of generated
+        // facings came out horizontally MIRRORED relative to the compass name in their
+        // filename. Because each facing (and each growth stage) is an INDEPENDENT
+        // img2img call, the error is per-(actor,facing), NOT a single uniform swap:
+        // e.g. trex_SE faces down-right (correct) while stegosaurus_SE faces down-left,
+        // and triceratops_NE is correct while backhoe_NE is mirrored.
+        //
+        // Direction8's sector math is correct for diagonals ((1,-1)->SE, (-1,1)->NW…),
+        // and the slicer's E->W / SE->SW / NE->NW step is geometrically correct — the
+        // left-side PNGs are EXACT pixel-mirrors of the right-side ones (verified). So
+        // the correctly-oriented sprite for any mis-generated facing ALREADY EXISTS as
+        // its mirror partner, and we can fix a flipped facing with NO regeneration by
+        // loading its partner file into the slot (a per-actor pair-swap of the compass
+        // horizontal component). The integration FacingCorrectness test cannot detect
+        // this class of bug — it only checks Dir8-index<->array-slot consistency, which
+        // was always correct — which is why diagonals slipped through.
+        //
+        // The table below lists only HIGH-CONFIDENCE flips found by visual audit of the
+        // ADULT idle art (unambiguous landmarks: the backhoe's loader/cab-face, dino
+        // snouts/beaks/frills). Listing only certain cases means the correction can
+        // never REGRESS an already-correct actor; any un-audited/ambiguous facing keeps
+        // its raw filename. Adult strides + backhoe rolls share each facing's handedness
+        // (they are img2img-edited FROM that facing) and are corrected via the same
+        // suffix. Baby/kid stage sets are SEPARATE generations, not yet audited, and are
+        // left on their raw names. The permanent fix is to REGENERATE with the corrected
+        // screen-relative prompt now in generate_sprites.py, after which this table
+        // should be emptied. Keyed by the right-side member (E/SE/NE) of each flipped pair.
+        private static readonly Dictionary<string, HashSet<Dir8>> FlippedFacingPairs =
+            new Dictionary<string, HashSet<Dir8>>
+            {
+                { "backhoe",      new HashSet<Dir8> { Dir8.SE, Dir8.NE } },
+                { "triceratops",  new HashSet<Dir8> { Dir8.SE } },
+                { "stegosaurus",  new HashSet<Dir8> { Dir8.SE } },
+                { "ankylosaurus", new HashSet<Dir8> { Dir8.E, Dir8.SE, Dir8.NE } },
+            };
+
+        // Horizontal mirror of a Dir8 (flip the E/W component; N/S unchanged).
+        private static Dir8 MirrorDir(Dir8 d) => d switch
+        {
+            Dir8.E => Dir8.W, Dir8.W => Dir8.E,
+            Dir8.NE => Dir8.NW, Dir8.NW => Dir8.NE,
+            Dir8.SE => Dir8.SW, Dir8.SW => Dir8.SE,
+            _ => d,
+        };
+
+        // The right-side representative (E/SE/NE) identifying a facing's mirror pair.
+        private static Dir8 PairKey(Dir8 d) => d switch
+        {
+            Dir8.W => Dir8.E, Dir8.SW => Dir8.SE, Dir8.NW => Dir8.NE,
+            _ => d,
+        };
+
+        // Adult-set filename suffix with the bw4 facing correction applied: when this
+        // actor's pair is flagged flipped, resolve to the mirror partner's file so the
+        // slot renders the correct on-screen facing.
+        private static string AdultSuffix(string folder, int dir8)
+        {
+            var d = (Dir8)dir8;
+            if (FlippedFacingPairs.TryGetValue(folder, out HashSet<Dir8> pairs) && pairs.Contains(PairKey(d)))
+            {
+                d = MirrorDir(d);
+            }
+
+            return Dir8Suffix[(int)d];
+        }
+
         private static Sprite LoadSprite(string assetPath) => AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
         private static string GenPath(string rel) => $"{GenRoot}/{rel}.png";
-        private static string CharPath(string folder, int dir8) => $"{GenRoot}/{folder}/{folder}_{Dir8Suffix[dir8]}.png";
+        private static string CharPath(string folder, int dir8) => $"{GenRoot}/{folder}/{folder}_{AdultSuffix(folder, dir8)}.png";
         private static string StagePath(string folder, string stage, int dir8) => $"{GenRoot}/{folder}/{stage}_{Dir8Suffix[dir8]}.png";
         private static string StridePath(string folder, string stage, string pose, int dir8) =>
             stage == null
-                ? $"{GenRoot}/{folder}/{pose}_{Dir8Suffix[dir8]}.png"
+                ? $"{GenRoot}/{folder}/{pose}_{AdultSuffix(folder, dir8)}.png"
                 : $"{GenRoot}/{folder}/{stage}_{pose}_{Dir8Suffix[dir8]}.png";
         private static string Digital(string name) => $"{DigitalAudioDir}/{name}.ogg";
         private static string Iface(string name) => $"{InterfaceDir}/{name}.ogg";

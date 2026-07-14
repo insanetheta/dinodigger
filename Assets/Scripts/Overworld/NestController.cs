@@ -10,8 +10,10 @@ namespace DinoDigger.Overworld
     ///   - registers itself as <see cref="GameEvents.NestTargetProvider"/> so dug egg
     ///     shards fly TO the egg sitting in the nest;
     ///   - listens to <see cref="GameEvents.ShardCollected"/> and advances the egg's
-    ///     5-state assembly sprite by shard-count thresholds (0/5/10/15/20 of
-    ///     GameConfig.ShardsPerHatch), punch-scaling + sparkling on each arrival;
+    ///     5-state assembly sprite, its thresholds SCALED onto the current shard
+    ///     requirement (GameManager.ShardsPerHatch, which escalates 5/8/15/20 per egg):
+    ///     state = floor(ShardCount / requirement * (states-1)), punch-scaling +
+    ///     sparkling on each arrival;
     ///   - drives the ceremony egg wobble/crack visual on GameManager's cue.
     ///
     /// Persists nothing itself — ShardCount lives in the save (read via GameManager).
@@ -32,6 +34,9 @@ namespace DinoDigger.Overworld
         internal int TestAssemblyIndex => _assemblyIndex;
         internal Sprite TestEggSprite => _egg != null ? _egg.sprite : null;
         internal Vector3 TestEggWorld => EggWorld;
+        internal int TestStateCount =>
+            _library != null && _library.EggAssemblySprites != null &&
+            _library.EggAssemblySprites.Length > 0 ? _library.EggAssemblySprites.Length : 5;
 
         /// <summary>Where a dug shard flies / the ceremony spawns the new dino: the egg's
         /// world position (falls back to the nest base, then this transform).</summary>
@@ -128,14 +133,18 @@ namespace DinoDigger.Overworld
         {
             Sprite[] set = _library != null ? _library.EggAssemblySprites : null;
             int states = set != null && set.Length > 0 ? set.Length : 5;
-            int per = GameManager.Instance != null ? GameManager.Instance.ShardsPerHatch : 20;
             if (states <= 1)
             {
                 return 0;
             }
 
-            int step = Mathf.Max(1, per / (states - 1)); // 20 / 4 = 5
-            return Mathf.Clamp(shardCount / step, 0, states - 1);
+            // Scale the (states-1) build steps across the CURRENT requirement so the egg
+            // reads as "full" exactly as the ceremony fires, whatever the requirement is
+            // (5/8/15/20). At requirement 20 this reproduces the old 0/5/10/15/20 steps.
+            int per = GameManager.Instance != null ? GameManager.Instance.ShardsPerHatch : 20;
+            per = Mathf.Max(1, per);
+            int idx = Mathf.FloorToInt((float)shardCount * (states - 1) / per);
+            return Mathf.Clamp(idx, 0, states - 1);
         }
     }
 }

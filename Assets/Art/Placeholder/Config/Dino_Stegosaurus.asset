@@ -22,9 +22,9 @@ MonoBehaviour:
   - {fileID: 21300000, guid: 843ad97f370f44bac9cc76b00d8d60dc, type: 3}
   - {fileID: 21300000, guid: fd99cd332ed764aff812392aaf6327c4, type: 3}
   - {fileID: 21300000, guid: 2001a3b1b40b5469d9f2c8a5e9f234a9, type: 3}
-  - {fileID: 21300000, guid: 23704a25e879e4ae49a4aa799e0194b5, type: 3}
-  - {fileID: 21300000, guid: 587b30597108a4184b34f54c8b271eb2, type: 3}
   - {fileID: 21300000, guid: 93c73115e8bdc454e943e02f834e5c0f, type: 3}
+  - {fileID: 21300000, guid: 587b30597108a4184b34f54c8b271eb2, type: 3}
+  - {fileID: 21300000, guid: 23704a25e879e4ae49a4aa799e0194b5, type: 3}
   - {fileID: 21300000, guid: 02c7f715ec1404fd582ca458e65145ca, type: 3}
   - {fileID: 21300000, guid: 9ac4b049c06f14bbabb8f6dabd901497, type: 3}
   BabySprites:
@@ -50,18 +50,18 @@ MonoBehaviour:
   - {fileID: 21300000, guid: 554d02b74060a45b48222eeb2455e909, type: 3}
   - {fileID: 21300000, guid: 7dcf65c0900b047db97c551a085eb7ca, type: 3}
   - {fileID: 21300000, guid: 498172d3f09474bada4fb6483533cc1a, type: 3}
-  - {fileID: 21300000, guid: b3261c31c057d44039f5f9bccebc1477, type: 3}
-  - {fileID: 21300000, guid: dad39996dd5c145e2b199ff8ea3775bc, type: 3}
   - {fileID: 21300000, guid: 30a2b73c076804eaf9ab2fd953626727, type: 3}
+  - {fileID: 21300000, guid: dad39996dd5c145e2b199ff8ea3775bc, type: 3}
+  - {fileID: 21300000, guid: b3261c31c057d44039f5f9bccebc1477, type: 3}
   - {fileID: 21300000, guid: aefc0858d9fcd4bf3820b6214f7b20a6, type: 3}
   - {fileID: 21300000, guid: af9db8539b9ec4edc9add619528f03de, type: 3}
   WalkBSprites:
   - {fileID: 21300000, guid: 98fd08dbc87a54fd79a31d91bbc6d3d1, type: 3}
   - {fileID: 21300000, guid: 98c7a5f075eb24d2ba942fe457c2691d, type: 3}
   - {fileID: 21300000, guid: 9d247717c8b9c4788ad7f2f00df3aa79, type: 3}
-  - {fileID: 21300000, guid: a8a8de1caf76d4971a3f4a286279cb6d, type: 3}
-  - {fileID: 21300000, guid: 9a0274b8ff2c3487b84e4d101256ed31, type: 3}
   - {fileID: 21300000, guid: febe1bfd8b0254429b1ea5e512987010, type: 3}
+  - {fileID: 21300000, guid: 9a0274b8ff2c3487b84e4d101256ed31, type: 3}
+  - {fileID: 21300000, guid: a8a8de1caf76d4971a3f4a286279cb6d, type: 3}
   - {fileID: 21300000, guid: 06bc228010a4a4cdb8ca669aecdfd190, type: 3}
   - {fileID: 21300000, guid: ebb04a259c31d4e8c9dab17bbe8d274b, type: 3}
   BabyWalkASprites:

@@ -68,16 +68,47 @@ BG_STYLE = (
 # image-to-image (front first, then rotate it) and MIRROR them in the slicer to get
 # the left-hand 3 directions. front == S (facing camera-south in the isometric view).
 GEN_DIRS = ["S", "SE", "E", "NE", "N"]          # directions we actually generate
+# The slicer builds each left-hand facing by HORIZONTALLY FLIPPING its right-hand
+# counterpart. This mapping is geometrically correct (a h-flip of a SE/E/NE pose yields
+# a SW/W/NW pose), BUT it only produces a correct 8-set if each SOURCE facing actually
+# points to the frame's RIGHT — otherwise a mirrored source silently swaps the whole
+# pair (this was the DinoDigger-bw4 diagonal bug). Source orientation is enforced by the
+# screen-relative ROTATE prompts + NO_MIRROR clause below; do NOT "fix" it here.
 MIRROR = {"SW": "SE", "W": "E", "NW": "NE"}     # slicer h-flips source -> target
 
 # How each facing is described to the model.
+#
+# CRITICAL — SCREEN-RELATIVE, NOT CHARACTER-RELATIVE (DinoDigger-bw4). Earlier wording
+# ("we see its front AND its RIGHT side") was character-relative and AMBIGUOUS: the
+# model often read "its right side" as the character's ANATOMICAL right, which lands on
+# SCREEN-LEFT, so many diagonal (and some side) facings came out horizontally MIRRORED
+# vs their filename. Since the slicer builds the left-hand set (SW/W/NW) by flipping the
+# right-hand set (SE/E/NE), a mirrored source silently swaps a whole pair. So EVERY
+# facing below is phrased in terms of where the character's HEAD/FRONT must point ON THE
+# SCREEN (the viewer's/frame's left-right), the rotation is pinned so it always sweeps
+# S -> right-hand-side -> N through the frame's RIGHT, and mirroring is explicitly
+# forbidden. Screen map: S = toward camera, N = away, E = frame-RIGHT, SE = toward the
+# frame's lower-right, NE = up-and-away toward the frame's upper-right.
 ROTATE = {
-    "S":  "a front view, facing straight toward the camera so we clearly see its face and belly",
-    "SE": "a three-quarter front-right view: the character is turned about 45 degrees so we see its front AND its right side at the same time",
-    "E":  "a right side profile view: the character faces directly to the right, we see its complete side silhouette",
-    "NE": "a three-quarter back-right view: the character is turned about 135 degrees so we see its back AND its right side at the same time",
-    "N":  "a back view seen from directly behind: we see its back and the back of its head, not its face",
+    "S":  "a FRONT view facing straight toward the camera: we clearly see its face and "
+          "belly, head pointing toward the viewer",
+    "SE": "a three-quarter FRONT view rotated so the character's head and the front of "
+          "its body point toward the LOWER-RIGHT of the frame (the viewer's right): we "
+          "still see its face and chest, turned about 45 degrees to the frame's right. "
+          "Its snout/beak/front must be on the RIGHT-hand side of the image",
+    "E":  "a side profile facing the RIGHT edge of the frame (the viewer's right): its "
+          "head, face and front point to the image's RIGHT, tail/back to the image's "
+          "left; we see its complete side silhouette",
+    "NE": "a three-quarter BACK view rotated so the character's head and front point AWAY "
+          "and toward the UPPER-RIGHT of the frame (the viewer's right): we mostly see "
+          "its back and the back of its head, turned about 135 degrees to the frame's "
+          "right, with its snout/beak just visible on the RIGHT-hand side of the image",
+    "N":  "a BACK view seen from directly behind: we see its back and the back of its "
+          "head, not its face",
 }
+# Anti-mirror clause appended to every rotate prompt so the model never flips the pose.
+NO_MIRROR = ("Do NOT mirror or horizontally flip the character; keep the rotation "
+             "toward the RIGHT side of the frame exactly as described. ")
 
 # --- Growth-stage strategy -------------------------------------------------------
 # The existing per-dino sprites ARE the ADULT ("big") stage. To get real per-stage
@@ -514,6 +545,7 @@ def turnaround_rotate_prompt(spec: dict, direction: str) -> str:
             f"EXACT SAME character - identical design, proportions, colors, outline "
             f"thickness, shading and size - but now shown as {ROTATE[direction]}. "
             f"Do not change the character in any way, only change the camera angle. "
+            f"{NO_MIRROR}"
             f"Keep it a single centered full-body figure with feet visible. "
             f"Remove any shadow: NO drop shadow or ground shadow under the character. {STYLE}"
             f"Solid flat magenta #FF00FF background.")

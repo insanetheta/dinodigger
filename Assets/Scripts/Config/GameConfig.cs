@@ -69,16 +69,38 @@ namespace DinoDigger.Config
         public float TransitionSeconds = 0.5f;
 
         [Header("Egg-shard nest")]
-        [Tooltip("Egg shards that must assemble at the nest before a new shard-exclusive " +
-                 "species hatches. Also the number of egg-assembly build states minus one " +
-                 "maps onto this (0 / 5 / 10 / 15 / 20 -> assembly sprites 0..4).")]
-        public int ShardsPerHatch = 20;
+        [Tooltip("Egg shards required to hatch each successive shard-built egg, indexed by " +
+                 "the number of shard eggs ALREADY hatched (the 1st egg uses entry [0]). " +
+                 "Escalates so the first shard dino comes quickly, then costs more; the last " +
+                 "entry clamps for any further eggs. The nest's assembly sprites scale onto " +
+                 "whichever requirement is current: state = floor(ShardCount / requirement * " +
+                 "(states-1)), e.g. 0/5/10/15/20 at requirement 20, tighter at 5.")]
+        public int[] ShardsPerHatchProgression = { 5, 8, 15, 20 };
 
         [Header("Feel")]
         public float IdleAttractSeconds = 15f;
         public float ParentGateHoldSeconds = 3f;
 
         // ----- Derived helpers -----
+
+        /// <summary>Egg shards needed to hatch the NEXT shard-built egg, given how many
+        /// shard eggs have ALREADY hatched (0 -> the first egg's requirement). Clamps to
+        /// the last progression entry, so the 5th+ egg reuses the final cost.</summary>
+        public int GetShardRequirement(int eggsHatched)
+        {
+            if (ShardsPerHatchProgression == null || ShardsPerHatchProgression.Length == 0)
+            {
+                return 20;
+            }
+
+            int i = Mathf.Clamp(eggsHatched, 0, ShardsPerHatchProgression.Length - 1);
+            return Mathf.Max(1, ShardsPerHatchProgression[i]);
+        }
+
+        /// <summary>Back-compat / editor convenience: the FIRST shard egg's requirement.
+        /// Runtime code should prefer <see cref="GetShardRequirement"/> (via
+        /// GameManager.ShardsPerHatch) for the escalating value.</summary>
+        public int ShardsPerHatch => GetShardRequirement(0);
 
         public float StageScale(GrowthStage stage)
         {

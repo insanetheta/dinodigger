@@ -377,29 +377,42 @@ namespace DinoDigger.Testing
             OverworldMap map = gm.TestMap;
             ctx.Assert(bh != null && map != null, "missing backhoe/map");
 
+            // All 8 compass headings — DIAGONALS INCLUDED (DinoDigger-bw4). The expected
+            // facing comes from the SAME Direction8.FromVector the runtime uses, so this
+            // validates (a) the vector->Dir8 sector math for every point and (b) that the
+            // rendered sprite is the one wired at that Dir8 array index.
+            //
+            // IMPORTANT: this can only validate the Dir8 index<->array-slot mapping and the
+            // sector math — it has NO way to see which direction the ART actually points.
+            // The bw4 bug was mirrored/mislabeled PNGs (fixed in GeneratedArtImporter), which
+            // is invisible here; that layer needs visual QA, not this test.
             Vector2[] dirs =
             {
                 new Vector2(1f, 0f), new Vector2(0f, 1f),
                 new Vector2(-1f, 0f), new Vector2(0f, -1f),
+                new Vector2(1f, 1f), new Vector2(-1f, 1f),
+                new Vector2(-1f, -1f), new Vector2(1f, -1f),
             };
 
-            // The spawn area on the 48x48 island can be cluttered (trees/pond) —
-            // relocate the backhoe to an open cell with >=3 clear cardinals first.
-            RelocateToOpenGround(gm, map, bh, dirs);
+            // Diagonal legs on the iso grid STAIRCASE around streams/bridges unless the
+            // whole leg has corridor line-of-sight; a staircase's every step is a
+            // legitimate facing change that would make the expected-facing assertion
+            // ambiguous. So relocate to open ground that offers the most CORRIDOR-straight
+            // legs across all 8 headings (preferring both axes AND both diagonal hands).
+            RelocateForEightWay(gm, map, bh, dirs);
             Vector3 anchor = bh.transform.position;
 
-            int tested = 0;
-            bool xAxisTested = false;
-            bool yAxisTested = false;
+            int tested = 0, diagTested = 0;
+            bool xAxisTested = false, yAxisTested = false;
+            bool eastDiag = false, westDiag = false;
             for (int i = 0; i < dirs.Length; i++)
             {
                 // Each driven leg moves the backhoe off the vetted open cell, which
                 // invalidates the remaining directions' clearances — snap back first.
                 bh.transform.position = anchor;
-                Vector3 start = anchor;
-                if (!FindClearCardinalTarget(map, gm, start, dirs[i], out Vector3 target))
+                if (!FindClearStraightTarget(map, gm, anchor, dirs[i], out Vector3 target))
                 {
-                    continue; // no clear straight-line target this way from here
+                    continue; // no corridor-straight target this way from here
                 }
 
                 Dir8 expected = Direction8.FromVector(dirs[i]);
@@ -433,16 +446,98 @@ namespace DinoDigger.Testing
                 ctx.Assert(spriteForFacing,
                     $"rendered sprite != wired array[{(int)expected}] ({expected}) after driving {dirs[i]}");
                 tested++;
-                if (Mathf.Abs(dirs[i].x) > 0.5f) { xAxisTested = true; } else { yAxisTested = true; }
+                bool diag = Mathf.Abs(dirs[i].x) > 0.5f && Mathf.Abs(dirs[i].y) > 0.5f;
+                if (diag)
+                {
+                    diagTested++;
+                    if (dirs[i].x > 0f) { eastDiag = true; } else { westDiag = true; }
+                }
+                else if (Mathf.Abs(dirs[i].x) > 0.5f) { xAxisTested = true; }
+                else { yAxisTested = true; }
             }
 
-            // Streams/trees can make 3 clear lanes from one spot rare; two tested
-            // cardinals are sufficient IF they span both axes (catches X/Y swaps
-            // and the tested axes' sign flips — the jiggle/opposite-facing bugs).
-            ctx.Assert(tested >= 2 && xAxisTested && yAxisTested,
-                $"insufficient cardinal coverage: {tested} tested (xAxis={xAxisTested}, yAxis={yAxisTested})");
-            ctx.Log($"facing correct for {tested}/4 cardinals (+X=E, +Y=N, -X=W, -Y=S), sprite matches array index");
+            // Coverage: both cardinal axes (catches X/Y swaps + sign flips) AND at least two
+            // diagonals — the bw4 regression surface. Prefer opposite diagonal hands so a
+            // SE<->SW / NE<->NW sector-math mirror fails loudly; the relocation biases toward
+            // that, and >=2 diagonals guarantees at least one east and one west OR two on the
+            // same side (still exercises the diagonal sectors).
+            ctx.Assert(tested >= 4 && xAxisTested && yAxisTested && diagTested >= 2,
+                $"insufficient facing coverage: tested={tested} xAxis={xAxisTested} " +
+                $"yAxis={yAxisTested} diagonals={diagTested} (E={eastDiag}, W={westDiag})");
+            ctx.Log($"facing correct for {tested}/8 headings ({diagTested} diagonal, " +
+                    $"E-diag={eastDiag}, W-diag={westDiag}); sprite matches array index");
+
+            // A follower dino must index a diagonal facing to the right slot too (bw4).
+            yield return DinoDiagonalSpotCheck(ctx, gm, map, bh, anchor, dirs);
+
             gm.TestReset();
+        }
+
+        // DinoDigger-bw4: spawn a dino, drive the backhoe along one corridor-straight
+        // DIAGONAL leg so the follower orients diagonally, and verify the dino renders the
+        // sprite wired at that diagonal's Dir8 index (idle OR either stride phase). Skips
+        // gracefully — never flakes — if the island offers no diagonal leg or the dino
+        // never settles on the exact diagonal within the observation window.
+        private IEnumerator DinoDiagonalSpotCheck(TestContext ctx, GameManager gm,
+            OverworldMap map, BackhoeController bh, Vector3 anchor, Vector2[] dirs)
+        {
+            Vector2 diag = Vector2.zero;
+            Vector3 target = anchor;
+            for (int i = 0; i < dirs.Length; i++)
+            {
+                bool isDiag = Mathf.Abs(dirs[i].x) > 0.5f && Mathf.Abs(dirs[i].y) > 0.5f;
+                if (isDiag && FindClearStraightTarget(map, gm, anchor, dirs[i], out target))
+                {
+                    diag = dirs[i];
+                    break;
+                }
+            }
+
+            if (diag == Vector2.zero)
+            {
+                ctx.Log("dino diagonal spot-check skipped (no corridor-straight diagonal leg)");
+                yield break;
+            }
+
+            bh.transform.position = anchor;
+            Physics2D.SyncTransforms();
+            DinoController dino = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Baby);
+            ctx.Assert(dino != null, "dino spawn failed");
+            yield return ctx.WaitFrames(2);
+
+            Dir8 expected = Direction8.FromVector(diag);
+            bh.MoveTo(target);
+
+            float t = 0f;
+            bool sawDiag = false;
+            while (t < 3f)
+            {
+                // Keep the backhoe moving so the dino keeps following (re-issue on arrival).
+                if (!bh.IsMoving &&
+                    FindClearStraightTarget(map, gm, bh.transform.position, diag, out Vector3 next))
+                {
+                    bh.MoveTo(next);
+                }
+
+                if (dino.TestFacing == expected)
+                {
+                    sawDiag = true;
+                    Sprite r = dino.TestSprite;
+                    bool ok = r == dino.TestStageDirSprite(GrowthStage.Baby, expected) ||
+                        r == dino.TestStrideDirSprite(GrowthStage.Baby, 0, expected) ||
+                        r == dino.TestStrideDirSprite(GrowthStage.Baby, 1, expected);
+                    ctx.Assert(ok,
+                        $"dino rendered sprite != array[{(int)expected}] ({expected}) while facing it");
+                    break;
+                }
+
+                t += Time.deltaTime;
+                yield return null;
+            }
+
+            ctx.Log(sawDiag
+                ? $"dino diagonal facing {expected}: sprite matches array index"
+                : $"dino diagonal spot-check: dino never settled on {expected} within 3s (skipped)");
         }
 
         // A long straight leg must hold ONE facing (the seizure-jiggle regression),
@@ -888,9 +983,12 @@ namespace DinoDigger.Testing
             gm.TestReset();
         }
 
-        // Nest egg-assembly: banking shards advances the egg's assembly sprite index at
-        // the 0/5/10/15/20 thresholds (per/4 step). Drives the REAL collect path via the
-        // shard pickup hook; stays below ShardsPerHatch so the hatch ceremony never fires.
+        // Nest egg-assembly: banking shards advances the egg's assembly sprite index, its
+        // thresholds SCALED onto the current shard requirement. For the FIRST shard egg the
+        // requirement is 5 (escalating progression), so the 5 states fall at
+        // state = floor(ShardCount / 5 * 4): 0->0, 2->1, 3->2, 4->3 (5 would hatch). Drives
+        // the REAL collect path via the shard pickup hook; stays below the requirement so
+        // the hatch ceremony never fires.
         private IEnumerator Case_NestAssembly(TestContext ctx)
         {
             GameManager gm = ctx.GM;
@@ -898,36 +996,39 @@ namespace DinoDigger.Testing
             NestController nest = gm.TestNest;
             ctx.Assert(nest != null, "no NestController in the scene (rebuild via DinoDigger/Build Main Scene)");
 
-            int per = gm.TestConfig.ShardsPerHatch;
-            ctx.Assert(per > 0, "ShardsPerHatch must be positive");
-            int step = Mathf.Max(1, per / 4); // 5 shards per assembly state
+            // Fresh save: no shard eggs hatched yet -> the first egg's requirement is 5.
+            int per = gm.ShardsPerHatch;
+            ctx.Assert(per == 5, $"first shard egg requirement {per} != 5 (escalating progression)");
+            int states = nest.TestStateCount;
+            ctx.Assert(states > 1, $"nest assembly needs >1 state, has {states}");
 
             // Baseline: 0 banked, collect one -> total 1 -> assembly index 0.
             gm.Save.Data.ShardCount = 0;
             yield return CollectOneShardTo(ctx, gm, 1);
-            ctx.Assert(nest.TestAssemblyIndex == 0, $"assembly idx {nest.TestAssemblyIndex} != 0 at 1 shard");
+            int expect1 = Mathf.Clamp(1 * (states - 1) / per, 0, states - 1);
+            ctx.Assert(nest.TestAssemblyIndex == expect1,
+                $"assembly idx {nest.TestAssemblyIndex} != {expect1} at 1 shard");
             Sprite idx0Sprite = nest.TestEggSprite;
 
-            // Advance to each threshold (5/10/15...) and confirm the index steps up 1/2/3.
-            int lastIdx = 0;
-            for (int i = 1; i <= 3; i++)
+            // Bank each count up to just below the requirement: the index must rise
+            // monotonically to match floor(total / requirement * (states-1)).
+            int lastIdx = nest.TestAssemblyIndex;
+            int maxIdx = lastIdx;
+            for (int total = 2; total < per; total++)
             {
-                int target = step * i;
-                if (target >= per)
-                {
-                    break; // never cross into ceremony territory
-                }
-
-                gm.Save.Data.ShardCount = target - 1;
-                yield return CollectOneShardTo(ctx, gm, target);
-                ctx.Assert(nest.TestAssemblyIndex == i,
-                    $"assembly idx {nest.TestAssemblyIndex} != {i} at {target} shards");
-                lastIdx = i;
+                gm.Save.Data.ShardCount = total - 1;
+                yield return CollectOneShardTo(ctx, gm, total);
+                int expect = Mathf.Clamp(total * (states - 1) / per, 0, states - 1);
+                ctx.Assert(nest.TestAssemblyIndex == expect,
+                    $"assembly idx {nest.TestAssemblyIndex} != {expect} at {total} shards (req {per})");
+                ctx.Assert(nest.TestAssemblyIndex >= lastIdx, "assembly index went backwards");
+                lastIdx = nest.TestAssemblyIndex;
+                maxIdx = Mathf.Max(maxIdx, lastIdx);
             }
 
-            ctx.Assert(lastIdx >= 1, "assembly index never advanced past 0");
+            ctx.Assert(maxIdx >= 1, "assembly index never advanced past 0");
             ctx.Assert(nest.TestEggSprite != idx0Sprite, "egg sprite did not change as shards assembled");
-            ctx.Log($"nest assembly stepped 0..{lastIdx} across shard thresholds (step {step} of {per})");
+            ctx.Log($"nest assembly scaled 0..{maxIdx} across {per - 1} banked shards (req {per}, {states} states)");
 
             gm.TestReset();
             gm.Save.Data.ShardCount = 0;
@@ -944,10 +1045,12 @@ namespace DinoDigger.Testing
             gm.TestReset();
             ctx.Assert(gm.TestNest != null, "no NestController (rebuild via DinoDigger/Build Main Scene)");
 
-            int per = gm.TestConfig.ShardsPerHatch;
+            // Fresh save: no shard eggs hatched -> the first egg costs 5 (escalating).
+            int per = gm.ShardsPerHatch;
+            ctx.Assert(per == 5, $"first shard egg requirement {per} != 5 (escalating progression)");
 
-            // ---- Run 1: a shard species is unowned -> ceremony fires. ----
-            gm.Save.Data.ShardCount = per - 1;
+            // ---- Run 1: a shard species is unowned -> ceremony fires at 5. ----
+            gm.Save.Data.ShardCount = per - 1; // 4; collecting one more reaches 5 -> ceremony
             gm.TestNest.RefreshAssembly(gm.Save.Data.ShardCount);
             ctx.Assert(gm.TestAnyShardSpeciesUnowned, "no shard species unowned at test start");
 
@@ -969,6 +1072,13 @@ namespace DinoDigger.Testing
             // Shards consumed, remainder kept: (per-1) + 1 - per = 0.
             ctx.Assert(gm.Save.Data.ShardCount == 0,
                 $"shard count {gm.Save.Data.ShardCount} not reduced to remainder 0 after the hatch");
+
+            // The escalating progression now costs MORE for the second shard egg: one shard
+            // species is owned, so ShardEggsHatched == 1 and the next requirement is 8.
+            ctx.Assert(gm.ShardEggsHatched == 1,
+                $"shard eggs hatched {gm.ShardEggsHatched} != 1 after the first hatch");
+            ctx.Assert(gm.ShardsPerHatch == 8,
+                $"second shard egg requirement {gm.ShardsPerHatch} != 8 after the first hatch");
 
             // Tap the baby: it joins the team, and the ceremony ends (camera back, Roam).
             DinoType hatched = baby.Type;
@@ -1006,11 +1116,13 @@ namespace DinoDigger.Testing
 
             ctx.Assert(shardRolls == 0, $"{shardRolls} shards still rolled after owning every species");
 
-            // Even a forced shard collection to `per` must NOT start a ceremony.
-            gm.Save.Data.ShardCount = per - 1;
+            // With all shard eggs hatched the requirement clamps to the last progression
+            // entry. Even a forced shard collection up to it must NOT start a ceremony.
+            int perAll = gm.ShardsPerHatch;
+            gm.Save.Data.ShardCount = perAll - 1;
             Vector3 pos2 = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position);
             gm.TestSpawnItem(ItemType.Shard, DinoType.TRex, 0, pos2);
-            yield return ctx.WaitUntil(() => gm.Save.Data.ShardCount >= per);
+            yield return ctx.WaitUntil(() => gm.Save.Data.ShardCount >= perAll);
             yield return ctx.WaitFrames(3);
             ctx.Assert(!gm.TestCeremonyActive && !gm.State.Is(GameState.Ceremony),
                 "ceremony fired even though every shard species is owned");
@@ -1504,6 +1616,14 @@ namespace DinoDigger.Testing
             OverworldMap map = gm.TestMap;
             ctx.Assert(bh != null && map != null, "missing backhoe/map");
 
+            // Seat the backhoe on open ground that offers a corridor-straight leg BEFORE
+            // spawning the follower. The walk-cycle cadence is movement-driven (TickWalkAnim
+            // advances with the step), so the buddy only shows both stride phases (idle->A->
+            // idle->B) over a SUSTAINED straight lead. TestReset never repositions the
+            // backhoe, so without this the drive can start from a cluttered carried-over
+            // cell where only jerky one-cell hops are possible and the cycle shows <2 frames.
+            RelocateForStraightLeg(gm, map, bh, out _);
+
             DinoController dino = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
             ctx.Assert(dino != null, "dino spawn failed");
             yield return ctx.WaitFrames(2);
@@ -1533,7 +1653,7 @@ namespace DinoDigger.Testing
             while (elapsed < 3f)
             {
                 if (!bh.IsMoving &&
-                    FindAnyClearCardinalTarget(map, gm, bh.transform.position, out Vector3 next))
+                    FindStraightCorridorTarget(map, gm, bh.transform.position, out Vector3 next))
                 {
                     bh.MoveTo(next);
                 }
@@ -1576,6 +1696,7 @@ namespace DinoDigger.Testing
             // NEW-species coverage (y85.2): prove the remaining-7 batch art is wired
             // end-to-end by walking a velociraptor buddy through its own stride cycle.
             gm.TestReset();
+            RelocateForStraightLeg(gm, map, bh, out _); // sustained lead so the cycle completes
             DinoController raptor = gm.TestSpawnDino(DinoType.Velociraptor, GrowthStage.Big);
             ctx.Assert(raptor != null, "velociraptor spawn failed");
             yield return ctx.WaitFrames(2);
@@ -1601,7 +1722,7 @@ namespace DinoDigger.Testing
             while (rElapsed < 3f)
             {
                 if (!bh.IsMoving &&
-                    FindAnyClearCardinalTarget(map, gm, bh.transform.position, out Vector3 rnext))
+                    FindStraightCorridorTarget(map, gm, bh.transform.position, out Vector3 rnext))
                 {
                     bh.MoveTo(rnext);
                 }
@@ -1641,6 +1762,14 @@ namespace DinoDigger.Testing
             ctx.Assert(bh.TestRollDirSprite(0, Dir8.S) != null,
                 "backhoe roll art missing (run the Tools pipeline, then DinoDigger/Import Generated Art)");
 
+            // Seat the backhoe on open ground with a corridor-straight leg first. The
+            // wheel-roll cadence is movement-driven (TickRoll advances with the step) and
+            // ResetRoll snaps back to the idle frame on every Arrive, so only a SUSTAINED
+            // straight drive cycles through both roll phases. TestReset never repositions
+            // the backhoe, so a cluttered carried-over start cell yields only one-cell hops
+            // that re-idle before a roll frame is ever reached (the "0 distinct" failure).
+            RelocateForStraightLeg(gm, map, bh, out _);
+
             // Every roll sprite (both phases x 8 dirs) for identifying drive frames.
             var rollSprites = new HashSet<Sprite>();
             for (int phase = 0; phase < 2; phase++)
@@ -1663,7 +1792,7 @@ namespace DinoDigger.Testing
             while (elapsed < 3f)
             {
                 if (!bh.IsMoving &&
-                    FindAnyClearCardinalTarget(map, gm, bh.transform.position, out Vector3 next))
+                    FindStraightCorridorTarget(map, gm, bh.transform.position, out Vector3 next))
                 {
                     bh.MoveTo(next);
                 }
@@ -2640,6 +2769,119 @@ namespace DinoDigger.Testing
 
             target = start;
             return false;
+        }
+
+        /// <summary>DinoDigger-bw4: like <see cref="FindClearCardinalTarget"/> but for an
+        /// ARBITRARY unit heading (cardinal OR diagonal) and requiring CORRIDOR
+        /// line-of-sight for the whole leg (<see cref="OverworldMap.HasCorridorLineOfSight"/>),
+        /// so a diagonal leg drives in a genuinely straight line rather than a grid
+        /// staircase — reusing the exact vetting the backhoe's string-pull uses.
+        ///
+        /// The clamped target must sit WELL inside the heading's Dir8 sector (dot >= 0.985,
+        /// i.e. within ~10° of the ideal axis), NOT merely inside the raw 22.5° sector.
+        /// Reason: the assertion compares bh.Facing (the FacingSmoother's hysteresis-stable
+        /// value) against Direction8.FromVector(idealDir). The smoother HOLDS the prior
+        /// leg's facing until the smoothed heading moves >22.5°+11° = 33.5° from that
+        /// neighbour's centre, so a target 22° off due-south, driven right after a west
+        /// leg, legitimately sticks at SW instead of S. On open ground the clean axial/
+        /// diagonal cell lands exactly on the ideal (dot == 1); only blocked fallbacks are
+        /// off-axis, and rejecting those keeps the expected facing unambiguous whatever the
+        /// previous facing was.</summary>
+        private bool FindClearStraightTarget(OverworldMap map, GameManager gm, Vector3 start,
+            Vector2 worldDir, out Vector3 target)
+        {
+            Vector2 dir = worldDir.normalized;
+            Vector3Int startCell = map.WorldToCell(start);
+            float[] dists = { 4f, 3.5f, 3f, 2.5f };
+            for (int i = 0; i < dists.Length; i++)
+            {
+                Vector3 probe = start + new Vector3(dir.x, dir.y, 0f) * dists[i];
+                Vector3 w = map.NearestWalkable(probe, out bool found);
+                if (!found || map.WorldToCell(w) == startCell)
+                {
+                    continue;
+                }
+
+                if (NearActiveMound(gm, w, 1.2f))
+                {
+                    continue;
+                }
+
+                Vector2 to = new Vector2(w.x - start.x, w.y - start.y);
+                if (to.sqrMagnitude < 0.01f || Vector2.Dot(to.normalized, dir) < 0.985f)
+                {
+                    continue; // must be within ~10° of the ideal axis (see summary: hysteresis)
+                }
+
+                if (!map.HasCorridorLineOfSight(start, w))
+                {
+                    continue; // would smooth into a staircase — not a genuinely straight drive
+                }
+
+                target = w;
+                return true;
+            }
+
+            target = start;
+            return false;
+        }
+
+        /// <summary>DinoDigger-bw4: teleport the backhoe to the open cell offering the most
+        /// corridor-straight legs across all 8 headings, biased toward covering both
+        /// cardinal axes AND both diagonal hands (so the FacingCorrectness case can exercise
+        /// the diagonal sectors that regressed). Best-effort — keeps the best spot found.</summary>
+        private void RelocateForEightWay(GameManager gm, OverworldMap map,
+            BackhoeController bh, Vector2[] dirs)
+        {
+            Vector3 bestPos = bh.transform.position;
+            int bestRank = RankEightWay(gm, map, bestPos, dirs);
+            for (int attempt = 0; attempt < 300 && bestRank < 1000; attempt++)
+            {
+                if (!map.TryRandomWalkableCell(out Vector3Int cell))
+                {
+                    break;
+                }
+
+                Vector3 pos = map.CellCenter(cell);
+                int rank = RankEightWay(gm, map, pos, dirs);
+                if (rank > bestRank)
+                {
+                    bestRank = rank;
+                    bestPos = pos;
+                }
+            }
+
+            bh.transform.position = bestPos;
+            Physics2D.SyncTransforms();
+        }
+
+        /// <summary>Higher = better spot. Rewards (in priority order) covering both diagonal
+        /// hands, then both cardinal axes, then raw count of corridor-straight legs.</summary>
+        private int RankEightWay(GameManager gm, OverworldMap map, Vector3 from, Vector2[] dirs)
+        {
+            int legs = 0;
+            bool x = false, y = false, de = false, dw = false;
+            for (int i = 0; i < dirs.Length; i++)
+            {
+                if (!FindClearStraightTarget(map, gm, from, dirs[i], out _))
+                {
+                    continue;
+                }
+
+                legs++;
+                bool diag = Mathf.Abs(dirs[i].x) > 0.5f && Mathf.Abs(dirs[i].y) > 0.5f;
+                if (diag)
+                {
+                    if (dirs[i].x > 0f) { de = true; } else { dw = true; }
+                }
+                else if (Mathf.Abs(dirs[i].x) > 0.5f) { x = true; } else { y = true; }
+            }
+
+            int rank = legs;
+            if (x && y) { rank += 100; }
+            if (de && dw) { rank += 500; }
+            if (x && y && de && dw && legs >= 6) { rank += 1000; }
+            return rank;
         }
 
         /// <summary>Teleport the backhoe to vetted open ground from which a

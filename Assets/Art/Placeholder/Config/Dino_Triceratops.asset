@@ -22,9 +22,9 @@ MonoBehaviour:
   - {fileID: 21300000, guid: 645fb5c32e7754b89823566029c4efec, type: 3}
   - {fileID: 21300000, guid: 91d8bc639a7af416f94659a0270a80a3, type: 3}
   - {fileID: 21300000, guid: 0f921ce28e8bb41088764504aa5a7b93, type: 3}
-  - {fileID: 21300000, guid: bde3d64bedc3840c3829bc003e4c7115, type: 3}
-  - {fileID: 21300000, guid: ba6e023852a4b4a4284c38518af582f3, type: 3}
   - {fileID: 21300000, guid: 192c26ce4f08b4ed980a036aecc132e0, type: 3}
+  - {fileID: 21300000, guid: ba6e023852a4b4a4284c38518af582f3, type: 3}
+  - {fileID: 21300000, guid: bde3d64bedc3840c3829bc003e4c7115, type: 3}
   - {fileID: 21300000, guid: 26f2eb2912ad84e5fb471cf6cc7ae692, type: 3}
   - {fileID: 21300000, guid: 448860d19f5744e919a887a4f4d5b86d, type: 3}
   BabySprites:
