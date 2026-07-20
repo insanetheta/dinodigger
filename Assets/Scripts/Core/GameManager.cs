@@ -37,6 +37,8 @@ namespace DinoDigger.Core
         [SerializeField] private NestController _nest;
         [SerializeField] private TownController _town;
         [SerializeField] private List<DigMound> _mounds = new List<DigMound>();
+        [SerializeField] private GardenArea _garden;
+        [SerializeField] private List<BerrySprout> _sprouts = new List<BerrySprout>();
 
         [Header("Audio sources")]
         [SerializeField] private int _sfxVoices = 6;
@@ -131,6 +133,7 @@ namespace DinoDigger.Core
             SetupAudio();
             Spawn.Init(_config, _map, _mounds, _backhoe != null ? _backhoe.transform : null);
             Spawn.SetMeadow(_meadow);
+            Spawn.SetGarden(_garden);
 
             if (_cameraFollow != null)
             {
@@ -181,6 +184,27 @@ namespace DinoDigger.Core
             Save.Load();
             RestoreFromSave();
             RollMoundThemes();
+            InitSprouts();
+        }
+
+        /// <summary>Start the Berry Patch sprouts budding with STAGGERED initial timers so
+        /// the three never ripen in sync. Not saved — every sprout begins budding each
+        /// session. Runs in Start so BerrySprout.Awake has cached its renderers first.</summary>
+        private void InitSprouts()
+        {
+            if (_sprouts == null)
+            {
+                return;
+            }
+
+            float ripen = _config != null ? _config.SproutRipenSeconds : 25f;
+            int total = Mathf.Max(1, _sprouts.Count);
+            for (int i = 0; i < _sprouts.Count; i++)
+            {
+                // Spread the first ripen across the cycle (e.g. ~1/3, ~2/3, full of 25s).
+                float stagger = ripen * (i + 1) / total;
+                _sprouts[i]?.Init(_config, _library, stagger);
+            }
         }
 
         /// <summary>Give every scene-baked mound a rolled dig postcard theme so it tints
@@ -303,7 +327,10 @@ namespace DinoDigger.Core
         {
             _backhoe?.Honk();
             Audio?.Honk();
-            NearestActiveMound(_backhoe != null ? _backhoe.transform.position : Vector3.zero)?.AttractPulse();
+            Vector3 from = _backhoe != null ? _backhoe.transform.position : Vector3.zero;
+            NearestActiveMound(from)?.AttractPulse();
+            // A ripe berry is a harvest invite too — pulse the nearest one alongside the mound.
+            NearestRipeSprout(from)?.AttractPulse();
             GameEvents.RaiseIdleAttract();
         }
 
@@ -622,6 +649,34 @@ namespace DinoDigger.Core
 
             return CreatePickup(info, landing);
         }
+
+        /// <summary>Harvest a ripe Berry Sprout: pop one fruit of <paramref name="variant"/>
+        /// out of the sprout in an arc to a nearby walkable landing spot, through the SAME
+        /// pickup path as dug fruit — so it bobs, its tap routes into the feed chain, and the
+        /// Trike courier can fetch it. Public so <see cref="BerrySprout"/> can call it.</summary>
+        public ItemPickup SpawnSproutFruit(Vector3 sproutWorld, int variant)
+        {
+            int variants = _config != null ? Mathf.Max(1, _config.FruitVariants) : 1;
+            variant = Mathf.Clamp(variant, 0, variants - 1);
+
+            // Pop out of the sprout, arc to a nearby (flattened for the iso plane) spot.
+            float angle = Random.value * Mathf.PI * 2f;
+            Vector3 landing = sproutWorld +
+                new Vector3(Mathf.Cos(angle), Mathf.Sin(angle) * 0.7f, 0f) * Random.Range(0.8f, 1.2f);
+            if (_map != null)
+            {
+                landing = _map.NearestWalkable(landing, out _);
+            }
+
+            Vector3 origin = sproutWorld + new Vector3(0f, 0.3f, 0f);
+            var info = new DugItemInfo(ItemType.Fruit, Config.DinoType.TRex, variant, origin);
+            return CreatePickup(info, landing);
+        }
+
+        /// <summary>Green leaf-rustle feedback for a budding Berry Sprout tap (same puff a
+        /// tapped tree gives), so a not-yet-ripe sprout's tap always does something. Public
+        /// so <see cref="BerrySprout"/> can call it.</summary>
+        public void SproutRustle(Vector3 world) => LeafRustle(world);
 
         /// <summary>Resolve a freshly dug item into its final overworld identity.
         /// Eggs are reassigned an unowned egg species so a duplicate can never hatch;
@@ -2262,6 +2317,34 @@ namespace DinoDigger.Core
             return best;
         }
 
+        private BerrySprout NearestRipeSprout(Vector3 pos)
+        {
+            if (_sprouts == null)
+            {
+                return null;
+            }
+
+            BerrySprout best = null;
+            float bestSq = float.MaxValue;
+            for (int i = 0; i < _sprouts.Count; i++)
+            {
+                BerrySprout s = _sprouts[i];
+                if (s == null || !s.IsRipe)
+                {
+                    continue;
+                }
+
+                float sq = (s.transform.position - pos).sqrMagnitude;
+                if (sq < bestSq)
+                {
+                    bestSq = sq;
+                    best = s;
+                }
+            }
+
+            return best;
+        }
+
         private void SpawnConfetti(Vector3 pos)
         {
             ParticleSystem ps = CreateParticles(_overworldRoot, _library != null ? _library.StarParticle : null,
@@ -2394,6 +2477,8 @@ namespace DinoDigger.Core
         internal MuteButton TestMuteButton => _muteButton;
         internal Transform TestOverworldRoot => _overworldRoot;
         internal IReadOnlyList<DigMound> TestMounds => _mounds;
+        internal IReadOnlyList<BerrySprout> TestSprouts => _sprouts;
+        internal GardenArea TestGarden => _garden;
         internal IReadOnlyList<DinoController> TestDinos => _dinos;
         internal IReadOnlyList<DinoController> TestBuddies => _buddies;
         internal MeadowArea TestMeadow => _meadow;
@@ -2657,6 +2742,10 @@ namespace DinoDigger.Core
             // caller owns Save.Data.Town* (a save-state test sets/clears those explicitly);
             // this only wipes the live scene town between cases.
             _town?.TestResetTown();
+
+            // Re-bud every Berry Sprout (staggered) so a case that force-ripened one starts
+            // the next case from a clean, all-budding garden.
+            InitSprouts();
         }
 
         private void OnApplicationPause(bool paused)

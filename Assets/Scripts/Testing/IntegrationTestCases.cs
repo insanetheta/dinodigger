@@ -69,6 +69,7 @@ namespace DinoDigger.Testing
                 new TestCase("FruitStandSellsSurplus", 40f, Case_FruitStandSellsSurplus),
                 new TestCase("SnackBuilders",         45f, Case_SnackBuilders),
                 new TestCase("RecessTime",            45f, Case_RecessTime),
+                new TestCase("BerryPatch",            40f, Case_BerryPatch),
                 // Runs late (after the count-exact TreasureCounter and the town cases): a
                 // buddy dig can finish a round and bank a random amount of treasure, which
                 // would inflate the persistent wallet over the town's build threshold and
@@ -2367,6 +2368,185 @@ namespace DinoDigger.Testing
             ctx.Assert(!meadow.ContainsOuter(m.transform.position),
                 "respawned mound landed inside the meadow");
             ctx.Log($"{mounds.Count} build mounds + 1 forced respawn all outside the meadow");
+        }
+
+        // The Berry Patch: SceneBuilder bakes a GardenArea holding three BerrySprouts, all
+        // inside the garden rect, on walkable ground, and mound-excluded. A BUDDING tap
+        // wiggles without fruit; a RIPE tap pops exactly one fruit through the standard
+        // pickup path and resets the sprout to budding; and that fruit rides the normal
+        // feed chain (a hungry dino eats it). Force-ripen is used so the case never waits
+        // out the 25s ripen timer.
+        private IEnumerator Case_BerryPatch(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset(); // re-buds all sprouts (staggered) + clears dinos/pickups
+
+            GardenArea garden = gm.TestGarden;
+            ctx.Assert(garden != null,
+                "scene ships no wired GardenArea (GameManager._garden is null) — " +
+                "rebuild via DinoDigger/Build Main Scene");
+
+            IReadOnlyList<BerrySprout> sprouts = gm.TestSprouts;
+            ctx.Assert(sprouts != null && sprouts.Count == 3,
+                $"expected 3 sprouts (have {(sprouts != null ? sprouts.Count : 0)})");
+            ctx.Assert(garden.SproutCount == 3,
+                $"GardenArea has {garden.SproutCount} sprouts (expected 3)");
+
+            OverworldMap map = gm.TestMap;
+
+            // (1) Every sprout sits inside the garden rect on walkable ground.
+            for (int i = 0; i < sprouts.Count; i++)
+            {
+                BerrySprout s = sprouts[i];
+                ctx.Assert(s != null, $"sprout {i} is null");
+                ctx.Assert(garden.ContainsWorld(s.transform.position),
+                    $"sprout {i} is outside the garden rect");
+                ctx.Assert(map.IsWalkableWorld(s.transform.position),
+                    $"sprout {i} is on a non-walkable cell");
+            }
+
+            // ...and no dig mound sits inside the garden.
+            IReadOnlyList<DigMound> mounds = gm.TestMounds;
+            for (int i = 0; i < mounds.Count; i++)
+            {
+                if (mounds[i] != null)
+                {
+                    ctx.Assert(!garden.ContainsWorldExpanded(mounds[i].transform.position, 0),
+                        $"build-time mound {i} sits inside the garden");
+                }
+            }
+
+            // Pick a sprout whose center is the ONLY ITappable, so routed taps resolve to
+            // it deterministically (avoids the overlapping-collider trap).
+            Physics2D.SyncTransforms();
+            BerrySprout sprout = null;
+            for (int i = 0; i < sprouts.Count; i++)
+            {
+                if (sprouts[i] != null && OnlySproutTappable(sprouts[i].transform.position, sprouts[i]))
+                {
+                    sprout = sprouts[i];
+                    break;
+                }
+            }
+
+            ctx.Assert(sprout != null, "no sprout has a clean (sole-ITappable) tap point");
+
+            // (2) A BUDDING tap wiggles but spawns NO fruit.
+            ctx.Assert(!sprout.IsRipe, "sprout should start budding after reset");
+            int fruitBefore = CountFruitPickups(gm);
+            gm.TestTapWorldRouted(sprout.transform.position);
+            yield return ctx.WaitFrames(3);
+            ctx.Assert(!sprout.IsRipe, "budding tap ripened the sprout (should only wiggle)");
+            ctx.Assert(CountFruitPickups(gm) == fruitBefore,
+                "budding tap spawned fruit (should only wiggle + rustle)");
+
+            // (3) Force-ripen, then a RIPE tap pops exactly one fruit and resets to budding.
+            sprout.TestForceRipen();
+            ctx.Assert(sprout.IsRipe, "TestForceRipen did not ripen the sprout");
+            int before = CountFruitPickups(gm);
+            gm.TestTapWorldRouted(sprout.transform.position);
+            yield return ctx.WaitUntil(() => CountFruitPickups(gm) > before);
+            int after = CountFruitPickups(gm);
+            ctx.Assert(after == before + 1,
+                $"ripe tap spawned {after - before} fruit (expected exactly 1)");
+            ctx.Assert(!sprout.IsRipe, "sprout did not reset to budding after harvest");
+
+            // (4) The harvested fruit rides the normal feed chain: a hungry dino eats it.
+            ItemPickup harvested = FirstFruitPickup(gm);
+            ctx.Assert(harvested != null, "no harvested fruit pickup found");
+            yield return ctx.WaitUntil(() => harvested == null || harvested.IsCarryableFruit);
+            ctx.Assert(harvested != null, "harvested fruit vanished before it could be eaten");
+
+            DinoController dino = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Baby);
+            ctx.Assert(dino != null && dino.IsHungry, "test dino is not hungry");
+            int ate = dino.FruitEaten;
+            gm.RequestFeed(harvested);
+            yield return ctx.WaitUntil(() =>
+                dino.FruitEaten > ate || harvested == null || harvested.IsConsumed);
+            ctx.Assert(dino.FruitEaten > ate,
+                "hungry dino did not eat the harvested berry (feed chain broken)");
+
+            ctx.Log("berry patch: 3 sprouts in-rect + mound-excluded; budding tap wiggled (no fruit); " +
+                    "ripe tap popped exactly 1 fruit + reset to bud; a hungry dino ate the harvested berry");
+            gm.TestReset();
+        }
+
+        /// <summary>Count the live (unconsumed) fruit pickups under the overworld root.</summary>
+        private int CountFruitPickups(GameManager gm)
+        {
+            Transform root = gm.TestOverworldRoot;
+            if (root == null)
+            {
+                return 0;
+            }
+
+            ItemPickup[] ps = root.GetComponentsInChildren<ItemPickup>(true);
+            int n = 0;
+            for (int i = 0; i < ps.Length; i++)
+            {
+                if (ps[i] != null && ps[i].Type == ItemType.Fruit && !ps[i].IsConsumed)
+                {
+                    n++;
+                }
+            }
+
+            return n;
+        }
+
+        /// <summary>The first live (unconsumed) fruit pickup under the overworld root.</summary>
+        private ItemPickup FirstFruitPickup(GameManager gm)
+        {
+            Transform root = gm.TestOverworldRoot;
+            if (root == null)
+            {
+                return null;
+            }
+
+            ItemPickup[] ps = root.GetComponentsInChildren<ItemPickup>(true);
+            for (int i = 0; i < ps.Length; i++)
+            {
+                if (ps[i] != null && ps[i].Type == ItemType.Fruit && !ps[i].IsConsumed)
+                {
+                    return ps[i];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>True when the ONLY ITappable overlapping <paramref name="p"/> is
+        /// <paramref name="s"/> — so GameManager.FindTappable (first ITappable hit) is
+        /// guaranteed to resolve a tap there to this sprout (mirrors OnlyBuildingTappable).</summary>
+        private bool OnlySproutTappable(Vector3 p, BerrySprout s)
+        {
+            Collider2D[] hits = Physics2D.OverlapPointAll(p);
+            bool found = false;
+            for (int i = 0; i < hits.Length; i++)
+            {
+                if (hits[i] == null)
+                {
+                    continue;
+                }
+
+                var t = hits[i].GetComponent<ITappable>() ?? hits[i].GetComponentInParent<ITappable>();
+                if (t == null)
+                {
+                    continue; // non-tappable collider (ground/stream): FindTappable skips it
+                }
+
+                bool isSprout = hits[i].GetComponent<BerrySprout>() == s ||
+                                hits[i].GetComponentInParent<BerrySprout>() == s;
+                if (isSprout)
+                {
+                    found = true;
+                }
+                else
+                {
+                    return false; // another tappable overlaps -> ambiguous, skip this point
+                }
+            }
+
+            return found;
         }
 
         // The cleared town district must contain no mound, stream/water, or tree/rock

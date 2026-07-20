@@ -31,7 +31,12 @@ namespace DinoDigger.Managers
         private List<DigMound> _mounds;
         private Transform _backhoe;
         private MeadowArea _meadow;
+        private GardenArea _garden;
         private readonly List<Pending> _pending = new List<Pending>();
+
+        // Keep respawns this many cells clear of the garden rect too, so a mound never
+        // crowds a sprout's tap collider (isometric diagonal neighbours pack close).
+        private const int GardenClearCells = 2;
 
         public void Init(GameConfig config, OverworldMap map, List<DigMound> mounds, Transform backhoe)
         {
@@ -45,6 +50,13 @@ namespace DinoDigger.Managers
         public void SetMeadow(MeadowArea meadow)
         {
             _meadow = meadow;
+        }
+
+        /// <summary>Optional: mounds never respawn inside (or tight against) the Berry
+        /// Patch garden.</summary>
+        public void SetGarden(GardenArea garden)
+        {
+            _garden = garden;
         }
 
         public void ScheduleRespawn(DigMound mound)
@@ -94,7 +106,7 @@ namespace DinoDigger.Managers
 
                 Vector3 world = _map.CellCenter(cell);
                 if (!IsOccupied(world, mound) && !TooCloseToBackhoe(world) &&
-                    !InMeadow(world) && !InTownDistrict(world))
+                    !InMeadow(world) && !InTownDistrict(world) && !InGarden(world))
                 {
                     mound.Respawn(world);
                     return;
@@ -108,6 +120,11 @@ namespace DinoDigger.Managers
         private bool InMeadow(Vector3 world)
         {
             return _meadow != null && _meadow.ContainsOuter(world);
+        }
+
+        private bool InGarden(Vector3 world)
+        {
+            return _garden != null && _garden.ContainsWorldExpanded(world, GardenClearCells);
         }
 
         // Mounds never respawn inside the cleared town district (walkable grass, so

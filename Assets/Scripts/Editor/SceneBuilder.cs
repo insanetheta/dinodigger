@@ -84,7 +84,7 @@ namespace DinoDigger.EditorTools
             var streamNetwork = gridGo.AddComponent<StreamNetwork>();
 
             // ---- Paint island ----
-            char[,] map = BuildMap(out RectInt meadowRect, out RectInt districtRect);
+            char[,] map = BuildMap(out RectInt meadowRect, out RectInt districtRect, out RectInt gardenRect);
             Vector3Int startCell = FindStartCell(map); // resolved before mounds so we can keep them clear of it
 
             // Carve meandering 1-tile streams (north coast -> pond, pond -> south
@@ -96,7 +96,8 @@ namespace DinoDigger.EditorTools
             EnsureStreamConnectivity(map, startCell, streamCourses);
 
             var moundCells = new List<Vector3Int>();
-            PaintMap(map, ground, water, obstacles, lib, moundCells, startCell, meadowRect, districtRect);
+            PaintMap(map, ground, water, obstacles, lib, moundCells, startCell,
+                meadowRect, districtRect, gardenRect);
             streamNetwork.Configure(grid, streamCourses);
 
             // Tell the map about the cleared town district so mound RESPAWNS steer clear
@@ -114,6 +115,10 @@ namespace DinoDigger.EditorTools
             // ---- Town district (cleared building plots beside the meadow) ----
             TownController town = CreateTown(grid, overworldMap, overworldRoot.transform,
                 districtRect, lib, config);
+
+            // ---- Berry Patch garden (three fruit sprouts near the meadow) ----
+            GardenArea gardenArea = CreateGarden(grid, overworldMap, overworldRoot.transform,
+                gardenRect, lib, config, out List<DinoDigger.Overworld.BerrySprout> sprouts);
 
             // ---- Backhoe ----
             var backhoeGo = new GameObject("Backhoe");
@@ -283,6 +288,8 @@ namespace DinoDigger.EditorTools
             Wire(gm, "_nest", nest);
             WireMoundList(gm, "_mounds", mounds);
             Wire(gm, "_town", town);
+            Wire(gm, "_garden", gardenArea);
+            WireSproutList(gm, "_sprouts", sprouts);
 
             // ---- Save + register scene ----
             EditorSceneManager.MarkSceneDirty(scene);
@@ -302,7 +309,8 @@ namespace DinoDigger.EditorTools
         private const int DistrictW = 8;
         private const int DistrictH = 6;
 
-        private static char[,] BuildMap(out RectInt meadowRect, out RectInt districtRect)
+        private static char[,] BuildMap(out RectInt meadowRect, out RectInt districtRect,
+            out RectInt gardenRect)
         {
             // Deterministic "handcrafted" island: grass ellipse, carved pond,
             // a crossing path, scattered trees/rocks. Legend:
@@ -310,6 +318,8 @@ namespace DinoDigger.EditorTools
             //   M meadow grass (reserved: fenced dino home, no trees/rocks/mounds)
             //   D town-district grass (reserved: cleared building plots, same
             //     exclusions as 'M' — no trees/rocks/streams/mounds ever generate in it)
+            //   A berry-garden grass (reserved: the Berry Patch sprout plot, same
+            //     exclusions as 'D' — walkable grass, but no trees/rocks/streams/mounds)
             var m = new char[N, N];
             var rng = new System.Random(1337);
             Vector2 c = new Vector2((N - 1) * 0.5f, (N - 1) * 0.5f);
@@ -391,6 +401,12 @@ namespace DinoDigger.EditorTools
             // so the commute reads). Like the meadow, it is reserved BEFORE obstacles
             // scatter and BEFORE streams carve so it stays clear, walkable grass.
             districtRect = ReserveDistrict(m, meadowRect);
+
+            // Reserve the Berry Patch garden last (a small plot near the meadow, on a
+            // different side than the town). Like the meadow/district it is reserved
+            // BEFORE obstacles scatter and streams carve, so its sprout cells stay clear,
+            // walkable grass with no tree/rock/stream ever cutting through them.
+            gardenRect = ReserveGarden(m, meadowRect, districtRect);
 
             // Scatter trees and rocks on plain grass (not path/pond/meadow/district).
             for (int x = 0; x < N; x++)
@@ -559,9 +575,68 @@ namespace DinoDigger.EditorTools
             return new RectInt(x0, y0, DistrictW, DistrictH);
         }
 
+        // Berry Patch garden size (cells): a small plot holding the three sprout spots.
+        private const int GardenW = 5;
+        private const int GardenH = 3;
+
+        /// <summary>Reserve the Berry Patch garden: a GardenW x GardenH all-grass window
+        /// placed just SCREEN-SOUTH of the meadow (decreasing cell Y, X aligned with the
+        /// meadow's western columns) so the little fruit plot sits near the dino home but
+        /// on the OPPOSITE side from the town. Scans Y outward to the first all-grass fit,
+        /// nudging X around the meadow columns. Falls back to scanning the whole island,
+        /// then to a stamp south of the meadow, so the build never fails. Marked 'A'.</summary>
+        private static RectInt ReserveGarden(char[,] m, RectInt meadow, RectInt district)
+        {
+            // Preferred: just south of the meadow, Y scanned outward, X nudged around the
+            // meadow's western columns (kept in bounds). IsAllGrassRect only accepts 'G',
+            // so this can never overlap the meadow ('M') or town district ('D').
+            for (int y0 = meadow.yMin - GardenH - 1; y0 >= 0; y0--)
+            {
+                foreach (int xOff in new[] { 0, 1, -1, 2, -2 })
+                {
+                    int x0 = Mathf.Clamp(meadow.xMin + xOff, 0, N - GardenW);
+                    if (IsAllGrassRect(m, x0, y0, GardenW, GardenH))
+                    {
+                        return MarkGarden(m, x0, y0);
+                    }
+                }
+            }
+
+            // Fallback: anywhere on the island (row-major, from the SW corner).
+            for (int y0 = 0; y0 <= N - GardenH; y0++)
+            {
+                for (int x0 = 0; x0 <= N - GardenW; x0++)
+                {
+                    if (IsAllGrassRect(m, x0, y0, GardenW, GardenH))
+                    {
+                        return MarkGarden(m, x0, y0);
+                    }
+                }
+            }
+
+            // Last resort: stamp a window south of the meadow (converts whatever is there
+            // to garden grass — still walkable, still cleared).
+            int fx = Mathf.Clamp(meadow.xMin, 0, N - GardenW);
+            int fy = Mathf.Clamp(meadow.yMin - GardenH - 1, 0, N - GardenH);
+            return MarkGarden(m, fx, fy);
+        }
+
+        private static RectInt MarkGarden(char[,] m, int x0, int y0)
+        {
+            for (int x = x0; x < x0 + GardenW; x++)
+            {
+                for (int y = y0; y < y0 + GardenH; y++)
+                {
+                    m[x, y] = 'A';
+                }
+            }
+
+            return new RectInt(x0, y0, GardenW, GardenH);
+        }
+
         private static void PaintMap(char[,] m, Tilemap ground, Tilemap water, Tilemap obstacles,
             PlaceholderLibrary lib, List<Vector3Int> moundCells, Vector3Int startCell,
-            RectInt meadowRect, RectInt districtRect)
+            RectInt meadowRect, RectInt districtRect, RectInt gardenRect)
         {
             var grassCandidates = new List<Vector3Int>();
 
@@ -585,6 +660,12 @@ namespace DinoDigger.EditorTools
                             // Town district: cleared walkable grass (dinos + player can
                             // stroll through; buildings add their own colliders later),
                             // but NEVER a mound candidate.
+                            ground.SetTile(cell, lib != null ? lib.GrassTile : null);
+                            break;
+                        case 'A':
+                            // Berry Patch garden: cleared walkable grass for the sprout
+                            // props. NEVER a mound candidate, and 'A' isn't stream-routable
+                            // so no channel ever cuts through the plot.
                             ground.SetTile(cell, lib != null ? lib.GrassTile : null);
                             break;
                         case 'P':
@@ -622,7 +703,7 @@ namespace DinoDigger.EditorTools
             }
 
             // Choose 9 spread-out mound cells from plain grass/path candidates.
-            PickMounds(grassCandidates, 12, moundCells, startCell, meadowRect, districtRect);
+            PickMounds(grassCandidates, 12, moundCells, startCell, meadowRect, districtRect, gardenRect);
 
             Debug.Log($"[SceneBuilder] PaintMap done: lib={(lib == null ? "NULL" : "ok")} " +
                       $"grassTile={(lib != null && lib.GrassTile != null ? "ok" : "NULL")} " +
@@ -631,8 +712,14 @@ namespace DinoDigger.EditorTools
         }
 
         private static void PickMounds(List<Vector3Int> candidates, int count, List<Vector3Int> outCells,
-            Vector3Int startCell, RectInt meadowRect, RectInt districtRect)
+            Vector3Int startCell, RectInt meadowRect, RectInt districtRect, RectInt gardenRect)
         {
+            // The garden plus a 2-cell clearance ring: no mound spawns inside it, so a
+            // sprout's tap collider never overlaps a mound (isometric diagonal neighbours
+            // pack close). Mirrors SpawnManager.GardenClearCells for respawns.
+            var gardenHalo = new RectInt(gardenRect.xMin - 2, gardenRect.yMin - 2,
+                gardenRect.width + 4, gardenRect.height + 4);
+
             var rng = new System.Random(4242);
             int guard = 0;
             while (outCells.Count < count && candidates.Count > 0 && guard++ < 500)
@@ -656,6 +743,14 @@ namespace DinoDigger.EditorTools
                 // Never inside the cleared town district (buildings go there).
                 // Candidates already exclude 'D' cells; guards future map edits.
                 if (districtRect.Contains(new Vector2Int(pick.x, pick.y)))
+                {
+                    continue;
+                }
+
+                // Never inside (or tight against) the Berry Patch garden. Candidates
+                // already exclude 'A' cells; the halo keeps mounds a couple cells clear
+                // of the sprout colliders too.
+                if (gardenHalo.Contains(new Vector2Int(pick.x, pick.y)))
                 {
                     continue;
                 }
@@ -1120,7 +1215,8 @@ namespace DinoDigger.EditorTools
             }
         }
 
-        private static bool CharWalkable(char c) => c == 'G' || c == 'P' || c == 'M' || c == 'B';
+        private static bool CharWalkable(char c) =>
+            c == 'G' || c == 'P' || c == 'M' || c == 'B' || c == 'A';
         private static bool InBounds(Vector2Int c) => c.x >= 0 && c.x < N && c.y >= 0 && c.y < N;
 
         private static Vector3Int Cell(Vector2Int c) => new Vector3Int(c.x, c.y, 0);
@@ -1162,6 +1258,93 @@ namespace DinoDigger.EditorTools
             Wire(mound, "_renderer", sr);
             Wire(mound, "_sparkle", sparkle);
             return mound;
+        }
+
+        // --------------------------------------------------------------- garden
+
+        // Sprout local cells within the GardenW x GardenH plot: a centered row, spaced two
+        // cells apart so their tap colliders never overlap each other (and, with the
+        // mound-exclusion halo, never overlap a dig mound either).
+        private static readonly Vector2Int[] SproutLocalCells =
+        {
+            new Vector2Int(0, 1),
+            new Vector2Int(2, 1),
+            new Vector2Int(4, 1),
+        };
+
+        /// <summary>Build the Berry Patch: a "Garden" root carrying the data-only
+        /// <see cref="GardenArea"/> (cell rect + the three sprout world-positions) plus three
+        /// <see cref="BerrySprout"/> props. Returns the wired area; the sprouts come back via
+        /// <paramref name="sprouts"/> so BuildMainScene can wire them into GameManager. Fully
+        /// null-tolerant so a partially-imported placeholder library still builds a working
+        /// patch (just with blank sprites).</summary>
+        private static GardenArea CreateGarden(Grid grid, OverworldMap map, Transform parent,
+            RectInt garden, PlaceholderLibrary lib, GameConfig config,
+            out List<DinoDigger.Overworld.BerrySprout> sprouts)
+        {
+            var go = new GameObject("Garden");
+            go.transform.SetParent(parent, false);
+
+            int minX = garden.xMin;
+            int minY = garden.yMin;
+            int maxX = garden.xMax - 1;
+            int maxY = garden.yMax - 1;
+
+            go.transform.position = grid.GetCellCenterWorld(
+                new Vector3Int((minX + maxX) / 2, (minY + maxY) / 2, 0));
+
+            sprouts = new List<DinoDigger.Overworld.BerrySprout>(SproutLocalCells.Length);
+            var sproutWorlds = new List<Vector3>(SproutLocalCells.Length);
+            for (int i = 0; i < SproutLocalCells.Length; i++)
+            {
+                Vector2Int p = SproutLocalCells[i];
+                Vector3 world = grid.GetCellCenterWorld(new Vector3Int(minX + p.x, minY + p.y, 0));
+                sproutWorlds.Add(world);
+                sprouts.Add(CreateSprout(world, go.transform, lib));
+            }
+
+            var area = go.AddComponent<GardenArea>();
+            area.Configure(map, minX, minY, maxX, maxY, sproutWorlds);
+            return area;
+        }
+
+        /// <summary>Build one Berry Sprout: the dig-mound sprite tinted leafy green as a
+        /// small base, a scaled-down fruit sprite poking out of it, a sparkle child (played
+        /// only while ripe), and a generous circle tap collider.</summary>
+        private static DinoDigger.Overworld.BerrySprout CreateSprout(Vector3 pos, Transform parent,
+            PlaceholderLibrary lib)
+        {
+            var go = new GameObject("BerrySprout");
+            go.transform.SetParent(parent, false);
+            go.transform.position = pos;
+            go.transform.localScale = Vector3.one * 0.55f; // little sprouts, not full mounds
+
+            // Root renderer (required by BerrySprout) = the green mound/leaf base.
+            var baseSr = go.AddComponent<SpriteRenderer>();
+            baseSr.sortingOrder = 8; // same layer as dig mounds
+            baseSr.sprite = lib != null ? lib.MoundSprite : null;
+            baseSr.color = new Color(0.5f, 0.75f, 0.4f); // tint the mound sprite leafy green
+
+            // Fruit poking out of the base (a touch higher, drawn in front).
+            var fruitGo = new GameObject("Fruit");
+            fruitGo.transform.SetParent(go.transform, false);
+            fruitGo.transform.localPosition = new Vector3(0f, 0.35f, 0f);
+            var fruitSr = fruitGo.AddComponent<SpriteRenderer>();
+            fruitSr.sortingOrder = 9;
+            fruitSr.sprite = lib != null ? lib.Fruit(0) : null;
+
+            var col = go.AddComponent<CircleCollider2D>();
+            col.radius = 0.45f; // generous toddler touch target, small enough to clear mounds
+            col.isTrigger = true;
+
+            ParticleSystem sparkle = CreateParticle(go.transform, "Sparkle",
+                lib != null ? lib.StarParticle : null, new Color(0.7f, 1f, 0.5f), true);
+
+            var sprout = go.AddComponent<DinoDigger.Overworld.BerrySprout>();
+            Wire(sprout, "_base", baseSr);
+            Wire(sprout, "_fruit", fruitSr);
+            Wire(sprout, "_sparkle", sparkle);
+            return sprout;
         }
 
         // --------------------------------------------------------------- meadow
@@ -1755,6 +1938,25 @@ namespace DinoDigger.EditorTools
         }
 
         private static void WireMoundList(Object comp, string prop, List<DigMound> values)
+        {
+            var so = new SerializedObject(comp);
+            SerializedProperty p = so.FindProperty(prop);
+            if (p == null)
+            {
+                return;
+            }
+
+            p.arraySize = values.Count;
+            for (int i = 0; i < values.Count; i++)
+            {
+                p.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
+            }
+
+            so.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private static void WireSproutList(Object comp, string prop,
+            List<DinoDigger.Overworld.BerrySprout> values)
         {
             var so = new SerializedObject(comp);
             SerializedProperty p = so.FindProperty(prop);

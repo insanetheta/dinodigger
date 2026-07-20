@@ -183,6 +183,14 @@ namespace DinoDigger.Config
                  "is always treasure (mirrors the dig-loot shard gate).")]
         public float RockShardChance = 0.1f;
 
+        [Header("Berry Patch (garden)")]
+        [Tooltip("Seconds a budding sprout takes to swell into a ripe, harvestable berry.")]
+        public float SproutRipenSeconds = 25f;
+
+        [Tooltip("Seconds after a ripe sprout is harvested before it buds again and " +
+                 "re-enters the ripen cycle.")]
+        public float SproutRegrowSeconds = 25f;
+
         [Header("Feel")]
         public float IdleAttractSeconds = 15f;
         public float ParentGateHoldSeconds = 3f;
