@@ -52,6 +52,12 @@ namespace DinoDigger.Core
         private const float ParadeSeconds = 8f;
         private const float CeremonyLingerSeconds = 3f;    // nest ceremony auto-returns after this
 
+        // ---- Fruit Stand (surplus-fruit -> coins) tuning ----
+        private const float SellerCommuteSpeed = 1.1f;     // resident hauling fruit to the stand
+        private const int FruitStandCoinVariant = 0;       // plain coin (TreasureValue 1)
+        private const int FruitStandGemVariant = 1;        // jackpot gem (TreasureValue 3)
+        private const int FruitStandGemEverySale = 5;      // every 5th sale pays a gem, not a coin
+
         // Managers
         public GameStateManager State { get; private set; }
         public SaveManager Save { get; private set; }
@@ -73,6 +79,12 @@ namespace DinoDigger.Core
         private DinoController _courier;       // Trike currently on a fruit run
         private ItemPickup _carriedFruit;
         private bool _paradeActive;
+
+        // ---- Fruit Stand sell state ----
+        // Residents currently hauling a sold fruit to the stand (may run concurrently with
+        // taps). Kept out of the town's builder draft so a seller is never poached mid-haul.
+        private readonly List<DinoController> _sellers = new List<DinoController>();
+        private int _fruitSalesCount;          // transient (not saved) — drives the 5th-sale gem
 
         // ---- Shard-hatch ceremony state ----
         private bool _ceremonyActive;
@@ -247,6 +259,7 @@ namespace DinoDigger.Core
             TickIdleAttract(dt);
             TickSniffer(dt);
             TickCourier(dt);
+            TickSellers();
             // Ambient town builder: auto-spends coins + drives resident construction.
             // Always ticks (you dig; they build) and never touches the player/backhoe.
             _town?.Tick(dt);
@@ -574,15 +587,15 @@ namespace DinoDigger.Core
             }
 
             // FRUIT GLUT GUARD: fruit is 40% of drops but demand is finite (a Big dino is
-            // never hungry). When nothing wants fruit, most of it downgrades to a random
+            // never hungry). When there is NO fruit demand, most of it downgrades to a random
             // treasure so uneaten fruit can't pile up; the rest stays fruit so the world
-            // still has some. NOTE: the hunger condition is intentionally narrow today —
-            // it will later widen to include builder-snack and fruit-stand demand
-            // (planned follow-up issues), at which point "AnyDinoHungry" becomes "any
-            // fruit demand".
+            // still has some. "Fruit demand" widens as sinks come online: today it is a
+            // hungry dino OR an open Fruit Stand (surplus fruit is now sellable gameplay, not
+            // clutter, so it must NOT downgrade once the stand is finished). It still widens
+            // further later to include builder snacks (planned follow-up).
             if (info.Type == ItemType.Fruit)
             {
-                if (_config != null && !AnyDinoHungry() &&
+                if (_config != null && !AnyDinoHungry() && !FruitStandFinished &&
                     Random.value < _config.FruitDowngradeFraction)
                 {
                     int treasureVariants = Mathf.Max(1, _config.TreasureVariants);
@@ -907,7 +920,15 @@ namespace DinoDigger.Core
             DinoController dino = NearestHungryDino(fruit.transform.position);
             if (dino == null)
             {
-                return; // no hungry dino; the fruit already bounced for feedback
+                // Feed priority is absolute — a hungry dino always wins. Only once NOBODY is
+                // hungry does a finished Fruit Stand buy the surplus fruit; otherwise the
+                // fruit just bounced for feedback and waits to be eaten later.
+                if (FruitStandFinished)
+                {
+                    TrySellFruit(fruit);
+                }
+
+                return;
             }
 
             Vector3 fruitPos = fruit.transform.position;
@@ -1280,6 +1301,187 @@ namespace DinoDigger.Core
             _carriedFruit = null;
         }
 
+        // ---------------------------------------------------------- fruit stand
+        // Surplus-fruit sink: once the Fruit Stand (building index
+        // GameConfig.FruitStandIndex) is finished, tapping a loose fruit that no dino wants
+        // sells it. A free NON-buddy resident hauls it to the stand and it banks as a coin
+        // (every 5th sale a gem); if no resident is free the fruit flies to the stand and
+        // sells itself, so a toddler's tap ALWAYS produces something. Reuses the Trike
+        // courier's carry primitives (ItemPickup.BeginCarried, DinoController.AttachCarried)
+        // and the treasure arc/counter (SpawnRewardPickup -> CollectTreasure).
+
+        /// <summary>True once the Fruit Stand has finished building (its plot is open for
+        /// business). Gates both the sell flow and the glut-guard widening.</summary>
+        private bool FruitStandFinished =>
+            _town != null && _town.IsBuildingFinished(Config.GameConfig.FruitStandIndex);
+
+        /// <summary>Sell one surplus fruit at the stand. A free resident carries it there;
+        /// with no resident free the fruit arcs to the stand and sells itself (never a
+        /// dead-end tap). Callers guarantee nobody is hungry and the stand is finished.</summary>
+        private void TrySellFruit(ItemPickup fruit)
+        {
+            if (fruit == null || fruit.IsConsumed || fruit.IsCarried)
+            {
+                return;
+            }
+
+            Vector3 stand = _town.BuildingWorld(Config.GameConfig.FruitStandIndex);
+            DinoController seller = AcquireFreeSeller(fruit.transform.position);
+            if (seller == null)
+            {
+                SellFruitDirect(fruit, stand); // fallback: the fruit flies itself to the stand
+                return;
+            }
+
+            BeginSellRun(seller, fruit, stand);
+        }
+
+        /// <summary>Nearest NON-buddy resident free to run a sale: not a buddy, not the
+        /// ceremony baby, not already selling, and not busy — <see cref="DinoController.IsBusy"/>
+        /// excludes eating, dancing, parading, AND any resident currently WORKING or COMMUTING
+        /// to a build site, so a builder is never poached mid-site. Returns null when nobody
+        /// is free (the caller then falls back to a self-selling fruit).</summary>
+        private DinoController AcquireFreeSeller(Vector3 near)
+        {
+            DinoController best = null;
+            float bestSq = float.MaxValue;
+            for (int i = 0; i < _dinos.Count; i++)
+            {
+                DinoController d = _dinos[i];
+                if (d == null || d.IsBuddy || d.IsBusy || d == _ceremonyDino)
+                {
+                    continue;
+                }
+
+                if (_buddies.Contains(d) || _sellers.Contains(d))
+                {
+                    continue;
+                }
+
+                float sq = (d.transform.position - near).sqrMagnitude;
+                if (sq < bestSq)
+                {
+                    bestSq = sq;
+                    best = d;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>Send a resident to the fruit, hoist it onto its head, carry it to the
+        /// stand, and bank the sale on arrival. Mirrors the Trike courier's carry chain; the
+        /// per-frame <see cref="TickSellers"/> watchdog recovers a run whose walk got
+        /// interrupted (e.g. the seller tapped into a buddy).</summary>
+        private void BeginSellRun(DinoController seller, ItemPickup fruit, Vector3 stand)
+        {
+            _sellers.Add(seller);
+
+            seller.WalkTo(fruit.transform.position, SellerCommuteSpeed, () =>
+            {
+                if (seller == null || fruit == null || !fruit.IsCarryableFruit)
+                {
+                    _sellers.Remove(seller); // fruit eaten / tapped away before pickup
+                    return;
+                }
+
+                fruit.BeginCarried();
+                seller.AttachCarried(fruit.transform);
+                Tween.PunchScale(seller.transform, 0.2f, 0.25f);
+
+                Vector3 drop = StandApproach(stand);
+                seller.WalkTo(drop, SellerCommuteSpeed, () => CompleteSale(seller, fruit, stand));
+            });
+        }
+
+        /// <summary>Seller reached the stand: set the fruit down off its head, then convert
+        /// it to a coin/gem that arcs to the counter. The resident resumes its role on its
+        /// own (it was never a buddy).</summary>
+        private void CompleteSale(DinoController seller, ItemPickup fruit, Vector3 stand)
+        {
+            _sellers.Remove(seller);
+            seller?.DetachCarried();
+            BankFruitSale(fruit, stand);
+        }
+
+        /// <summary>Fallback with no resident free: the fruit itself arcs to the stand and
+        /// sells on arrival, so the tap still pays out. Locked as "carried" during the flight
+        /// so it stops bobbing/tapping and the Trike courier won't grab it mid-air.</summary>
+        private void SellFruitDirect(ItemPickup fruit, Vector3 stand)
+        {
+            if (fruit == null)
+            {
+                return;
+            }
+
+            fruit.BeginCarried();
+            Tween.MoveArc(fruit.transform, fruit.transform.position, stand, 1.2f, 0.55f,
+                () => BankFruitSale(fruit, stand));
+        }
+
+        /// <summary>Consume the sold fruit and pay out at the stand: pop a coin — or, every
+        /// <see cref="FruitStandGemEverySale"/>th sale, a jackpot gem — that flies to the
+        /// treasure counter through the SAME reward/collect path as any treasure, so the
+        /// denomination value and the counter pop just work. Shared by both sell paths.</summary>
+        private void BankFruitSale(ItemPickup fruit, Vector3 stand)
+        {
+            if (fruit != null)
+            {
+                _pickups.Remove(fruit);
+                Destroy(fruit.gameObject);
+            }
+
+            _fruitSalesCount++;
+            bool jackpot = (_fruitSalesCount % FruitStandGemEverySale) == 0;
+            int variant = jackpot ? FruitStandGemVariant : FruitStandCoinVariant;
+
+            // A treasure reward pops at the stand and auto-collects to the corner counter
+            // (ItemPickup.OnLanded -> CollectTreasure), banking TreasureValue(variant).
+            SpawnRewardPickup(ItemType.Treasure, Config.DinoType.TRex, variant, stand);
+            Audio?.Chime();
+        }
+
+        /// <summary>A walkable drop-off point just in front of the stand plot, so the seller
+        /// stands beside the building rather than on top of it.</summary>
+        private Vector3 StandApproach(Vector3 stand)
+        {
+            Vector3 front = stand + new Vector3(0f, -0.6f, 0f);
+            if (_map != null)
+            {
+                front = _map.NearestWalkable(front, out _);
+            }
+
+            return front;
+        }
+
+        /// <summary>Watchdog for in-flight sell runs: a seller that got tap-promoted to a
+        /// buddy (or destroyed) is released from the run, and any fruit still on its head is
+        /// set back down where it stands so it never rides off stranded.</summary>
+        private void TickSellers()
+        {
+            for (int i = _sellers.Count - 1; i >= 0; i--)
+            {
+                DinoController s = _sellers[i];
+                if (s == null)
+                {
+                    _sellers.RemoveAt(i);
+                    continue;
+                }
+
+                if (s.IsBuddy)
+                {
+                    Transform t = s.DetachCarried();
+                    if (t != null)
+                    {
+                        var pk = t.GetComponent<ItemPickup>();
+                        pk?.EndCarried(t.position);
+                    }
+
+                    _sellers.RemoveAt(i);
+                }
+            }
+        }
+
         // ------------------------------------------------------ milestone parade
 
         private void OnDinoGrew(Config.DinoType type, GrowthStage stage)
@@ -1444,9 +1646,9 @@ namespace DinoDigger.Core
                     continue;
                 }
 
-                if (_buddies.Contains(d))
+                if (_buddies.Contains(d) || _sellers.Contains(d))
                 {
-                    continue;
+                    continue; // a resident mid-sale is committed — never draft it to build
                 }
 
                 result.Add(d);
@@ -1905,6 +2107,24 @@ namespace DinoDigger.Core
         internal bool TestEggSpeciesAllOwned => EggSpeciesAllOwned();
         internal bool TestAnyShardSpeciesUnowned => AnyShardSpeciesUnowned();
         internal int TestReservedEggSpeciesCount => _reservedEggSpecies.Count;
+        internal bool TestFruitStandFinished => FruitStandFinished;
+        internal int TestFruitSalesCount => _fruitSalesCount;
+        internal int TestSellerCount => _sellers.Count;
+
+        /// <summary>TEST HOOK. Run the REAL glut-guard/uniqueness resolution on a hand-built
+        /// item (no dig site, no pickup). Lets the Fruit Stand case assert that a dug fruit
+        /// stops downgrading to treasure once the stand is open. Drops any egg reservation the
+        /// resolution just made so repeated sampling stays stationary (mirrors TestRollDugItem).</summary>
+        internal DugItemInfo TestResolveItem(DugItemInfo info)
+        {
+            DugItemInfo resolved = ResolveDugItem(info);
+            if (resolved.Type == ItemType.Egg)
+            {
+                ReleaseEggSpecies(resolved.DinoType);
+            }
+
+            return resolved;
+        }
 
         /// <summary>TEST HOOK. Roll one dug item through the REAL pipeline: the dig
         /// site's loot roll (with the owned-species egg-shard nerf) then the uniqueness
@@ -2090,6 +2310,8 @@ namespace DinoDigger.Core
             _treeCooldownUntil.Clear();
             _courier = null;
             _carriedFruit = null;
+            _sellers.Clear();
+            _fruitSalesCount = 0;
             _paradeActive = false;
             _snifferTimer = SnifferIntervalSeconds;
             _snifferPulses = 0;

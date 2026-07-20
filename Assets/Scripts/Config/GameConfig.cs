@@ -86,6 +86,12 @@ namespace DinoDigger.Config
         public int[] ShardsPerHatchProgression = { 5, 8, 15, 20 };
 
         [Header("Dino Town (idle builder)")]
+        /// <summary>Build-order index of the Fruit Stand — the second building (price 25),
+        /// the first FUNCTIONAL one: once finished it turns surplus fruit into coins. A
+        /// compile-time const (not a serialized field) so an existing GameConfig asset
+        /// can't silently deserialize it to 0.</summary>
+        public const int FruitStandIndex = 1;
+
         [Tooltip("Curated build-price curve for the town, buildings 1..N (indexed 0-based). " +
                  "Coins auto-spend on the next building the moment the wallet clears its price. " +
                  "All nine entries build in order, one per town plot. Values from the design " +

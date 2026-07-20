@@ -42,6 +42,17 @@ namespace DinoDigger.Overworld
         private readonly List<DinoController> _builders = new List<DinoController>();
         private float _workPuffTimer;
 
+        /// <summary>True once the building at <paramref name="index"/> in build order has
+        /// FINISHED. Finished buildings occupy plots 0.._nextIndex-1, so this is derived
+        /// straight from the queue index (no per-building lookup). Used by the Fruit Stand
+        /// sell flow to ask "is the stand open for business?".</summary>
+        public bool IsBuildingFinished(int index) => index >= 0 && index < _nextIndex;
+
+        /// <summary>World position of the plot for the building at <paramref name="index"/>
+        /// (the drop-off point the Fruit Stand sell flow walks fruit to). Null-tolerant.</summary>
+        public Vector3 BuildingWorld(int index) =>
+            _area != null ? _area.PlotWorld(index) : transform.position;
+
         // TEST HOOKS (integration runner; no reflection).
         internal TownArea TestArea => _area;
         internal BuildingController TestActiveSite => _activeSite;
@@ -154,6 +165,15 @@ namespace DinoDigger.Overworld
                     new Color(0.78f, 0.62f, 0.42f), 0.3f)
                 : null;
             building.Init(_library, _config, sr, crumbs, initialState, initialWorked);
+
+            // Fruit Stand identity: the stand plot gets a warm tint + a bobbing fruit sign
+            // once it finishes (deferred inside BuildingController until IsFinished). Reuses
+            // an existing fruit sprite — zero new hand-made art. Null-tolerant.
+            if (index == GameConfig.FruitStandIndex && _library != null)
+            {
+                building.MarkFruitStand(_library.Fruit(0));
+            }
+
             return building;
         }
 

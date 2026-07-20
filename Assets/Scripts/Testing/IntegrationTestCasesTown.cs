@@ -431,6 +431,117 @@ namespace DinoDigger.Testing
             gm.TestReset();
         }
 
+        // ============================================= DinoDigger-pu3 Fruit Stand
+
+        // Once the Fruit Stand (building index GameConfig.FruitStandIndex) is finished,
+        // tapping a loose fruit that no dino wants SELLS it: (a) dug fruit stops downgrading
+        // to treasure (the glut guard widened — surplus fruit is sellable gameplay now), and
+        // (b) each sale banks a coin, with every 5th sale paying a jackpot gem instead. With
+        // no residents in the scene every sale takes the deterministic self-serve FALLBACK
+        // path (the fruit flies to the stand and sells itself), so no walking is timed.
+        private IEnumerator Case_FruitStandSellsSurplus(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset(); // clears all dinos -> nobody is hungry
+            TownController town = EnsureTown(ctx);
+            ctx.Assert(town.TestArea != null && town.TestArea.PlotCount > GameConfig.FruitStandIndex,
+                $"need > {GameConfig.FruitStandIndex} plots for the Fruit Stand test " +
+                $"(have {(town.TestArea != null ? town.TestArea.PlotCount : 0)})");
+
+            const int gemEverySale = 5; // mirrors GameManager.FruitStandGemEverySale
+
+            int savedNext = gm.Save.Data.TownNextIndex;
+            List<TownBuildingSave> savedList = gm.Save.Data.TownBuildings;
+            int savedWallet = gm.Save.Data.TreasureCount;
+            try
+            {
+                // Author every building up to and including the stand as FINISHED.
+                gm.Save.Data.TreasureCount = 0; // a clean wallet so no build auto-starts mid-test
+                gm.Save.Data.TownNextIndex = GameConfig.FruitStandIndex + 1;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>();
+                for (int i = 0; i <= GameConfig.FruitStandIndex; i++)
+                {
+                    gm.Save.Data.TownBuildings.Add(new TownBuildingSave
+                    {
+                        Finished = true,
+                        State = BuildingController.ConstructionStates,
+                    });
+                }
+
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+
+                ctx.Assert(town.IsBuildingFinished(GameConfig.FruitStandIndex),
+                    "Fruit Stand not reported finished after restore");
+                ctx.Assert(gm.TestFruitStandFinished,
+                    "GameManager does not see the Fruit Stand as open");
+
+                // Visual identity (guarded by art presence, like the sign/hat cases): the
+                // finished stand carries its warm tint + bobbing fruit sign.
+                Transform standT = town.transform.Find("Building_" + GameConfig.FruitStandIndex);
+                BuildingController standObj = standT != null ? standT.GetComponent<BuildingController>() : null;
+                ctx.Assert(standObj != null, "no Fruit Stand building object after restore");
+                bool fruitArt = gm.TestLibrary != null && gm.TestLibrary.Fruit(0) != null;
+                if (fruitArt)
+                {
+                    ctx.Assert(standObj.TestFruitStandDressed,
+                        "finished Fruit Stand is not dressed (warm tint + bobbing fruit sign)");
+                }
+
+                // (1) Glut-guard widened: with the stand open and nobody hungry, dug fruit no
+                //     longer downgrades to treasure — every sample stays fruit.
+                int stayedFruit = 0;
+                for (int i = 0; i < 40; i++)
+                {
+                    DugItemInfo r = gm.TestResolveItem(
+                        new DugItemInfo(ItemType.Fruit, DinoType.TRex, 0, Vector3.zero));
+                    if (r.Type == ItemType.Fruit)
+                    {
+                        stayedFruit++;
+                    }
+                }
+
+                ctx.Assert(stayedFruit == 40,
+                    $"dug fruit still downgraded with the stand open ({stayedFruit}/40 stayed fruit)");
+
+                // (2) Selling pays out: coins (value 1) for sales 1..4, a gem (value 3) on the
+                //     5th. No dino exists, so each sale runs the self-serve fallback.
+                Vector3 stand = town.BuildingWorld(GameConfig.FruitStandIndex);
+                int coinVal = gm.TestConfig.TreasureValue(0);
+                int gemVal = gm.TestConfig.TreasureValue(1);
+
+                for (int sale = 1; sale <= gemEverySale; sale++)
+                {
+                    int before = gm.Save.Data.TreasureCount;
+                    ItemPickup fruit = gm.TestSpawnItem(ItemType.Fruit, DinoType.TRex, 0,
+                        stand + new Vector3(1.2f, 0f, 0f));
+                    yield return ctx.WaitUntil(() => fruit == null || fruit.IsCarryableFruit);
+                    ctx.Assert(fruit != null, $"sale #{sale}: fruit vanished before it could be sold");
+
+                    gm.RequestFeed(fruit); // nobody hungry + stand open -> sell
+                    yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount > before);
+
+                    int delta = gm.Save.Data.TreasureCount - before;
+                    int expected = (sale % gemEverySale == 0) ? gemVal : coinVal;
+                    ctx.Assert(delta == expected,
+                        $"sale #{sale} banked {delta} (expected {expected})");
+                    ctx.Assert(gm.TestFruitSalesCount == sale,
+                        $"sale counter {gm.TestFruitSalesCount} != {sale}");
+                }
+
+                ctx.Log($"Fruit Stand open: dug fruit stopped downgrading (40/40 stayed fruit); " +
+                        $"5 surplus fruit sold self-serve banking {coinVal},{coinVal},{coinVal},{coinVal},{gemVal} " +
+                        "(jackpot gem on the 5th)");
+            }
+            finally
+            {
+                gm.Save.Data.TownNextIndex = savedNext;
+                gm.Save.Data.TownBuildings = savedList ?? new List<TownBuildingSave>();
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
         // ================================================================= HELPERS
 
         /// <summary>Return the scene's town (real or previously-injected), building a small

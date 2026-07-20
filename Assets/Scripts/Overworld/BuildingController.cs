@@ -25,11 +25,23 @@ namespace DinoDigger.Overworld
         private const int SignSortOffset = 1;              // just above the building
         private static readonly Vector3 SignOffset = new Vector3(0.55f, -0.05f, 0f); // toward screen-south/front
 
+        // Fruit Stand identity (DinoDigger-pu3): the stand building gets a warm produce-stall
+        // tint plus a fruit sprite that bobs above it like a shop sign, both applied only once
+        // the building FINISHES. Reuses an existing fruit sprite — no new hand-made art.
+        private static readonly Color FruitStandTint = new Color(1f, 0.82f, 0.55f); // warm produce-stall wash
+        private static readonly Vector3 StandSignOffset = new Vector3(0f, 0.9f, 0f);  // riding above the roof
+        private const int StandSignSortOffset = 2;
+
         private SpriteRenderer _renderer;
         private ParticleSystem _workFx;
         private PlaceholderLibrary _library;
         private GameObject _sign;
         private bool _signDismissed;
+
+        private bool _isFruitStand;
+        private Sprite _standSignSprite;
+        private GameObject _standSign;
+        private float _standBobPhase;
 
         private int _state;        // 0..3 building; == ConstructionStates (4) means finished
         private float _worked;     // seconds of builder work banked toward the next state
@@ -49,6 +61,8 @@ namespace DinoDigger.Overworld
         internal int TestState => _state;
         internal Sprite TestSprite => _renderer != null ? _renderer.sprite : null;
         internal bool TestSignActive => _sign != null && _sign.activeSelf;
+        internal bool TestFruitStandDressed => _isFruitStand && IsFinished &&
+                                               _standSign != null && _standSign.activeSelf;
 
         /// <summary>Wire the site's renderer, work particles, and per-state timing. Starts
         /// fresh at construction state 0 by default; a reloaded site passes its saved
@@ -99,6 +113,17 @@ namespace DinoDigger.Overworld
             return advanced;
         }
 
+        /// <summary>Flag this building as the Fruit Stand and hand it the fruit sprite to
+        /// fly as its shop sign. The dressing (warm tint + bobbing fruit) only shows once the
+        /// building is FINISHED, so a mid-build stand looks like any other site; re-applied
+        /// through <see cref="ApplyVisual"/> so a restored-finished stand dresses immediately.</summary>
+        public void MarkFruitStand(Sprite signSprite)
+        {
+            _isFruitStand = true;
+            _standSignSprite = signSprite;
+            ApplyVisual();
+        }
+
         /// <summary>Puff of dust/crumbs while the crew hammers (called by TownController).</summary>
         public void EmitWorkPuff()
         {
@@ -133,6 +158,54 @@ namespace DinoDigger.Overworld
             {
                 DismissSign();
             }
+
+            if (_isFruitStand)
+            {
+                ApplyFruitStandDressing();
+            }
+        }
+
+        /// <summary>Dress the FINISHED stand: warm the building sprite and raise the bobbing
+        /// fruit sign. No-op while still building (the stand looks like any site until done),
+        /// and null-tolerant so a stand with no fruit sprite simply keeps the tint.</summary>
+        private void ApplyFruitStandDressing()
+        {
+            if (_renderer == null || !IsFinished)
+            {
+                return;
+            }
+
+            _renderer.color = FruitStandTint;
+
+            if (_standSign == null && _standSignSprite != null)
+            {
+                _standSign = new GameObject("FruitStandSign");
+                _standSign.transform.SetParent(transform, false);
+                _standSign.transform.localPosition = StandSignOffset;
+
+                var sr = _standSign.AddComponent<SpriteRenderer>();
+                sr.sprite = _standSignSprite;
+                sr.sortingOrder = _renderer.sortingOrder + StandSignSortOffset;
+            }
+
+            if (_standSign != null)
+            {
+                _standSign.SetActive(true);
+            }
+        }
+
+        /// <summary>Gentle idle bob for the fruit shop-sign so the finished stand reads as
+        /// "open for business". Only runs once the sign exists (finished stand).</summary>
+        private void Update()
+        {
+            if (_standSign == null || !_standSign.activeSelf)
+            {
+                return;
+            }
+
+            _standBobPhase += Time.deltaTime * 2.5f;
+            float y = Mathf.Sin(_standBobPhase) * 0.08f;
+            _standSign.transform.localPosition = StandSignOffset + new Vector3(0f, y, 0f);
         }
 
         /// <summary>Plant the "under construction" barrier sign in front of the site (bottom-center

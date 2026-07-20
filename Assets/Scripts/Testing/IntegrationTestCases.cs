@@ -64,6 +64,7 @@ namespace DinoDigger.Testing
                 new TestCase("BuilderCommutesFromMeadow",    45f, Case_BuilderCommutesFromMeadow),
                 new TestCase("BuildingFinishesAndCelebrates", 50f, Case_BuildingFinishesAndCelebrates),
                 new TestCase("PlayerControlUnaffectedByBuild", 45f, Case_PlayerControlUnaffectedByBuild),
+                new TestCase("FruitStandSellsSurplus", 40f, Case_FruitStandSellsSurplus),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }
