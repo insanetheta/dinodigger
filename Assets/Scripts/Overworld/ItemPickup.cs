@@ -18,6 +18,7 @@ namespace DinoDigger.Overworld
         private ItemType _type;
         private DinoType _dinoType;
         private int _variant;   // treasure/fruit sub-kind; treasure uses it for its coin value
+        private int _valueOverride = -1; // >=0 banks this many coins instead of the variant value
         private GameConfig _config;
         private PlaceholderLibrary _lib;
 
@@ -34,6 +35,16 @@ namespace DinoDigger.Overworld
         public int Variant => _variant;
         public bool IsConsumed => _consumed;
         public bool IsCarried => _carried;
+
+        /// <summary>Coins banked when this treasure is collected, or -1 to use the variant's
+        /// configured denomination. Set for special rewards (e.g. the Big Bone surprise, which
+        /// shows the bone sprite but banks 5) so they need no fake treasure variant.</summary>
+        public int ValueOverride => _valueOverride;
+
+        public void SetValueOverride(int coins)
+        {
+            _valueOverride = coins;
+        }
 
         /// <summary>Landed, edible, untouched fruit — a candidate for the Trike courier.</summary>
         public bool IsCarryableFruit => _type == ItemType.Fruit && _landed && _edible &&

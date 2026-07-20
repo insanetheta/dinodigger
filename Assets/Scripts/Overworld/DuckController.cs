@@ -33,6 +33,10 @@ namespace DinoDigger.Overworld
         private float _timer;
         private readonly List<Duck> _alive = new List<Duck>();
 
+        /// <summary>The side-view duck sprite, borrowed by the Duck! dig surprise so it can
+        /// fly the same duck art without its own wiring. Null when no duck art is present.</summary>
+        internal Sprite SurpriseSprite => _sideSprite;
+
         public void Configure(StreamNetwork streams, OverworldMap map, Sprite side, Sprite fly,
             Transform overworldRoot)
         {

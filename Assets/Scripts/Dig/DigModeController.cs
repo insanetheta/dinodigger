@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using DinoDigger.Config;
 using DinoDigger.Core;
+using DinoDigger.Overworld;   // ItemPickup (Big Bone value override)
 
 namespace DinoDigger.Dig
 {
@@ -103,6 +104,36 @@ namespace DinoDigger.Dig
         // Active dig postcard theme (tints + loot skew + item count). Null = the flat
         // default config weights/counts + no tint (identical to Meadow Classic).
         private DigTheme _theme;
+
+        // ---- Surprise Pockets -------------------------------------------------
+        // Exactly one non-item tile per site is marked as a wiggling mystery pocket. When
+        // it is FULLY CLEARED by ANY path (a player bite, a crew clear, or a geode chain) it
+        // fires a single delightful one-shot from a small weighted pool, then is done. It
+        // never shows a peek and never gates FinishDig (an uncracked pocket just vanishes
+        // with the site). All coin output rides the existing reward/bank path; no eggs/shards
+        // ever drop from a surprise (progression pacing is untouched).
+        private const bool SurprisePocketEnabled = true;
+
+        // The pool, drawn per site with the LAST-SEEN kind excluded so two sites in a row
+        // never surprise the same way. Weights are Giggle 4 / Duck 3 / Geode 2 / BigBone 1.
+        private enum SurpriseKind { Giggle, Duck, Geode, BigBone }
+        private static readonly int[] SurpriseWeights = { 4, 3, 2, 1 };
+        private static int _lastSurprise = -1; // transient across sessions (static is fine)
+
+        private const int GiggleCoins = 3;           // coins that arc out of a Giggle Pocket
+        private const float GiggleCoinStagger = 0.15f; // one after another
+        private const float GeodeStagger = 0.06f;    // per-neighbour radial crumble delay
+        private const int BigBoneVariant = 3;        // the bone treasure sprite
+        private const int BigBoneCoins = 5;          // banked via a value override (not a fake variant)
+
+        private DirtTile _surpriseTile;
+        private SurpriseKind _surpriseKind;
+        private bool _surpriseFired;
+        private int _surpriseFireCount; // test-observable: must stay 1 across every clear path
+
+        // TEST HOOK. Force the next site's surprise kind (>= 0 selects a SurpriseKind and
+        // updates the last-seen index; -1 = roll normally). Reset by the test after use.
+        internal static int TestForceSurpriseKind = -1;
 
         // ---- Excavator rig geometry + timing --------------------------------
         // DIG-VIEW STAGING (close-up cutaway): the body renders BIG (2.4 units
@@ -221,6 +252,24 @@ namespace DinoDigger.Dig
         internal int TestBites => _bites;
         internal int TestFoundCount => _found.Count;
 
+        // ---- Surprise Pocket test hooks ----
+        internal DirtTile TestSurpriseTile => _surpriseTile;
+        internal int TestSurpriseKind => (int)_surpriseKind;
+        internal bool TestSurpriseFired => _surpriseFired;
+        internal int TestSurpriseFireCount => _surpriseFireCount;
+        internal static int TestLastSurprise => _lastSurprise;
+
+        /// <summary>TEST HOOK. Fully clear the surprise tile through the SAME crew-clear
+        /// chokepoint the Trike headbutt / geode chain use (ClearTileFully -> CollectIfBuried),
+        /// so a test can prove the pocket fires on a non-tap path and never fires twice.</summary>
+        internal void TestClearSurpriseTile()
+        {
+            if (_surpriseTile != null)
+            {
+                ClearTileFully(_surpriseTile);
+            }
+        }
+
         // True when the excavator arm is parked and free to accept a fresh tap:
         // no bite in flight and an empty dig queue. The arm bites ONE tile at a
         // time and dedups a tile that is already the active/queued bite, so a
@@ -230,7 +279,9 @@ namespace DinoDigger.Dig
         internal bool TestArmReady =>
             _arm == ArmState.Idle && _activeTile == null && _digQueue.Count == 0;
 
-        internal DirtTile TestTileAt(int r, int c)
+        internal DirtTile TestTileAt(int r, int c) => TileAt(r, c);
+
+        private DirtTile TileAt(int r, int c)
         {
             if (_grid == null || r < 0 || r >= _rows || c < 0 || c >= _cols)
             {
@@ -375,6 +426,7 @@ namespace DinoDigger.Dig
             }
 
             PlaceItems();
+            PlaceSurprisePocket();
             PlaceBackhoe(origin, halfW);
 
             // Stegosaurus "treasure map": once at the start of the round, every buried
@@ -1090,6 +1142,289 @@ namespace DinoDigger.Dig
             return (DinoType)Random.Range(0, 4);
         }
 
+        // ----- Surprise Pocket -----
+
+        /// <summary>Mark exactly one NON-item tile (preferring rows below the top so it takes
+        /// a couple of bites) as the wiggling surprise pocket, and roll which one-shot it will
+        /// fire. Resets the per-site surprise bookkeeping. No-op when the feature is off or the
+        /// (tiny) grid has no free tile.</summary>
+        private void PlaceSurprisePocket()
+        {
+            _surpriseTile = null;
+            _surpriseFired = false;
+            _surpriseFireCount = 0;
+
+            if (!SurprisePocketEnabled || _tiles.Count == 0)
+            {
+                return;
+            }
+
+            // Prefer a non-item tile below the top row; fall back to any non-item tile.
+            var deep = new List<DirtTile>();
+            var any = new List<DirtTile>();
+            for (int i = 0; i < _tiles.Count; i++)
+            {
+                DirtTile t = _tiles[i];
+                if (t == null || t.HasItem)
+                {
+                    continue;
+                }
+
+                any.Add(t);
+                if (t.Row > 0)
+                {
+                    deep.Add(t);
+                }
+            }
+
+            List<DirtTile> pool = deep.Count > 0 ? deep : any;
+            if (pool.Count == 0)
+            {
+                return; // every tile hides an item (tiny grid): skip the pocket this site
+            }
+
+            _surpriseTile = pool[Random.Range(0, pool.Count)];
+            _surpriseTile.MarkSurprise();
+            _surpriseKind = RollSurprise();
+        }
+
+        /// <summary>Draw a surprise kind by weight with the LAST-SEEN kind excluded (so two
+        /// sites never surprise the same way in a row). A forced test kind overrides the roll
+        /// but still updates the last-seen index.</summary>
+        private SurpriseKind RollSurprise()
+        {
+            if (TestForceSurpriseKind >= 0 && TestForceSurpriseKind < SurpriseWeights.Length)
+            {
+                _lastSurprise = TestForceSurpriseKind;
+                return (SurpriseKind)TestForceSurpriseKind;
+            }
+
+            int total = 0;
+            for (int k = 0; k < SurpriseWeights.Length; k++)
+            {
+                if (k != _lastSurprise)
+                {
+                    total += SurpriseWeights[k];
+                }
+            }
+
+            int roll = Random.Range(0, Mathf.Max(1, total));
+            int picked = 0;
+            int acc = 0;
+            for (int k = 0; k < SurpriseWeights.Length; k++)
+            {
+                if (k == _lastSurprise)
+                {
+                    continue;
+                }
+
+                acc += SurpriseWeights[k];
+                if (roll < acc)
+                {
+                    picked = k;
+                    break;
+                }
+            }
+
+            _lastSurprise = picked;
+            return (SurpriseKind)picked;
+        }
+
+        /// <summary>Fire the rolled surprise EXACTLY ONCE. Called from CollectIfBuried — the one
+        /// chokepoint every full-clear path funnels through (tap bite, T-Rex adjacent, Trike
+        /// column, geode chain) — so any path that clears the pocket triggers it, and the
+        /// _surpriseFired guard makes a re-clear a no-op.</summary>
+        private void FireSurprise(DirtTile tile)
+        {
+            _surpriseFireCount++;
+            Vector3 at = tile != null ? tile.transform.position : _origin;
+
+            switch (_surpriseKind)
+            {
+                case SurpriseKind.Giggle:
+                    FireGiggle(at);
+                    break;
+                case SurpriseKind.Duck:
+                    FireDuck(at);
+                    break;
+                case SurpriseKind.Geode:
+                    FireGeode(tile);
+                    break;
+                case SurpriseKind.BigBone:
+                    FireBigBone(at);
+                    break;
+            }
+        }
+
+        /// <summary>Giggle Pocket: a confetti burst + a giggle-ish chime, then three coins arc
+        /// out of the pit one after another and auto-bank through the guarded collect path.</summary>
+        private void FireGiggle(Vector3 at)
+        {
+            GameManager gm = GameManager.Instance;
+            if (gm == null)
+            {
+                return;
+            }
+
+            SpawnPitBurst(at, new Color(1f, 0.85f, 0.3f), 26);
+            gm.Audio?.Chime();
+
+            for (int i = 0; i < GiggleCoins; i++)
+            {
+                Tween.After(i * GiggleCoinStagger, () =>
+                {
+                    GameManager g = GameManager.Instance;
+                    g?.SpawnRewardPickup(ItemType.Treasure, DinoType.TRex, 0, g.RewardSpawnPoint);
+                });
+            }
+        }
+
+        /// <summary>Duck!: a duck pops out, quacks, and flies an arc off the top of the pit,
+        /// dropping one coin (treasure variant 0) as it exits. Falls back to an invisible flyer
+        /// if no duck art is reachable — the coin still drops.</summary>
+        private void FireDuck(Vector3 at)
+        {
+            GameManager gm = GameManager.Instance;
+            if (gm == null)
+            {
+                return;
+            }
+
+            gm.Audio?.Honk(); // the duck's honk-quack (reuses the wired duck catch sound)
+
+            var go = new GameObject("SurpriseDuckFX");
+            go.transform.SetParent(_root != null ? _root : transform, false);
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = gm.DuckSprite; // null-safe: an invisible flyer still drops the coin
+            sr.sortingOrder = 30;
+            go.transform.position = at;
+            go.transform.localScale = Vector3.one * 3f;
+
+            Vector3 to = at + new Vector3(2.2f, DigBodyH + 4.5f, 0f); // up and off the top
+            Tween.MoveArc(go.transform, at, to, 2.2f, 0.9f, () =>
+            {
+                if (go != null)
+                {
+                    Destroy(go);
+                }
+            });
+
+            // Drop one coin as the duck exits.
+            Tween.After(0.7f, () =>
+            {
+                GameManager g = GameManager.Instance;
+                g?.SpawnRewardPickup(ItemType.Treasure, DinoType.TRex, 0, g.RewardSpawnPoint);
+            });
+        }
+
+        /// <summary>Rainbow Geode: the ring of neighbouring tiles chain-crumbles outward with
+        /// sparkles (like a radial HeadbuttColumn), reusing ClearTileFully so any buried item a
+        /// neighbour hid is collected too — which can help finish the round.</summary>
+        private void FireGeode(DirtTile center)
+        {
+            if (center == null)
+            {
+                return;
+            }
+
+            GameManager.Instance?.Audio?.Chime();
+            SpawnPitBurst(center.transform.position, new Color(0.6f, 0.9f, 1f), 22);
+
+            // 8-neighbour ring, staggered so it reads as a tumble outward.
+            int[] dr = { -1, 1, 0, 0, -1, -1, 1, 1 };
+            int[] dc = { 0, 0, -1, 1, -1, 1, -1, 1 };
+            for (int i = 0; i < 8; i++)
+            {
+                int r = center.Row + dr[i];
+                int c = center.Col + dc[i];
+                Tween.After(i * GeodeStagger, () =>
+                {
+                    if (!_open || _finished || _grid == null)
+                    {
+                        return;
+                    }
+
+                    DirtTile t = TileAt(r, c);
+                    if (t == null || t.IsDestroyed)
+                    {
+                        return;
+                    }
+
+                    SpawnPitBurst(t.transform.position, new Color(0.7f, 0.95f, 1f), 8);
+                    ClearTileFully(t);
+                });
+            }
+        }
+
+        /// <summary>Big Bone (rare): a bone pops out scaled x2 with a big punch, then shrinks
+        /// away — while the real payout banks 5 coins through the guarded collect path via a
+        /// value override on a bone-variant reward (no fake variants).</summary>
+        private void FireBigBone(Vector3 at)
+        {
+            GameManager gm = GameManager.Instance;
+            if (gm == null)
+            {
+                return;
+            }
+
+            gm.Audio?.ItemPop();
+
+            Sprite bone = _lib != null ? _lib.Treasure(BigBoneVariant) : null;
+            if (bone != null)
+            {
+                var go = new GameObject("SurpriseBoneFX");
+                go.transform.SetParent(_root != null ? _root : transform, false);
+                var sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = bone;
+                sr.sortingOrder = 30;
+                go.transform.position = at + new Vector3(0f, 0.4f, 0f);
+                go.transform.localScale = Vector3.one * 2f;
+                Tween.PunchScale(go.transform, 0.6f, 0.5f);
+                Tween.After(0.9f, () =>
+                {
+                    Tween.ScaleTo(go.transform, Vector3.zero, 0.3f, () =>
+                    {
+                        if (go != null)
+                        {
+                            Destroy(go);
+                        }
+                    });
+                });
+            }
+
+            ItemPickup p = gm.SpawnRewardPickup(ItemType.Treasure, DinoType.TRex, BigBoneVariant,
+                gm.RewardSpawnPoint);
+            p?.SetValueOverride(BigBoneCoins);
+        }
+
+        /// <summary>A little colourful star burst inside the pit (parented to the dig root),
+        /// reusing GameManager's particle factory. Cleaned up shortly after.</summary>
+        private void SpawnPitBurst(Vector3 at, Color color, int count)
+        {
+            GameManager gm = GameManager.Instance;
+            if (gm == null || _lib == null)
+            {
+                return;
+            }
+
+            ParticleSystem ps = gm.TownCreateParticles(_root != null ? _root : transform,
+                _lib.StarParticle, color, 0.35f);
+            if (ps == null)
+            {
+                return;
+            }
+
+            ps.transform.position = at;
+            ps.Emit(count);
+            Tween.After(2f, () =>
+            {
+                if (ps != null)
+                {
+                    Destroy(ps.gameObject);
+                }
+            });
+        }
+
         // ----- Tap handling -----
 
         public void OnTileTapped(DirtTile tile)
@@ -1167,7 +1502,22 @@ namespace DinoDigger.Dig
         /// </summary>
         private void CollectIfBuried(DirtTile tile)
         {
-            if (_finished || tile == null || !_buried.TryGetValue(tile, out Buried b))
+            if (_finished || tile == null)
+            {
+                return;
+            }
+
+            // Surprise Pocket: this is the one chokepoint every full-clear path funnels
+            // through, so firing here (guarded to once) covers the tap bite, the T-Rex
+            // adjacent clear, the Trike column, and the geode chain alike. The pocket tile
+            // hides no item, so it falls through the buried lookup below with no double-handling.
+            if (tile == _surpriseTile && !_surpriseFired)
+            {
+                _surpriseFired = true;
+                FireSurprise(tile);
+            }
+
+            if (!_buried.TryGetValue(tile, out Buried b))
             {
                 return;
             }

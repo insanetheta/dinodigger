@@ -25,9 +25,19 @@ namespace DinoDigger.Dig
         // the hint reads brighter all round). Default 0.55 = the baseline buried hint.
         private float _restPeekAlpha = 0.55f;
 
+        // Surprise Pocket: the site's one mystery tile wiggles gently FOREVER (a small
+        // looping sway on top of the crack sprite) so a toddler can spot it. It never
+        // shows a buried peek; the surprise fires when it is fully cleared (owner side).
+        private bool _isSurprise;
+        private bool _wiggling;
+        private float _wigglePhase;
+        private const float WiggleRate = 3.2f;    // sway speed (rad/s)
+        private const float WiggleDegrees = 7f;   // sway amplitude
+
         public int Row { get; private set; }
         public int Col { get; private set; }
         public bool HasItem { get; private set; }
+        public bool IsSurprise => _isSurprise;
         public bool IsDestroyed => _destroyed;
 
         // TEST HOOKS for the integration runner (damage progression + peek visibility).
@@ -37,6 +47,7 @@ namespace DinoDigger.Dig
         internal Color TestDirtColor => _dirt != null ? _dirt.color : Color.white;
         internal bool TestPeekEnabled => _peek != null && _peek.enabled;
         internal float TestPeekAlpha => _peek != null ? _peek.color.a : 0f;
+        internal bool TestIsSurprise => _isSurprise;
 
         public void Build(DigModeController owner, PlaceholderLibrary lib, int row, int col,
             int maxHealth, ParticleSystem crumbs)
@@ -118,6 +129,29 @@ namespace DinoDigger.Dig
             });
         }
 
+        /// <summary>Mark this tile as the site's Surprise Pocket: it wiggles gently forever
+        /// so a toddler can spot it. Marking never adds a buried peek (a surprise tile is
+        /// always chosen from the non-item tiles), so the wiggle is the only hint.</summary>
+        public void MarkSurprise()
+        {
+            _isSurprise = true;
+            _wiggling = true;
+            _wigglePhase = Random.value * Mathf.PI * 2f;
+        }
+
+        private void Update()
+        {
+            if (!_wiggling || _destroyed)
+            {
+                return;
+            }
+
+            // Gentle looping sway (rotation only — independent of the Damage punch-scale).
+            _wigglePhase += Time.deltaTime * WiggleRate;
+            float ang = Mathf.Sin(_wigglePhase) * WiggleDegrees;
+            transform.localRotation = Quaternion.Euler(0f, 0f, ang);
+        }
+
         public void OnTapped(Vector2 worldPoint)
         {
             _owner?.OnTileTapped(this);
@@ -165,6 +199,8 @@ namespace DinoDigger.Dig
         private void Crumble()
         {
             _destroyed = true;
+            _wiggling = false;
+            transform.localRotation = Quaternion.identity; // undo any surprise sway
             if (_dirt != null)
             {
                 _dirt.enabled = false;

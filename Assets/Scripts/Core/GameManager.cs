@@ -650,6 +650,32 @@ namespace DinoDigger.Core
             return CreatePickup(info, landing);
         }
 
+        /// <summary>World spot where a dig-surprise reward pops out: the overworld backhoe's
+        /// position (where dug loot spills). SpawnRewardPickup clamps it to walkable ground and
+        /// then the coin flies to the corner counter — so surprises fired inside the dig site
+        /// still bank cleanly through the existing path.</summary>
+        public Vector3 RewardSpawnPoint =>
+            _backhoe != null ? _backhoe.transform.position : Vector3.zero;
+
+        // Cached scene duck spawner, resolved lazily so the Duck! surprise can borrow the
+        // duck's own art without a new serialized wire or a scene rebuild.
+        private DuckController _duckSpawner;
+
+        /// <summary>The ambient duck's side sprite, for the Duck! dig surprise. Null when no
+        /// duck art / spawner is present (the surprise then flies an invisible duck).</summary>
+        public Sprite DuckSprite
+        {
+            get
+            {
+                if (_duckSpawner == null)
+                {
+                    _duckSpawner = FindAnyObjectByType<DuckController>();
+                }
+
+                return _duckSpawner != null ? _duckSpawner.SurpriseSprite : null;
+            }
+        }
+
         /// <summary>Harvest a ripe Berry Sprout: pop one fruit of <paramref name="variant"/>
         /// out of the sprout in an arc to a nearby walkable landing spot, through the SAME
         /// pickup path as dug fruit — so it bobs, its tap routes into the feed chain, and the
@@ -1891,8 +1917,11 @@ namespace DinoDigger.Core
                 : treasure.transform.position + Vector3.up * 3f;
 
             // Denominations: each treasure variant banks its configured value (coin=1,
-            // gem=3, boot=1, bone=2), clamped so an odd variant safely banks 1.
-            int value = _config != null ? _config.TreasureValue(treasure.Variant) : 1;
+            // gem=3, boot=1, bone=2), clamped so an odd variant safely banks 1. A reward may
+            // carry a value override (e.g. the Big Bone surprise: a bone sprite that banks 5).
+            int value = treasure.ValueOverride >= 0
+                ? treasure.ValueOverride
+                : (_config != null ? _config.TreasureValue(treasure.Variant) : 1);
 
             Tween.MoveArc(treasure.transform, treasure.transform.position, target, 1.2f, 0.6f, () =>
             {

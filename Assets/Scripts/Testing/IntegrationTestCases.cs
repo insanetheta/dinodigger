@@ -75,6 +75,9 @@ namespace DinoDigger.Testing
                 // would inflate the persistent wallet over the town's build threshold and
                 // let the always-on town builder spend during a count-exact case.
                 new TestCase("BuddyDigCrew",         80f, Case_BuddyDigCrew),
+                // Runs late alongside BuddyDigCrew: a fired Giggle Pocket banks coins, which
+                // would inflate the wallet ahead of the count-exact treasure/town cases.
+                new TestCase("SurprisePocket",       90f, Case_SurprisePocket),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }
@@ -1715,6 +1718,143 @@ namespace DinoDigger.Testing
             ctx.Log("crew: 2 helpers + Stego map + Trike headbutt; Brachio bonus x1 through ResolveDugItem; " +
                     "no-buddy clean; Big T-Rex adjacent clear ok");
             gm.TestForceRoam();
+        }
+
+        // Surprise Pockets: one wiggling non-item tile per site fires a delightful one-shot
+        // when cracked (from a last-seen-excluded pool). Covers placement (exactly one, no
+        // peek), Giggle banking 3 coins through the guarded collect path, exactly-once firing
+        // across the crew-clear + tap paths, the round still finishing with the pocket
+        // uncracked, and the last-seen exclusion rotating the pool.
+        private IEnumerator Case_SurprisePocket(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            DigModeController dm = gm.TestDigMode;
+            ctx.Assert(dm != null, "no dig controller");
+
+            try
+            {
+                // ---- Placement: exactly one surprise tile, on a non-item tile, no peek ----
+                gm.TestReset();
+                DigModeController.TestForceSurpriseKind = -1;
+                dm.TestBuildThemedSite(null);
+                yield return ctx.WaitFrames(1);
+
+                DirtTile surprise = dm.TestSurpriseTile;
+                ctx.Assert(surprise != null, "no surprise tile placed at the site");
+                ctx.Assert(!surprise.HasItem, "surprise tile sits on a buried-item tile");
+                ctx.Assert(!surprise.TestPeekEnabled, "surprise tile shows a buried peek");
+                ctx.Assert(surprise.TestIsSurprise, "surprise tile not marked wiggling");
+
+                int surpriseCount = 0;
+                IReadOnlyList<DirtTile> tiles = dm.TestTiles;
+                for (int i = 0; i < tiles.Count; i++)
+                {
+                    if (tiles[i] != null && tiles[i].TestIsSurprise)
+                    {
+                        surpriseCount++;
+                    }
+                }
+
+                ctx.Assert(surpriseCount == 1, $"expected exactly 1 surprise tile, found {surpriseCount}");
+                gm.TestForceRoam();
+
+                // ---- Last-seen exclusion rotates the pool (no two sites in a row alike) ----
+                int prevKind = -1;
+                for (int s = 0; s < 6; s++)
+                {
+                    dm.TestBuildThemedSite(null);
+                    yield return ctx.WaitFrames(1);
+                    int kind = dm.TestSurpriseKind;
+                    if (s > 0)
+                    {
+                        ctx.Assert(kind != prevKind, $"surprise kind {kind} repeated the last-seen kind");
+                    }
+
+                    prevKind = kind;
+                    gm.TestForceRoam();
+                }
+
+                // ---- Giggle Pocket fires ONCE on a tap and banks 3 coins ----
+                // Count TreasureCollected events: the always-on town auto-spend uses SetCount
+                // (no event), so this stays exact even with a fat late-suite wallet.
+                int bankEvents = 0;
+                Action<int> onBank = _ => bankEvents++;
+                GameEvents.TreasureCollected += onBank;
+                try
+                {
+                    gm.TestReset();
+                    DigModeController.TestForceSurpriseKind = 0; // Giggle
+                    yield return EnterDig(ctx);
+                    dm = gm.TestDigMode;
+                    DirtTile pocket = dm.TestSurpriseTile;
+                    ctx.Assert(pocket != null && !pocket.HasItem, "Giggle site has no clean surprise tile");
+
+                    bankEvents = 0;
+                    yield return TapTileUntilDestroyed(ctx, dm, pocket);
+                    ctx.Assert(dm.TestSurpriseFired, "Giggle pocket did not fire when cracked");
+                    ctx.Assert(dm.TestSurpriseFireCount == 1,
+                        $"Giggle fired {dm.TestSurpriseFireCount}x on one crack");
+
+                    yield return ctx.WaitUntil(() => bankEvents >= 3);
+                    yield return ctx.WaitSecondsScaled(0.4f); // let any stray extra bank surface
+                    ctx.Assert(bankEvents == 3, $"Giggle banked {bankEvents} coins (expected 3)");
+                    ctx.Assert(!gm.State.Is(GameState.Roam), "cracking the pocket wrongly ended the round");
+                    gm.TestForceRoam();
+                }
+                finally
+                {
+                    GameEvents.TreasureCollected -= onBank;
+                }
+
+                // ---- Never fires twice across a crew-clear + a follow-up tap ----
+                gm.TestReset();
+                DigModeController.TestForceSurpriseKind = 2; // Geode (a chain-clear path)
+                yield return EnterDig(ctx);
+                dm = gm.TestDigMode;
+                DirtTile pocket2 = dm.TestSurpriseTile;
+                ctx.Assert(pocket2 != null, "no surprise tile for the double-fire check");
+                Vector3 pocketPos = pocket2.transform.position; // capture before it is destroyed
+
+                dm.TestClearSurpriseTile(); // crew-clear chokepoint fires it once
+                yield return ctx.WaitFrames(1);
+                ctx.Assert(dm.TestSurpriseFired && dm.TestSurpriseFireCount == 1,
+                    $"crew-clear fired {dm.TestSurpriseFireCount}x (expected 1)");
+
+                ctx.TapWorld(pocketPos); // re-tap the now-cleared tile must NOT re-fire
+                yield return ctx.WaitFrames(3);
+                ctx.Assert(dm.TestSurpriseFireCount == 1,
+                    $"pocket fired again on re-tap ({dm.TestSurpriseFireCount})");
+                gm.TestForceRoam();
+
+                // ---- Round still finishes with the pocket left uncracked ----
+                gm.TestReset();
+                DigModeController.TestForceSurpriseKind = 0; // (kind irrelevant; never cracked)
+                yield return EnterDig(ctx);
+                dm = gm.TestDigMode;
+                ctx.Assert(dm.TestSurpriseTile != null, "no surprise tile for the finish check");
+
+                int guard = 0;
+                while (gm.State.Is(GameState.Dig) && dm.TestBuriedCount > 0 && guard++ < 60)
+                {
+                    List<DirtTile> remaining = dm.TestBuriedTiles();
+                    if (remaining.Count == 0)
+                    {
+                        break;
+                    }
+
+                    yield return TapTileUntilDestroyed(ctx, dm, remaining[0]);
+                }
+
+                yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam));
+                ctx.Assert(!dm.TestSurpriseFired, "surprise fired even though it was never cracked");
+
+                ctx.Log("1 wiggling non-item pocket/site (no peek); Giggle banks 3 coins; fires exactly once " +
+                        "across crew-clear + tap; round finishes with an uncracked pocket; pool rotates");
+            }
+            finally
+            {
+                DigModeController.TestForceSurpriseKind = -1;
+            }
         }
 
         // ============================================================ TREASURE / UI
