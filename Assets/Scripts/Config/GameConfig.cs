@@ -110,6 +110,20 @@ namespace DinoDigger.Config
         [Tooltip("Walk-speed multiplier for a resident commuting from the meadow to a build site.")]
         public float TownBuilderCommuteSpeed = 1.1f;
 
+        [Header("Rock Smash (Ankylosaurus)")]
+        [Tooltip("A buddy Ankylosaurus must be at least this close to a tapped rock to " +
+                 "smash it open (same reach as the Brachio tree-shake).")]
+        public float RockSmashRange = 3f;
+
+        [Tooltip("Per-rock cooldown after a smash: the same rock can't pay out again " +
+                 "until this many seconds pass (a tap still wiggles for feedback).")]
+        public float RockCooldownSeconds = 15f;
+
+        [Tooltip("Chance a smashed rock coughs up an egg SHARD instead of treasure — but " +
+                 "only while shard species remain unhatched; once the nest is complete it " +
+                 "is always treasure (mirrors the dig-loot shard gate).")]
+        public float RockShardChance = 0.1f;
+
         [Header("Feel")]
         public float IdleAttractSeconds = 15f;
         public float ParentGateHoldSeconds = 3f;

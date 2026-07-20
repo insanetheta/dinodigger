@@ -51,6 +51,7 @@ namespace DinoDigger.Testing
                 new TestCase("MeadowContainsResidents", 25f, Case_MeadowContainsResidents),
                 new TestCase("MoundsAvoidMeadow",    20f, Case_MoundsAvoidMeadow),
                 new TestCase("BrachioTreeShake",     30f, Case_BrachioTreeShake),
+                new TestCase("AnkyRockSmash",        40f, Case_AnkyRockSmash),
                 new TestCase("StegoSniff",           25f, Case_StegoSniff),
                 new TestCase("TrikeCarry",           35f, Case_TrikeCarry),
                 new TestCase("ParadeOnce",           30f, Case_ParadeOnce),
@@ -2191,6 +2192,135 @@ namespace DinoDigger.Testing
             gm.TestReset();
         }
 
+        // Ankylosaurus rock smash: a rock tapped with NO Anky buddy only wiggles
+        // (no payout); a buddy Anky in range walks over, tail-clubs it and loot pops
+        // out; a second tap while the rock is on cooldown does NOT pay out again; and
+        // the treasure-vs-shard payout is gated on unhatched shard species.
+        private IEnumerator Case_AnkyRockSmash(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+
+            ctx.Assert(FindRockCell(gm, out Vector3Int rockCell, out Vector3 rockWorld),
+                "no rock tile found on the island");
+
+            // 1) Wiggle-only: no Anky buddy present -> the rock must NOT pay out.
+            gm.TestTapWorldRouted(rockWorld);
+            yield return ctx.WaitSecondsScaled(0.5f);
+            ctx.Assert(gm.TestRockSmashPayouts == 0, "rock paid out with no Ankylosaurus buddy present");
+
+            // 2) Smash: a buddy Anky in range breaks the rock open.
+            DinoController anky = gm.TestSpawnDino(DinoType.Ankylosaurus, GrowthStage.Kid);
+            ctx.Assert(anky != null && anky.IsBuddy, "buddy Anky spawn failed");
+            yield return ctx.WaitFrames(2);
+
+            // Park the backhoe beside the rock so the buddy's follow slot stays inside
+            // the smash range (same framing as the tree-shake case), let it settle, then
+            // drop the Anky ~1.0-2.7 world units off the rock: clear of its own tap
+            // collider but well inside RockSmashRange.
+            gm.TestBackhoe.transform.position = WalkableNear(gm.TestMap, rockWorld);
+            Physics2D.SyncTransforms();
+            yield return ctx.WaitSecondsScaled(0.5f);
+
+            Vector3 beside = rockWorld;
+            bool placed = false;
+            for (int ring = 1; ring <= 6 && !placed; ring++)
+            {
+                for (int ox = -ring; ox <= ring && !placed; ox++)
+                {
+                    for (int oy = -ring; oy <= ring && !placed; oy++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(ox), Mathf.Abs(oy)) != ring)
+                        {
+                            continue; // ring perimeter only (nearest cells first)
+                        }
+
+                        var c = new Vector3Int(rockCell.x + ox, rockCell.y + oy, 0);
+                        if (!gm.TestMap.IsWalkableCell(c))
+                        {
+                            continue;
+                        }
+
+                        Vector3 w = gm.TestMap.CellCenter(c);
+                        float dm = (w - rockWorld).magnitude;
+                        if (dm >= 1.0f && dm <= 2.7f)
+                        {
+                            beside = w;
+                            placed = true;
+                        }
+                    }
+                }
+            }
+
+            ctx.Assert(placed,
+                "no walkable cell 1.0-2.7 units from the rock (clear of the dino tap collider, inside smash range)");
+
+            anky.transform.position = beside;
+            Physics2D.SyncTransforms();
+
+            gm.TestTapWorldRouted(rockWorld);
+            yield return ctx.WaitUntil(() => gm.TestRockSmashPayouts >= 1);
+            ctx.Assert(gm.TestRockSmashPayouts == 1, $"rock produced {gm.TestRockSmashPayouts} payouts (expected 1)");
+
+            // 3) Cooldown: an immediate second tap on the SAME rock must not pay out
+            // again (it still wiggles for feedback).
+            gm.TestTapWorldRouted(rockWorld);
+            yield return ctx.WaitSecondsScaled(0.8f);
+            ctx.Assert(gm.TestRockSmashPayouts == 1, "rock paid out a second time while on cooldown");
+
+            // 4) Shard gate: while shard species remain unowned, some rock rolls can be
+            // shards; once every shard species is owned they never are (always treasure).
+            gm.TestReset();
+            ctx.Assert(gm.TestAnyShardSpeciesUnowned, "expected unowned shard species at fresh reset");
+
+            int shardRolls = 0;
+            int treasureRolls = 0;
+            for (int i = 0; i < 400; i++)
+            {
+                ItemType t = gm.TestRollRockPayout().Type;
+                if (t == ItemType.Shard)
+                {
+                    shardRolls++;
+                }
+                else if (t == ItemType.Treasure)
+                {
+                    treasureRolls++;
+                }
+            }
+
+            ctx.Assert(shardRolls > 0, "no rock roll produced a shard while shard species remain unowned");
+            ctx.Assert(treasureRolls > 0, "no rock roll produced treasure");
+
+            DinoType[] all =
+            {
+                DinoType.TRex, DinoType.Triceratops, DinoType.Brachiosaurus, DinoType.Stegosaurus,
+                DinoType.Pteranodon, DinoType.Ankylosaurus, DinoType.Spinosaurus,
+                DinoType.Parasaurolophus, DinoType.Velociraptor
+            };
+            for (int i = 0; i < all.Length; i++)
+            {
+                gm.TestSpawnDino(all[i], GrowthStage.Baby);
+            }
+
+            yield return ctx.WaitFrames(1);
+            ctx.Assert(!gm.TestAnyShardSpeciesUnowned, "still reports a shard species unowned with all 9 owned");
+
+            int shardsWhenOwned = 0;
+            for (int i = 0; i < 400; i++)
+            {
+                if (gm.TestRollRockPayout().Type == ItemType.Shard)
+                {
+                    shardsWhenOwned++;
+                }
+            }
+
+            ctx.Assert(shardsWhenOwned == 0, $"{shardsWhenOwned} shard rolls leaked after every shard species was owned");
+
+            ctx.Log($"smashed rock at {rockCell}: payout fired once, cooldown held; " +
+                    $"shard gate {shardRolls}/400 unowned vs {shardsWhenOwned}/400 owned");
+            gm.TestReset();
+        }
+
         // Buddy Stegosaurus + an active mound: the sniffer sparkle fires within
         // one interval (~6s game time).
         private IEnumerator Case_StegoSniff(TestContext ctx)
@@ -3111,6 +3241,73 @@ namespace DinoDigger.Testing
                     // units of the tree on this isometric grid would swallow the routed
                     // tree tap. Skip trees whose center a mound collider could cover so
                     // the tap always reaches OnTreeTapped.
+                    if (NearActiveMound(gm, w, 0.8f))
+                    {
+                        continue;
+                    }
+
+                    float sq = (w - bp).sqrMagnitude;
+                    if (sq < bestSq)
+                    {
+                        bestSq = sq;
+                        cell = c;
+                        world = w;
+                        found = true;
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>Locate a rock tile on the Obstacles tilemap that has a walkable
+        /// cell right next to it (so an Anky can stand beside it) and whose center no
+        /// active mound collider could cover (which would swallow the routed rock tap).
+        /// Nearest-to-backhoe first, purely for nicer test framing.</summary>
+        private bool FindRockCell(GameManager gm, out Vector3Int cell, out Vector3 world)
+        {
+            cell = Vector3Int.zero;
+            world = Vector3.zero;
+
+            OverworldMap map = gm.TestMap;
+            var lib = gm.TestLibrary;
+            if (map == null || lib == null || lib.RockTile == null)
+            {
+                return false;
+            }
+
+            Vector3 bp = gm.TestBackhoe != null ? gm.TestBackhoe.transform.position : Vector3.zero;
+            int[] dx = { -1, 1, 0, 0 };
+            int[] dy = { 0, 0, -1, 1 };
+            float bestSq = float.MaxValue;
+            bool found = false;
+
+            for (int x = 0; x < 48; x++)
+            {
+                for (int y = 0; y < 48; y++)
+                {
+                    var c = new Vector3Int(x, y, 0);
+                    if (map.ObstacleAt(c) != lib.RockTile)
+                    {
+                        continue;
+                    }
+
+                    bool hasNeighbor = false;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        if (map.IsWalkableCell(new Vector3Int(x + dx[i], y + dy[i], 0)))
+                        {
+                            hasNeighbor = true;
+                            break;
+                        }
+                    }
+
+                    if (!hasNeighbor)
+                    {
+                        continue;
+                    }
+
+                    Vector3 w = map.CellCenter(c);
                     if (NearActiveMound(gm, w, 0.8f))
                     {
                         continue;

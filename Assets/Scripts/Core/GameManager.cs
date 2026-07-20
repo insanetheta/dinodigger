@@ -73,6 +73,8 @@ namespace DinoDigger.Core
         private readonly List<DinoController> _buddies = new List<DinoController>(); // [0] = longest-serving
         private readonly List<ItemPickup> _pickups = new List<ItemPickup>();          // all live pickups (fruit scan)
         private readonly Dictionary<Vector3Int, float> _treeCooldownUntil = new Dictionary<Vector3Int, float>();
+        private readonly Dictionary<Vector3Int, float> _rockCooldownUntil = new Dictionary<Vector3Int, float>();
+        private int _rockSmashPayouts;         // test-observable smash-payout counter
         private float _snifferTimer = SnifferIntervalSeconds;
         private int _snifferPulses;            // test-observable pulse counter
         private float _courierScanTimer;
@@ -311,8 +313,15 @@ namespace DinoDigger.Core
             }
 
             // No collider hit: a tapped TREE tile (Obstacles tilemap) routes to the
-            // Brachiosaurus fruit-shake; anything else drives the backhoe.
+            // Brachiosaurus fruit-shake, a tapped ROCK to the Ankylosaurus smash;
+            // anything else drives the backhoe.
             if (State.Is(GameState.Roam) && TryRouteTreeTap(world))
+            {
+                Audio?.Tap();
+                return;
+            }
+
+            if (State.Is(GameState.Roam) && TryRouteRockTap(world))
             {
                 Audio?.Tap();
                 return;
@@ -341,6 +350,27 @@ namespace DinoDigger.Core
             if (_map.ObstacleAt(cell) == _library.TreeTile)
             {
                 OnTreeTapped(cell);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>If the tapped cell holds a rock tile (Obstacles tilemap), fire
+        /// the rock-tap flow. Returns true when a rock consumed the tap. Only the
+        /// rock's own (unwalkable) cell counts, so movement taps on the grass around
+        /// it are never swallowed.</summary>
+        private bool TryRouteRockTap(Vector3 world)
+        {
+            if (_map == null || _library == null || _library.RockTile == null)
+            {
+                return false;
+            }
+
+            Vector3Int cell = _map.WorldToCell(world);
+            if (_map.ObstacleAt(cell) == _library.RockTile)
+            {
+                OnRockTapped(cell);
                 return true;
             }
 
@@ -1085,6 +1115,132 @@ namespace DinoDigger.Core
             }
 
             Audio?.ItemPop();
+        }
+
+        /// <summary>Ankylosaurus rock smash. A rock ALWAYS gives a little pebble
+        /// wiggle so the tap does something; treasure (or, while the nest still wants
+        /// them, an egg shard) only pops out when a buddy Anky is close enough, walks
+        /// over and tail-clubs it — and the rock is off its per-rock cooldown. A tap on
+        /// a cooling rock still wiggles, it just doesn't pay out again.</summary>
+        private void OnRockTapped(Vector3Int cell)
+        {
+            Vector3 rockWorld = _map != null ? _map.CellCenter(cell) : Vector3.zero;
+            RockWiggle(rockWorld);
+
+            DinoController anky = FindBuddy(Config.DinoType.Ankylosaurus);
+            if (anky == null || anky.IsBusy)
+            {
+                return;
+            }
+
+            float range = _config != null ? _config.RockSmashRange : 3f;
+            if ((anky.transform.position - rockWorld).sqrMagnitude > range * range)
+            {
+                return;
+            }
+
+            if (_rockCooldownUntil.TryGetValue(cell, out float until) && Time.time < until)
+            {
+                return; // rock is resting; the pebble wiggle already played
+            }
+
+            float cooldown = _config != null ? _config.RockCooldownSeconds : 15f;
+            _rockCooldownUntil[cell] = Time.time + cooldown;
+
+            Vector3 approach = rockWorld + new Vector3(0f, -0.7f, 0f);
+            if (_map != null)
+            {
+                approach = _map.NearestWalkable(approach, out _);
+            }
+
+            anky.WalkTo(approach, 1.2f, () =>
+            {
+                if (anky == null)
+                {
+                    return;
+                }
+
+                anky.Dance(); // Anky's dance is the tail-club swing
+                Tween.After(0.45f, () => SmashRockLoot(rockWorld));
+            });
+        }
+
+        /// <summary>Small pebble puff so EVERY rock tap does something (toddler rule:
+        /// no tap is ever ignored), plus a soft crumble thud.</summary>
+        private void RockWiggle(Vector3 rockWorld)
+        {
+            Audio?.Crumble();
+
+            ParticleSystem ps = CreateParticles(_overworldRoot,
+                _library != null ? _library.CrumbParticle : null,
+                new Color(0.62f, 0.57f, 0.5f), 0.18f);
+            if (ps == null)
+            {
+                return;
+            }
+
+            ps.transform.position = rockWorld;
+            ps.Emit(6);
+            Tween.After(1.5f, () =>
+            {
+                if (ps != null)
+                {
+                    Destroy(ps.gameObject);
+                }
+            });
+        }
+
+        /// <summary>The Anky tail-clubbed the rock: a big crumb burst, a pop, and a
+        /// treasure (or gated egg shard) spilling out in a happy arc.</summary>
+        private void SmashRockLoot(Vector3 rockWorld)
+        {
+            RockBurst(rockWorld);
+            Audio?.ItemPop();
+
+            DugItemInfo payout = RollRockPayout(rockWorld);
+            // Same spawn path as dug loot: SpawnRewardPickup clamps the landing to a
+            // walkable cell (the rock's own cell is unwalkable) and, for a shard, the
+            // pickup flies to the nest; treasure flies to the counter.
+            SpawnRewardPickup(payout.Type, payout.DinoType, payout.Variant, rockWorld);
+            _rockSmashPayouts++;
+        }
+
+        private void RockBurst(Vector3 rockWorld)
+        {
+            ParticleSystem ps = CreateParticles(_overworldRoot,
+                _library != null ? _library.CrumbParticle : null,
+                new Color(0.62f, 0.57f, 0.5f), 0.32f);
+            if (ps == null)
+            {
+                return;
+            }
+
+            ps.transform.position = rockWorld;
+            ps.Emit(22);
+            Tween.After(2f, () =>
+            {
+                if (ps != null)
+                {
+                    Destroy(ps.gameObject);
+                }
+            });
+        }
+
+        /// <summary>Decide what a smashed rock coughs up: a random-denomination treasure,
+        /// or — at <see cref="Config.GameConfig.RockShardChance"/>, and ONLY while the nest
+        /// still wants them — an egg shard instead. Mirrors the dig-loot shard gate: once
+        /// every shard species is owned, shards stop dropping and it is always treasure.</summary>
+        private DugItemInfo RollRockPayout(Vector3 world)
+        {
+            float shardChance = _config != null ? _config.RockShardChance : 0.1f;
+            if (Random.value < shardChance && AnyShardSpeciesUnowned())
+            {
+                return new DugItemInfo(ItemType.Shard, Config.DinoType.TRex, 0, world);
+            }
+
+            int variants = _config != null ? Mathf.Max(1, _config.TreasureVariants) : 1;
+            return new DugItemInfo(ItemType.Treasure, Config.DinoType.TRex,
+                Random.Range(0, variants), world);
         }
 
         /// <summary>Stegosaurus sniffer: while a buddy Stego roams, every few
@@ -2099,6 +2255,7 @@ namespace DinoDigger.Core
         internal NestController TestNest => _nest;
         internal TownController TestTown => _town;
         internal int TestSnifferPulses => _snifferPulses;
+        internal int TestRockSmashPayouts => _rockSmashPayouts;
         internal bool TestParadeActive => _paradeActive;
         internal bool TestCeremonyActive => _ceremonyActive;
         internal DinoController TestCeremonyDino => _ceremonyDino;
@@ -2245,11 +2402,21 @@ namespace DinoDigger.Core
                 return;
             }
 
+            if (State.Is(GameState.Roam) && TryRouteRockTap(world))
+            {
+                return;
+            }
+
             if (State.Is(GameState.Roam) && _backhoe != null)
             {
                 _backhoe.MoveTo(world);
             }
         }
+
+        /// <summary>TEST HOOK. Roll one rock-smash payout through the REAL gate
+        /// (treasure vs shard-while-unowned). Lets the shard-gating case sample the
+        /// distribution directly instead of grinding whole smashes.</summary>
+        internal DugItemInfo TestRollRockPayout() => RollRockPayout(Vector3.zero);
 
         /// <summary>TEST HOOK. Trigger the idle-attract behavior immediately (same path as the timer).</summary>
         internal void ForceIdleAttract()
@@ -2308,6 +2475,8 @@ namespace DinoDigger.Core
             // starts with all egg species available again.
             _reservedEggSpecies.Clear();
             _treeCooldownUntil.Clear();
+            _rockCooldownUntil.Clear();
+            _rockSmashPayouts = 0;
             _courier = null;
             _carriedFruit = null;
             _sellers.Clear();
