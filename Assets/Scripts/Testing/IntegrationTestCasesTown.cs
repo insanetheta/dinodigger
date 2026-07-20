@@ -542,6 +542,160 @@ namespace DinoDigger.Testing
             }
         }
 
+        // ============================================= DinoDigger-4yu Snack Builders
+
+        // Snack-powered building: feeding a fruit to a builder standing on an active site banks a
+        // chunk of build work so the building visibly jumps a construction state. Proves: (a) the
+        // glut guard widened — dug fruit stays fruit while a crewed site is active even with nobody
+        // hungry and the stand unfinished; (b) a fruit tap with an on-site working builder banks
+        // SnackWorkSeconds and advances the state exactly one step; (c) a hungry dino still wins the
+        // fruit (the snack path never fires ahead of a baby); and (d) with NO active site the fruit
+        // falls through to the Fruit Stand sale.
+        private IEnumerator Case_SnackBuilders(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            MeadowArea meadow = gm.TestMeadow;
+            ctx.Assert(meadow != null, "no MeadowArea in the scene");
+            TownController town = EnsureTown(ctx);
+            ctx.Assert(town.TestArea != null && town.TestArea.PlotCount > GameConfig.FruitStandIndex,
+                $"need > {GameConfig.FruitStandIndex} plots for the snack test " +
+                $"(have {(town.TestArea != null ? town.TestArea.PlotCount : 0)})");
+
+            GameConfig cfg = gm.TestConfig;
+            float savedPerState = cfg.TownSecondsPerBuildState;
+            float savedSnack = cfg.SnackWorkSeconds;
+            int savedNext = gm.Save.Data.TownNextIndex;
+            List<TownBuildingSave> savedList = gm.Save.Data.TownBuildings;
+            int savedWallet = gm.Save.Data.TreasureCount;
+
+            var advanced = new List<int>();
+            Action<int> onAdv = st => advanced.Add(st);
+            GameEvents.BuildingStateAdvanced += onAdv;
+            try
+            {
+                // Slow per-state timing so the site never advances on its own during the case, and one
+                // snack banks exactly one construction state (SnackWorkSeconds == per-state).
+                cfg.TownSecondsPerBuildState = 100f;
+                cfg.SnackWorkSeconds = cfg.TownSecondsPerBuildState;
+
+                // Two Big residents become the crew (Big => never hungry, so AnyDinoHungry stays false).
+                DinoController b1 = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
+                DinoController b2 = gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Big);
+                gm.TestMakeResident(b1, teleportIntoMeadow: true);
+                gm.TestMakeResident(b2, teleportIntoMeadow: true);
+                yield return ctx.WaitFrames(2);
+
+                // Break ground on building 0 and wait for a builder to physically clock in.
+                gm.Save.Data.TreasureCount = cfg.TownBuildingPrice(0);
+                yield return ctx.WaitUntil(() => town.TestActiveSite != null);
+                BuildingController site = town.TestActiveSite;
+                yield return ctx.WaitUntil(() => AnyBuilderWorking(town));
+                ctx.Assert(town.HasWorkingBuilderOnSite(), "no builder reported working on the active site");
+
+                // (a) Glut guard widened: crewed site active, nobody hungry, stand UNfinished -> dug
+                //     fruit never downgrades. Every sample stays fruit.
+                ctx.Assert(!gm.TestFruitStandFinished, "fruit stand unexpectedly finished for the glut check");
+                int stayedFruit = 0;
+                for (int i = 0; i < 40; i++)
+                {
+                    DugItemInfo r = gm.TestResolveItem(
+                        new DugItemInfo(ItemType.Fruit, DinoType.TRex, 0, Vector3.zero));
+                    if (r.Type == ItemType.Fruit)
+                    {
+                        stayedFruit++;
+                    }
+                }
+
+                ctx.Assert(stayedFruit == 40,
+                    $"dug fruit downgraded with a crewed build site active ({stayedFruit}/40 stayed fruit)");
+
+                // (b) A fruit fed with an on-site builder banks a snack: the site jumps exactly one state.
+                int before = site.State;
+                ctx.Assert(before < BuildingController.ConstructionStates - 1,
+                    $"site started too far along for the snack check (state {before})");
+                advanced.Clear();
+                ItemPickup snack = gm.TestSpawnItem(ItemType.Fruit, DinoType.TRex, 0,
+                    town.BuildingWorld(0) + new Vector3(1.4f, 0f, 0f));
+                yield return ctx.WaitUntil(() => snack == null || snack.IsCarryableFruit);
+                ctx.Assert(snack != null, "snack fruit vanished before it could be fed");
+
+                gm.RequestFeed(snack); // nobody hungry + crewed site -> builder snack
+                yield return ctx.WaitUntil(() => site.State > before);
+                ctx.Assert(site.State == before + 1,
+                    $"snack advanced {site.State - before} states (expected exactly 1)");
+                ctx.Assert(advanced.Contains(before + 1),
+                    $"snack did not fire BuildingStateAdvanced({before + 1}) (saw: {Join(advanced)})");
+
+                // (c) A hungry dino still wins the fruit: the snack path never fires ahead of a baby.
+                //     Spawn a hungry Baby BUDDY (buddies are never drafted to build) and drop the fruit
+                //     on it so it eats at once; the site must NOT advance from a snack.
+                int stateHeld = site.State;
+                DinoController baby = gm.TestSpawnDino(DinoType.Triceratops, GrowthStage.Baby);
+                ctx.Assert(baby.IsBuddy, "test baby is not a buddy (would risk being drafted as a builder)");
+                ctx.Assert(baby.IsHungry, "test baby is not hungry");
+                yield return ctx.WaitFrames(2);
+
+                int babyAteBefore = baby.FruitEaten;
+                ItemPickup babyFruit = gm.TestSpawnItem(ItemType.Fruit, DinoType.TRex, 0,
+                    baby.transform.position);
+                yield return ctx.WaitUntil(() => babyFruit == null || babyFruit.IsCarryableFruit);
+                ctx.Assert(babyFruit != null, "baby's fruit vanished before it could be eaten");
+
+                gm.RequestFeed(babyFruit); // hungry baby present -> the baby eats, not a builder
+                yield return ctx.WaitUntil(() => baby.FruitEaten > babyAteBefore);
+                ctx.Assert(site.State == stateHeld,
+                    $"site advanced ({stateHeld} -> {site.State}) while a hungry dino should have won the fruit");
+
+                // (d) With NO active site the fruit falls through to the Fruit Stand sale. Reset, author
+                //     a finished stand + no active site + no residents, tap a surplus fruit -> it self-sells.
+                gm.TestReset();
+                gm.Save.Data.TreasureCount = 0;
+                gm.Save.Data.TownNextIndex = GameConfig.FruitStandIndex + 1;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>();
+                for (int i = 0; i <= GameConfig.FruitStandIndex; i++)
+                {
+                    gm.Save.Data.TownBuildings.Add(new TownBuildingSave
+                    {
+                        Finished = true,
+                        State = BuildingController.ConstructionStates,
+                    });
+                }
+
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(gm.TestFruitStandFinished, "Fruit Stand not open after restore");
+                ctx.Assert(!town.HasWorkingBuilderOnSite(),
+                    "unexpected active crewed site for the fall-through check");
+
+                int walletBefore = gm.Save.Data.TreasureCount;
+                Vector3 stand = town.BuildingWorld(GameConfig.FruitStandIndex);
+                ItemPickup sale = gm.TestSpawnItem(ItemType.Fruit, DinoType.TRex, 0,
+                    stand + new Vector3(1.2f, 0f, 0f));
+                yield return ctx.WaitUntil(() => sale == null || sale.IsCarryableFruit);
+                ctx.Assert(sale != null, "fall-through fruit vanished before it could sell");
+
+                gm.RequestFeed(sale); // no active site + stand open -> stand sale
+                yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount > walletBefore);
+                ctx.Assert(gm.Save.Data.TreasureCount > walletBefore,
+                    "surplus fruit did not sell at the stand when no build site was active");
+
+                ctx.Log("snack builders: crewed-site glut guard kept 40/40 fruit; a snack advanced the " +
+                        "build one state (event fired); a hungry baby still won the fruit (no snack); with " +
+                        "no active site the fruit fell through to a stand sale");
+            }
+            finally
+            {
+                GameEvents.BuildingStateAdvanced -= onAdv;
+                cfg.TownSecondsPerBuildState = savedPerState;
+                cfg.SnackWorkSeconds = savedSnack;
+                gm.Save.Data.TownNextIndex = savedNext;
+                gm.Save.Data.TownBuildings = savedList ?? new List<TownBuildingSave>();
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
         // ============================================= DinoDigger-x07 Recess Time
 
         // Tapping a FINISHED building throws a 15s dino party. Proves: (a) a finished building

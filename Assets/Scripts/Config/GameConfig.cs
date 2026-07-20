@@ -149,6 +149,11 @@ namespace DinoDigger.Config
                  "on site. A bigger crew banks it faster (dt * working-builder count).")]
         public float TownSecondsPerBuildState = 8f;
 
+        [Tooltip("Seconds of build WORK a single fruit banks when fed to a builder on an active site " +
+                 "(the builder-snack payoff). Defaults to TownSecondsPerBuildState, so ONE fruit == ONE " +
+                 "construction state — the building visibly jumps ahead a step per snack.")]
+        public float SnackWorkSeconds = 8f;
+
         [Tooltip("Max NON-BUDDY resident dinos drafted onto one construction site. If none are available " +
                  "the build simply waits — buddies and the player backhoe are NEVER drafted.")]
         public int TownMaxBuilders = 2;

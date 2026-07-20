@@ -641,13 +641,14 @@ namespace DinoDigger.Core
             // FRUIT GLUT GUARD: fruit is 40% of drops but demand is finite (a Big dino is
             // never hungry). When there is NO fruit demand, most of it downgrades to a random
             // treasure so uneaten fruit can't pile up; the rest stays fruit so the world
-            // still has some. "Fruit demand" widens as sinks come online: today it is a
-            // hungry dino OR an open Fruit Stand (surplus fruit is now sellable gameplay, not
-            // clutter, so it must NOT downgrade once the stand is finished). It still widens
-            // further later to include builder snacks (planned follow-up).
+            // still has some. "Fruit demand" is now FULLY widened to every sink: a hungry dino
+            // OR an open Fruit Stand (surplus fruit sells there) OR an active construction site
+            // with a builder on it (the fruit becomes a builder snack that banks build work).
+            // Only when NONE of those want the fruit does most of it downgrade. This is the
+            // final planned widening.
             if (info.Type == ItemType.Fruit)
             {
-                if (_config != null && !AnyDinoHungry() && !FruitStandFinished &&
+                if (_config != null && !AnyDinoHungry() && !FruitStandFinished && !HasCrewedBuildSite &&
                     Random.value < _config.FruitDowngradeFraction)
                 {
                     int treasureVariants = Mathf.Max(1, _config.TreasureVariants);
@@ -972,9 +973,17 @@ namespace DinoDigger.Core
             DinoController dino = NearestHungryDino(fruit.transform.position);
             if (dino == null)
             {
-                // Feed priority is absolute — a hungry dino always wins. Only once NOBODY is
-                // hungry does a finished Fruit Stand buy the surplus fruit; otherwise the
-                // fruit just bounced for feedback and waits to be eaten later.
+                // Feed priority is absolute — a hungry dino always wins (handled below). Once
+                // NOBODY is hungry the surplus fruit next feeds a BUILDER on an active site (a
+                // snack that banks build work), then finally sells at a finished Fruit Stand;
+                // the stand path keeps its own self-serve fallback so a toddler's tap always does
+                // SOMETHING. If neither sink wants it, the fruit just bounced for feedback and
+                // waits to be eaten later.
+                if (TrySnackBuilder(fruit))
+                {
+                    return;
+                }
+
                 if (FruitStandFinished)
                 {
                     TrySellFruit(fruit);
@@ -1043,6 +1052,63 @@ namespace DinoDigger.Core
             }
 
             return best;
+        }
+
+        // -------------------------------------------------------- builder snack
+        // Middle link of the feed-priority chain (hungry dino -> BUILDER SNACK -> Fruit Stand sale):
+        // once nobody is hungry, a fruit fed while a construction site has a builder ON it becomes a
+        // SNACK — it arcs to the worker, who munches it, and the site banks one construction state's
+        // worth of bonus work so the building visibly jumps ahead. Reuses the courier/seller carry
+        // lock + arc (ItemPickup.BeginCarried, Tween.MoveArc) and the growth-feed eat feedback (a
+        // punch-chomp + eat sting) WITHOUT reaching into DinoController's build state.
+
+        /// <summary>If an active construction site has a builder physically on site working, snack the
+        /// tapped fruit to that builder and bank <see cref="Config.GameConfig.SnackWorkSeconds"/> of
+        /// build work on arrival; returns true when the snack was taken. Returns false — so the caller
+        /// falls through to the Fruit Stand sale — when there is no active site or no builder is working
+        /// yet (a builder merely commuting does NOT count). Banking is idempotent per fruit, so a second
+        /// fruit tapped mid-flight simply flies and banks on its own (no queue).</summary>
+        private bool TrySnackBuilder(ItemPickup fruit)
+        {
+            if (fruit == null || fruit.IsConsumed || fruit.IsCarried || _town == null)
+            {
+                return false;
+            }
+
+            DinoController builder = _town.FirstWorkingBuilder();
+            if (builder == null)
+            {
+                return false; // no crewed active site: fall through to the stand sale
+            }
+
+            // Lock the fruit for flight (stops it bobbing/tapping and keeps the Trike courier off it),
+            // then arc it to the builder — the same primitives the stand's self-serve sale uses.
+            fruit.BeginCarried();
+            Vector3 from = fruit.transform.position;
+            Vector3 to = builder.transform.position;
+            Tween.MoveArc(fruit.transform, from, to, 1.2f, 0.55f, () =>
+            {
+                // Munch feedback: a chomp punch on the builder + the eat sting, reusing the
+                // growth-feed feedback without touching DinoController's build state.
+                if (builder != null)
+                {
+                    Tween.PunchScale(builder.transform, 0.25f, 0.3f);
+                }
+
+                Audio?.Eat();
+
+                // Consume the fruit (same shrink-pop eat animation as a growth feed), then bank the
+                // snack: the site advances a state almost immediately if it was mid-state.
+                if (fruit != null && !fruit.IsConsumed)
+                {
+                    _pickups.Remove(fruit);
+                    fruit.ConsumeAsFood();
+                }
+
+                _town?.BankBuilderSnack();
+            });
+
+            return true;
         }
 
         // ------------------------------------------------- species superpowers
@@ -1492,6 +1558,11 @@ namespace DinoDigger.Core
         /// business). Gates both the sell flow and the glut-guard widening.</summary>
         private bool FruitStandFinished =>
             _town != null && _town.IsBuildingFinished(Config.GameConfig.FruitStandIndex);
+
+        /// <summary>True while a construction site is active with at least one builder physically on
+        /// site working: the third fruit-demand sink (builder snacks), alongside a hungry dino and the
+        /// open Fruit Stand. Gates the glut guard so fruit stops downgrading while a crew can snack it.</summary>
+        private bool HasCrewedBuildSite => _town != null && _town.HasWorkingBuilderOnSite();
 
         /// <summary>Sell one surplus fruit at the stand. A free resident carries it there;
         /// with no resident free the fruit arcs to the stand and sells itself (never a

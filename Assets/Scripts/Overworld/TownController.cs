@@ -72,6 +72,85 @@ namespace DinoDigger.Overworld
         public Vector3 BuildingWorld(int index) =>
             _area != null ? _area.PlotWorld(index) : transform.position;
 
+        // ------------------------------------------------------------ builder snack
+        // Snack-powered building (DinoDigger-4yu): feeding a fruit to a builder standing on an
+        // active site banks a chunk of build work so the building visibly jumps ahead. The feed
+        // path (GameManager.TrySnackBuilder) aims the fruit at FirstWorkingBuilder and, on arrival,
+        // calls BankBuilderSnack; the glut guard uses HasWorkingBuilderOnSite as a fruit-demand sink.
+
+        /// <summary>The first drafted builder currently WORKING on the active site — physically on
+        /// site (its <see cref="DinoController.IsWorking"/> is true), NOT merely commuting — or null
+        /// when no site is active or nobody has clocked in yet. The builder-snack feed path aims the
+        /// tapped fruit at this worker.</summary>
+        public DinoController FirstWorkingBuilder()
+        {
+            if (_activeSite == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < _builders.Count; i++)
+            {
+                if (_builders[i] != null && _builders[i].IsWorking)
+                {
+                    return _builders[i];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>True when a building is under construction AND at least one builder is physically
+        /// on site working — the guard for both the builder-snack feed path and the fruit glut-guard's
+        /// third demand sink.</summary>
+        public bool HasWorkingBuilderOnSite() => FirstWorkingBuilder() != null;
+
+        /// <summary>Snack payoff: bank a chunk of BONUS build work at the active site —
+        /// <see cref="GameConfig.SnackWorkSeconds"/>, one construction state by default — when a fruit
+        /// is fed to a builder on site. The building jumps ahead immediately: any state boundaries
+        /// crossed fire the SAME 1->2->3->finished events + save as normal crew accrual (AddWork
+        /// carries any remainder forward), and a crumb + confetti pop makes the jump read. No-op unless
+        /// a crew member is actually working (the feed path guards this too).</summary>
+        public void BankBuilderSnack()
+        {
+            GameManager gm = GameManager.Instance;
+            if (gm == null || _activeSite == null || !HasWorkingBuilderOnSite())
+            {
+                return;
+            }
+
+            BuildingController site = _activeSite;
+            Vector3 sitePos = site.transform.position;
+
+            float seconds = _config != null ? Mathf.Max(0f, _config.SnackWorkSeconds) : 8f;
+            int before = site.State;
+            site.AddWork(seconds); // carries the remainder forward exactly like per-frame accrual
+
+            // Announce every state boundary crossed (finish included), mirroring TickActiveSite so a
+            // snack that lands mid-state still fires the full 1->2->3->finished sequence.
+            for (int st = before + 1; st <= site.State; st++)
+            {
+                if (st >= BuildingController.ConstructionStates)
+                {
+                    FinishSite(gm);
+                    break;
+                }
+
+                GameEvents.RaiseBuildingStateAdvanced(st);
+            }
+
+            // Persist the new state whenever a boundary was crossed (the finished case already
+            // persisted inside FinishSite, which cleared _activeSite — so this won't double-write).
+            if (_activeSite != null && site.State != before)
+            {
+                gm.TownPersist();
+            }
+
+            // Payoff FX at the site so the jump reads even when the snack stayed within one state.
+            site.EmitWorkPuff();
+            gm.TownSpawnConfetti(sitePos + new Vector3(0f, 0.5f, 0f));
+        }
+
         // TEST HOOKS (integration runner; no reflection).
         internal TownArea TestArea => _area;
         internal BuildingController TestActiveSite => _activeSite;
