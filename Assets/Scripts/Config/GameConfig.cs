@@ -3,6 +3,43 @@ using UnityEngine;
 
 namespace DinoDigger.Config
 {
+    /// <summary>
+    /// A "dig postcard": one themed flavour of dig site. Pure delight variance — tint-only
+    /// over the shared dig art, plus a loot skew and item-count override. Every theme stays
+    /// strictly generous (no fail states, no text); the tints are gentle MULTIPLIES so the
+    /// dirt/background/mound art stays readable. A mound rolls a theme (weighted by
+    /// <see cref="RollWeight"/>) when it (re)spawns and tints itself to match, so the colour
+    /// telegraphs the flavour before the child even digs.
+    /// </summary>
+    [System.Serializable]
+    public class DigTheme
+    {
+        public string Name = "Meadow Classic";
+
+        [Tooltip("Multiply tint for the dirt tiles (keep near-white so cracks stay readable).")]
+        public Color DirtTint = Color.white;
+
+        [Tooltip("Multiply tint for the full-bleed dig backdrop.")]
+        public Color BackgroundTint = Color.white;
+
+        [Tooltip("Multiply tint for the overworld mound sprite + its sparkle — the colour cue.")]
+        public Color MoundTint = Color.white;
+
+        [Tooltip("Loot roll weights within this theme: Egg / Fruit / Treasure. The egg-shard " +
+                 "nerf (once every egg species is owned) still applies to EggWeight exactly as " +
+                 "it does for the default weights.")]
+        public float EggWeight = 0.35f;
+        public float FruitWeight = 0.40f;
+        public float TreasureWeight = 0.25f;
+
+        [Tooltip("Buried-item count range for a site of this theme (inclusive).")]
+        public int MinItems = 2;
+        public int MaxItems = 4;
+
+        [Tooltip("Relative chance a (re)spawning mound rolls THIS theme. Higher = more common.")]
+        public float RollWeight = 1f;
+    }
+
     /// <summary>All designer-tunable numbers in one asset.</summary>
     [CreateAssetMenu(menuName = "DinoDigger/Game Config", fileName = "GameConfig")]
     public class GameConfig : ScriptableObject
@@ -30,10 +67,19 @@ namespace DinoDigger.Config
         public int MinItemsPerSite = 2;
         public int MaxItemsPerSite = 4;
 
-        [Tooltip("Relative weights for Egg / Fruit / Treasure.")]
+        [Tooltip("Relative weights for Egg / Fruit / Treasure. These are the DEFAULT " +
+                 "(Meadow Classic) loot weights; a themed site (DigThemes) overrides them.")]
         public float EggWeight = 0.35f;
         public float FruitWeight = 0.40f;
         public float TreasureWeight = 0.25f;
+
+        [Header("Dig postcards (themes)")]
+        [Tooltip("Themed dig sites — tint-only variety over the SAME dig art. A (re)spawning " +
+                 "mound rolls one weighted by RollWeight and tints itself so the kid learns the " +
+                 "colour language; the dig site reads the theme for its dirt/background tints, " +
+                 "loot weights and buried-item count. Empty here falls back to a built-in set " +
+                 "(see BuildDefaultThemes) so an older serialized asset still gets all four.")]
+        public DigTheme[] DigThemes = BuildDefaultThemes();
 
         [Tooltip("Number of fruit sprite variants (apple, banana, berry, watermelon).")]
         public int FruitVariants = 4;
@@ -197,6 +243,129 @@ namespace DinoDigger.Config
 
             index = Mathf.Clamp(index, 0, TownBuildingPrices.Length - 1);
             return Mathf.Max(0, TownBuildingPrices[index]);
+        }
+
+        // ----- Dig themes -----
+
+        // Cached fallback so an older serialized GameConfig.asset (saved before the
+        // DigThemes field existed, so it deserializes empty) still gets the full four
+        // themes at runtime. A designer-populated array in the inspector always wins.
+        private DigTheme[] _fallbackThemes;
+
+        /// <summary>The theme set actually in effect: the serialized array when populated,
+        /// otherwise the built-in default four. Never null or empty.</summary>
+        public DigTheme[] EffectiveThemes =>
+            (DigThemes != null && DigThemes.Length > 0)
+                ? DigThemes
+                : (_fallbackThemes ??= BuildDefaultThemes());
+
+        public int DigThemeCount => EffectiveThemes.Length;
+
+        /// <summary>The theme at <paramref name="index"/> in the effective set (clamped).
+        /// Never null — falls back to a fresh Meadow Classic if a slot is somehow null.</summary>
+        public DigTheme GetTheme(int index)
+        {
+            DigTheme[] themes = EffectiveThemes;
+            index = Mathf.Clamp(index, 0, themes.Length - 1);
+            return themes[index] ?? new DigTheme();
+        }
+
+        /// <summary>Pick a theme index weighted by each theme's <see cref="DigTheme.RollWeight"/>.
+        /// A (re)spawning mound calls this. Returns 0 when the set is somehow empty.</summary>
+        public int PickThemeIndex()
+        {
+            DigTheme[] themes = EffectiveThemes;
+            if (themes.Length == 0)
+            {
+                return 0;
+            }
+
+            float total = 0f;
+            for (int i = 0; i < themes.Length; i++)
+            {
+                if (themes[i] != null)
+                {
+                    total += Mathf.Max(0f, themes[i].RollWeight);
+                }
+            }
+
+            if (total <= 0.0001f)
+            {
+                return Random.Range(0, themes.Length); // all zero -> uniform
+            }
+
+            float roll = Random.value * total;
+            for (int i = 0; i < themes.Length; i++)
+            {
+                if (themes[i] == null)
+                {
+                    continue;
+                }
+
+                roll -= Mathf.Max(0f, themes[i].RollWeight);
+                if (roll <= 0f)
+                {
+                    return i;
+                }
+            }
+
+            return themes.Length - 1;
+        }
+
+        /// <summary>The built-in four "dig postcards". Doubles as the field initializer (so a
+        /// freshly generated asset bakes them in) AND the runtime fallback for a stale asset.
+        /// Tints are gentle multiplies; item counts + weights follow the design doc.</summary>
+        private static DigTheme[] BuildDefaultThemes()
+        {
+            return new[]
+            {
+                // Meadow Classic: the neutral default look — identical to the flat config
+                // weights, common (roll weight 4).
+                new DigTheme
+                {
+                    Name = "Meadow Classic",
+                    DirtTint = Color.white,
+                    BackgroundTint = Color.white,
+                    MoundTint = Color.white,
+                    EggWeight = 0.35f, FruitWeight = 0.40f, TreasureWeight = 0.25f,
+                    MinItems = 2, MaxItems = 4,
+                    RollWeight = 4f,
+                },
+                // Berry Bog: muddy brown dirt, fruit-heavy.
+                new DigTheme
+                {
+                    Name = "Berry Bog",
+                    DirtTint = new Color(0.72f, 0.55f, 0.40f),
+                    BackgroundTint = new Color(0.82f, 0.78f, 0.66f),
+                    MoundTint = new Color(0.72f, 0.55f, 0.40f),
+                    EggWeight = 0.25f, FruitWeight = 0.60f, TreasureWeight = 0.15f,
+                    MinItems = 2, MaxItems = 4,
+                    RollWeight = 2f,
+                },
+                // Sparkle Cave: purple dirt + a slightly darker/cooler backdrop, treasure-heavy.
+                new DigTheme
+                {
+                    Name = "Sparkle Cave",
+                    DirtTint = new Color(0.75f, 0.62f, 0.92f),
+                    BackgroundTint = new Color(0.72f, 0.70f, 0.85f),
+                    MoundTint = new Color(0.78f, 0.62f, 0.95f),
+                    EggWeight = 0.20f, FruitWeight = 0.20f, TreasureWeight = 0.60f,
+                    MinItems = 2, MaxItems = 4,
+                    RollWeight = 2f,
+                },
+                // Golden Mound: warm gold everywhere, ALL treasure, always 4 items — rare
+                // (roll weight 1 -> ~1-in-9 with the weights above, close enough to 1-in-8).
+                new DigTheme
+                {
+                    Name = "Golden Mound",
+                    DirtTint = new Color(1.0f, 0.85f, 0.45f),
+                    BackgroundTint = new Color(1.0f, 0.92f, 0.70f),
+                    MoundTint = new Color(1.0f, 0.82f, 0.35f),
+                    EggWeight = 0f, FruitWeight = 0f, TreasureWeight = 1.0f,
+                    MinItems = 4, MaxItems = 4,
+                    RollWeight = 1f,
+                },
+            };
         }
 
         public DinoDefinition GetDino(DinoType type)

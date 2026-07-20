@@ -165,7 +165,7 @@ namespace DinoDigger.EditorTools
                 ? lib.DigBackground.bounds.size.y
                 : 14f; // fallback if art not yet imported (matches ~14-unit cover width, square source)
             float bgOffsetY = bgHeight * (0.5f - grassLipFraction);
-            MakeChildRenderer(digRootGo.transform, "Background",
+            var bgSr = MakeChildRenderer(digRootGo.transform, "Background",
                 lib != null ? lib.DigBackground : null, 2,
                 DigRootPos + new Vector3(0f, surfaceY - bgOffsetY, 0f));
 
@@ -253,6 +253,7 @@ namespace DinoDigger.EditorTools
             WireArray(backhoe, "_rollB", lib != null ? lib.BackhoeRollB : null);
 
             Wire(digMode, "_root", digRootGo.transform);
+            Wire(digMode, "_background", bgSr);
             Wire(digMode, "_backhoeBody", bodySr);
             Wire(digMode, "_armPivot", armPivot);
             Wire(digMode, "_boom", boomSr);

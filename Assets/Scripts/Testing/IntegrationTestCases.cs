@@ -28,6 +28,7 @@ namespace DinoDigger.Testing
                 new TestCase("DirtTileDamage",       20f, Case_DirtTileDamage),
                 new TestCase("PeekVisible",          20f, Case_PeekVisible),
                 new TestCase("MultiItemCollection",  30f, Case_MultiItemCollection),
+                new TestCase("DigThemes",            25f, Case_DigThemes),
                 new TestCase("EggHatch",             20f, Case_EggHatch),
                 new TestCase("UniqueDinoNoDupes",    20f, Case_UniqueDinoNoDupes),
                 new TestCase("ShardDropRate",        20f, Case_ShardDropRate),
@@ -832,6 +833,143 @@ namespace DinoDigger.Testing
 
             ctx.Log($"eggs={eggs} fruit={fruit} treasure={treasure}: {expectedPickups} pickups spawned, treasure+={expectedTreasureGain}");
             gm.TestReset();
+        }
+
+        // Dig Postcards: themed dig sites. Mounds roll a WEIGHTED theme and tint themselves;
+        // the site reads the theme for its tints, loot skew and buried-item count. Golden
+        // Mound is the rare all-treasure jackpot (always 4 items) and still passes cleanly
+        // through ResolveDugItem; Berry Bog's raw loot skews to fruit. All tint-only, no art.
+        private IEnumerator Case_DigThemes(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            GameConfig cfg = gm.TestConfig;
+            ctx.Assert(cfg != null, "no config");
+
+            int themeCount = cfg.DigThemeCount;
+            ctx.Assert(themeCount >= 4, $"expected >=4 dig themes, got {themeCount}");
+
+            int golden = FindThemeIndex(cfg, "Golden Mound");
+            int meadow = FindThemeIndex(cfg, "Meadow Classic");
+            int berry = FindThemeIndex(cfg, "Berry Bog");
+            ctx.Assert(golden >= 0 && meadow >= 0 && berry >= 0,
+                "Golden Mound / Meadow Classic / Berry Bog themes not all found by name");
+
+            // ---- Mounds carry a valid theme index and tint themselves to match it. ----
+            IReadOnlyList<DigMound> mounds = gm.TestMounds;
+            ctx.Assert(mounds != null && mounds.Count > 0, "no mounds in scene");
+            int checkedMounds = 0;
+            for (int i = 0; i < mounds.Count; i++)
+            {
+                DigMound m = mounds[i];
+                if (m == null)
+                {
+                    continue;
+                }
+
+                ctx.Assert(m.ThemeIndex >= 0 && m.ThemeIndex < themeCount,
+                    $"mound {i} theme index {m.ThemeIndex} out of range [0,{themeCount})");
+                Color expectedTint = cfg.GetTheme(m.ThemeIndex).MoundTint;
+                ctx.Assert(ColorsClose(m.TestTint, expectedTint),
+                    $"mound {i} tint {m.TestTint} != theme {m.ThemeIndex} MoundTint {expectedTint}");
+                checkedMounds++;
+            }
+
+            ctx.Assert(checkedMounds > 0, "no non-null mounds to check");
+
+            // ---- Weighted pick: every theme appears; the rare Golden < the common Meadow. ----
+            var counts = new int[themeCount];
+            const int samples = 4000;
+            for (int i = 0; i < samples; i++)
+            {
+                counts[cfg.PickThemeIndex()]++;
+            }
+
+            for (int t = 0; t < themeCount; t++)
+            {
+                ctx.Assert(counts[t] > 0, $"theme {t} ({cfg.GetTheme(t).Name}) never picked in {samples} samples");
+            }
+
+            ctx.Assert(counts[golden] < counts[meadow],
+                $"Golden picks ({counts[golden]}) not rarer than Meadow ({counts[meadow]})");
+
+            // ---- Golden dig: exactly 4 items, ALL treasure, and still treasure after
+            //      ResolveDugItem (treasure passes through the uniqueness/glut resolution). ----
+            gm.TestBuildThemedDigSite(golden);
+            yield return ctx.WaitFrames(1);
+            DigModeController dm = gm.TestDigMode;
+
+            List<DirtTile> buried = dm.TestBuriedTiles();
+            ctx.Assert(buried.Count == 4, $"golden site buried {buried.Count} items (expected exactly 4)");
+            for (int i = 0; i < buried.Count; i++)
+            {
+                ItemType t = dm.TestBuriedType(buried[i]);
+                ctx.Assert(t == ItemType.Treasure, $"golden site buried a {t} (expected all Treasure)");
+                DugItemInfo resolved = gm.TestResolveItem(
+                    new DugItemInfo(t, DinoType.TRex, dm.TestBuriedVariant(buried[i]), Vector3.zero));
+                ctx.Assert(resolved.Type == ItemType.Treasure,
+                    $"golden treasure resolved to {resolved.Type} (must pass through unchanged)");
+            }
+
+            // ---- Golden tints landed on the dirt tiles + the backdrop. ----
+            DigTheme goldenTheme = cfg.GetTheme(golden);
+            var tiles = new List<DirtTile>(dm.TestTiles);
+            ctx.Assert(tiles.Count > 0, "golden site built no tiles");
+            ctx.Assert(ColorsClose(tiles[0].TestDirtColor, goldenTheme.DirtTint),
+                $"tile dirt tint {tiles[0].TestDirtColor} != golden DirtTint {goldenTheme.DirtTint}");
+            ctx.Assert(ColorsClose(dm.TestBackgroundColor, goldenTheme.BackgroundTint),
+                $"backdrop tint {dm.TestBackgroundColor} != golden BackgroundTint {goldenTheme.BackgroundTint}");
+
+            gm.TestForceRoam();
+            yield return ctx.WaitFrames(1);
+
+            // ---- Berry Bog RAW loot (no glut downgrade) skews to fruit. ----
+            gm.TestBuildThemedDigSite(berry);
+            yield return ctx.WaitFrames(1);
+            int eggs = 0, fruit = 0, treasure = 0, shards = 0;
+            const int rolls = 2000;
+            for (int i = 0; i < rolls; i++)
+            {
+                switch (gm.TestRollDugItemRaw().Type)
+                {
+                    case ItemType.Egg: eggs++; break;
+                    case ItemType.Fruit: fruit++; break;
+                    case ItemType.Shard: shards++; break;
+                    default: treasure++; break;
+                }
+            }
+
+            float fruitFrac = fruit / (float)rolls;
+            ctx.Assert(fruitFrac > 0.45f, $"Berry Bog fruit fraction {fruitFrac:F2} not >0.45 (should be fruit-heavy)");
+            ctx.Assert(fruit > treasure && fruit > eggs,
+                $"Berry Bog not fruit-dominant (egg={eggs} fruit={fruit} treasure={treasure} shard={shards})");
+
+            gm.TestForceRoam();
+            ctx.Log($"themes={themeCount}; {checkedMounds} mounds tinted; golden=4 all-treasure; " +
+                    $"berry fruitFrac={fruitFrac:F2}; picks golden={counts[golden]} < meadow={counts[meadow]}");
+            gm.TestReset();
+        }
+
+        /// <summary>Index of the dig theme with the given name, or -1.</summary>
+        private int FindThemeIndex(GameConfig cfg, string name)
+        {
+            for (int i = 0; i < cfg.DigThemeCount; i++)
+            {
+                if (cfg.GetTheme(i).Name == name)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>RGBA equality within a small tolerance (tint round-trips exactly, but
+        /// stay lenient against float drift).</summary>
+        private static bool ColorsClose(Color a, Color b)
+        {
+            return Mathf.Abs(a.r - b.r) < 0.02f && Mathf.Abs(a.g - b.g) < 0.02f &&
+                   Mathf.Abs(a.b - b.b) < 0.02f && Mathf.Abs(a.a - b.a) < 0.02f;
         }
 
         // ============================================================ REGRESSIONS

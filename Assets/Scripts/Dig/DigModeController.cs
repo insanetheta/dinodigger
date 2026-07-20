@@ -24,6 +24,10 @@ namespace DinoDigger.Dig
         [SerializeField] private SpriteRenderer _backhoeBody;
         [SerializeField] private SpriteRenderer _helperDino;
         [SerializeField] private ParticleSystem _crumbs;
+        // Full-bleed dig backdrop (the "Background" child of DigRoot). Wired by
+        // SceneBuilder; a legacy baked scene with no wiring resolves it by name in
+        // BuildGrid so the theme's background tint still lands.
+        [SerializeField] private SpriteRenderer _background;
 
         // Two-bone excavator rig: ArmPivot(shoulder) -> Boom -> Elbow -> Stick ->
         // Wrist -> Bucket. Joint nodes rotate; the sprite renderers hang off them.
@@ -47,6 +51,9 @@ namespace DinoDigger.Dig
         private bool _open;
         private bool _finished;
         private bool _bigDinoHelps;
+        // Active dig postcard theme (tints + loot skew + item count). Null = the flat
+        // default config weights/counts + no tint (identical to Meadow Classic).
+        private DigTheme _theme;
 
         // ---- Excavator rig geometry + timing --------------------------------
         // DIG-VIEW STAGING (close-up cutaway): the body renders BIG (2.4 units
@@ -192,12 +199,29 @@ namespace DinoDigger.Dig
 
         /// <summary>TEST HOOK. Roll a single buried item using the real loot weights
         /// (including the owned-species egg-shard nerf) and hand it back as a
-        /// DugItemInfo, so shard-drop-rate tests never have to grind slow dig loops.</summary>
+        /// DugItemInfo, so shard-drop-rate tests never have to grind slow dig loops.
+        /// Uses whatever theme is currently active (null = flat default weights).</summary>
         internal DugItemInfo TestRollItemInfo()
         {
             Buried b = RollItem();
             return new DugItemInfo(b.Type, b.Dino, b.Variant, Vector3.zero);
         }
+
+        /// <summary>TEST HOOK. Build a themed dig site off-screen (at the dig root) so the
+        /// DigThemes case can inspect its tints + buried loot without driving the camera.
+        /// Pair with <see cref="Close"/> (or GameManager.TestForceRoam) to tear it down.</summary>
+        internal void TestBuildThemedSite(DigTheme theme)
+        {
+            _open = true;
+            _finished = false;
+            _found.Clear();
+            _bigDinoHelps = false;
+            _theme = theme;
+            BuildGrid();
+        }
+
+        /// <summary>TEST HOOK. Current dig-backdrop tint (Color.white when no renderer).</summary>
+        internal Color TestBackgroundColor => _background != null ? _background.color : Color.white;
 
         public void Configure(GameConfig config, PlaceholderLibrary lib)
         {
@@ -207,13 +231,16 @@ namespace DinoDigger.Dig
 
         public Transform Root => _root;
 
-        /// <summary>Build a fresh dig site and reveal it. Camera move is external.</summary>
-        public void Open(bool bigDinoHelps)
+        /// <summary>Build a fresh dig site and reveal it. Camera move is external.
+        /// <paramref name="theme"/> is the mound's rolled dig postcard (null = the flat
+        /// default look/weights).</summary>
+        public void Open(bool bigDinoHelps, DigTheme theme = null)
         {
             _open = true;
             _finished = false;
             _found.Clear();
             _bigDinoHelps = bigDinoHelps;
+            _theme = theme;
             BuildGrid();
             GameEvents.RaiseDigModeEntered();
         }
@@ -221,6 +248,7 @@ namespace DinoDigger.Dig
         public void Close()
         {
             _open = false;
+            _theme = null;
             _digQueue.Clear();
             _activeTile = null;
             _arm = ArmState.Idle;
@@ -244,6 +272,9 @@ namespace DinoDigger.Dig
             _grid = new DirtTile[_rows, _cols];
             Vector3 origin = _root != null ? _root.position : transform.position;
 
+            Color dirtTint = _theme != null ? _theme.DirtTint : Color.white;
+            ApplyBackgroundTint(_theme != null ? _theme.BackgroundTint : Color.white);
+
             float halfW = (_cols - 1) * 0.5f;
 
             for (int r = 0; r < _rows; r++)
@@ -259,6 +290,7 @@ namespace DinoDigger.Dig
 
                     var tile = go.AddComponent<DirtTile>();
                     tile.Build(this, _lib, r, c, health, _crumbs);
+                    tile.SetDirtTint(dirtTint); // theme multiply over the crack sprites
 
                     _tiles.Add(tile);
                     _grid[r, c] = tile;
@@ -274,6 +306,26 @@ namespace DinoDigger.Dig
             float frameTop = SurfaceY + DigBodyH + 0.2f;
             float frameBottom = -(_rows + 0.7f);
             DigCenter = origin + new Vector3(0f, (frameTop + frameBottom) * 0.5f, 0f);
+        }
+
+        /// <summary>Tint the full-bleed dig backdrop for the active theme. Resolves the
+        /// renderer by name off DigRoot the first time when SceneBuilder didn't wire it
+        /// (a legacy baked scene), so the tint lands without a scene rebuild.</summary>
+        private void ApplyBackgroundTint(Color tint)
+        {
+            if (_background == null && _root != null)
+            {
+                Transform bg = _root.Find("Background");
+                if (bg != null)
+                {
+                    _background = bg.GetComponent<SpriteRenderer>();
+                }
+            }
+
+            if (_background != null)
+            {
+                _background.color = tint;
+            }
         }
 
         private void PlaceBackhoe(Vector3 origin, float halfW)
@@ -519,7 +571,12 @@ namespace DinoDigger.Dig
                 return;
             }
 
-            int count = Random.Range(_config.MinItemsPerSite, _config.MaxItemsPerSite + 1);
+            // Buried-item count: the theme's range when themed, else the flat config range.
+            int minItems = _theme != null ? _theme.MinItems : _config.MinItemsPerSite;
+            int maxItems = _theme != null ? _theme.MaxItems : _config.MaxItemsPerSite;
+            minItems = Mathf.Max(1, minItems);
+            maxItems = Mathf.Max(minItems, maxItems);
+            int count = Random.Range(minItems, maxItems + 1);
             count = Mathf.Min(count, _tiles.Count);
 
             // Bias buried items toward deeper rows so the child has to dig a bit.
@@ -590,9 +647,11 @@ namespace DinoDigger.Dig
 
         private Buried RollItem()
         {
-            float egg = _config.EggWeight;
-            float fruit = _config.FruitWeight;
-            float treasure = _config.TreasureWeight;
+            // Themed sites skew the loot; an unthemed site uses the flat config weights
+            // (identical to Meadow Classic), so the existing roll tests are unchanged.
+            float egg = _theme != null ? _theme.EggWeight : _config.EggWeight;
+            float fruit = _theme != null ? _theme.FruitWeight : _config.FruitWeight;
+            float treasure = _theme != null ? _theme.TreasureWeight : _config.TreasureWeight;
             float shard = 0f;
 
             GameManager gm = GameManager.Instance;

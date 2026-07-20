@@ -180,6 +180,23 @@ namespace DinoDigger.Core
         {
             Save.Load();
             RestoreFromSave();
+            RollMoundThemes();
+        }
+
+        /// <summary>Give every scene-baked mound a rolled dig postcard theme so it tints
+        /// itself from the start (respawned mounds re-roll on their own via DigMound.Respawn).
+        /// Runs in Start so DigMound.Awake has cached its renderer/sparkle first.</summary>
+        private void RollMoundThemes()
+        {
+            if (_mounds == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _mounds.Count; i++)
+            {
+                _mounds[i]?.RollTheme(_config);
+            }
         }
 
         private void OnDestroy()
@@ -420,7 +437,12 @@ namespace DinoDigger.Core
             State.Set(GameState.Transition);
 
             bool bigHelps = HasBigDino();
-            _digMode.Open(bigHelps);
+            // The mound carries its rolled dig postcard: the site reads it for tints,
+            // loot skew and buried-item count. Null-safe -> flat default look.
+            Config.DigTheme theme = (_config != null && mound != null)
+                ? _config.GetTheme(mound.ThemeIndex)
+                : null;
+            _digMode.Open(bigHelps, theme);
 
             if (_cameraFollow != null)
             {
@@ -2304,6 +2326,27 @@ namespace DinoDigger.Core
             }
 
             return resolved;
+        }
+
+        /// <summary>TEST HOOK. Build a themed dig site off-screen (at the dig root) so the
+        /// DigThemes case can inspect its tints + buried loot. Tear down with TestForceRoam.</summary>
+        internal void TestBuildThemedDigSite(int themeIndex)
+        {
+            if (_digMode != null && _config != null)
+            {
+                _digMode.TestBuildThemedSite(_config.GetTheme(themeIndex));
+            }
+        }
+
+        /// <summary>TEST HOOK. Roll one dug item through the dig site's RAW loot roll
+        /// (theme weights + egg-shard nerf) WITHOUT the FinishDig uniqueness/glut resolution.
+        /// Lets the theme-distribution check see the pure loot skew (e.g. Berry Bog -> fruit),
+        /// unclouded by the fruit-glut downgrade. Requires a site built (TestBuildThemedDigSite).</summary>
+        internal DugItemInfo TestRollDugItemRaw()
+        {
+            return _digMode != null
+                ? _digMode.TestRollItemInfo()
+                : new DugItemInfo(ItemType.Fruit, Config.DinoType.TRex, 0, Vector3.zero);
         }
 
         /// <summary>TEST HOOK. Resolve a batch of <paramref name="count"/> freshly dug

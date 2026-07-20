@@ -1,4 +1,5 @@
 using UnityEngine;
+using DinoDigger.Config;
 using DinoDigger.Core;
 
 namespace DinoDigger.Overworld
@@ -16,7 +17,13 @@ namespace DinoDigger.Overworld
 
         public bool IsActive { get; private set; } = true;
 
+        /// <summary>Index into GameConfig.EffectiveThemes for this mound's rolled dig
+        /// postcard. Drives the dig site's tint + loot skew, and this mound's own colour.</summary>
+        public int ThemeIndex { get; private set; }
+
         private Vector3 _baseScale;
+        private Color _baseSparkleColor = Color.white; // pre-tint sparkle colour
+        private GameConfig _config;
 
         private void Awake()
         {
@@ -26,6 +33,47 @@ namespace DinoDigger.Overworld
             }
 
             _baseScale = transform.localScale;
+            if (_sparkle != null)
+            {
+                _baseSparkleColor = _sparkle.main.startColor.color;
+            }
+        }
+
+        /// <summary>Roll a fresh dig postcard theme (weighted) and tint the mound + sparkle
+        /// to match, so the colour telegraphs the flavour. Called on (re)spawn. Null config
+        /// leaves the mound at its default (Meadow Classic) look.</summary>
+        public void RollTheme(GameConfig config)
+        {
+            _config = config;
+            if (config == null)
+            {
+                return;
+            }
+
+            ThemeIndex = config.PickThemeIndex();
+            ApplyThemeTint(config.GetTheme(ThemeIndex));
+        }
+
+        private void ApplyThemeTint(DigTheme theme)
+        {
+            if (theme == null)
+            {
+                return;
+            }
+
+            if (_renderer != null)
+            {
+                _renderer.color = theme.MoundTint;
+            }
+
+            if (_sparkle != null)
+            {
+                // Multiply the base sparkle colour by the theme tint so a white-tinted
+                // (Meadow) mound keeps its default gold sparkle, while a themed mound
+                // shifts toward its colour.
+                var main = _sparkle.main;
+                main.startColor = _baseSparkleColor * theme.MoundTint;
+            }
         }
 
         public void OnTapped(Vector2 worldPoint)
@@ -39,14 +87,19 @@ namespace DinoDigger.Overworld
             GameManager.Instance?.RequestDig(this);
         }
 
-        /// <summary>Move this mound to a fresh spot and re-enable it.</summary>
+        /// <summary>Move this mound to a fresh spot and re-enable it. A respawn also rolls
+        /// a brand-new dig postcard theme, so a dug-out mound comes back a fresh flavour.</summary>
         public void Respawn(Vector3 worldPos)
         {
             transform.position = worldPos;
+            RollTheme(_config); // fresh flavour each respawn (no-op if config not yet set)
             SetActiveMound(true);
             transform.localScale = Vector3.zero;
             Tween.ScaleTo(transform, _baseScale, 0.4f);
         }
+
+        /// <summary>TEST HOOK. The mound sprite's current tint (its theme colour).</summary>
+        internal Color TestTint => _renderer != null ? _renderer.color : Color.white;
 
         public void Consume()
         {

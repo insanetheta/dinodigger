@@ -20,6 +20,7 @@ namespace DinoDigger.Dig
         private int _damage;
         private bool _destroyed;
         private Color _peekTint = Color.white;
+        private Color _dirtTint = Color.white; // theme multiply (Dig Postcards)
 
         public int Row { get; private set; }
         public int Col { get; private set; }
@@ -30,6 +31,7 @@ namespace DinoDigger.Dig
         internal int TestDamage => _damage;
         internal int TestMaxHealth => _maxHealth;
         internal Sprite TestDirtSprite => _dirt != null ? _dirt.sprite : null;
+        internal Color TestDirtColor => _dirt != null ? _dirt.color : Color.white;
         internal bool TestPeekEnabled => _peek != null && _peek.enabled;
         internal float TestPeekAlpha => _peek != null ? _peek.color.a : 0f;
 
@@ -60,6 +62,18 @@ namespace DinoDigger.Dig
             _peek = peekGo.AddComponent<SpriteRenderer>();
             _peek.sortingOrder = 11;
             _peek.enabled = false;
+        }
+
+        /// <summary>Apply the dig theme's dirt tint (a MULTIPLY over the crack sprites).
+        /// Called by DigModeController.BuildGrid; re-applied on every RefreshSprite so a
+        /// fresh crack state keeps the tint.</summary>
+        public void SetDirtTint(Color tint)
+        {
+            _dirtTint = tint;
+            if (_dirt != null)
+            {
+                _dirt.color = tint;
+            }
         }
 
         public void SetPeek(Sprite itemSprite, Color tint)
@@ -157,6 +171,8 @@ namespace DinoDigger.Dig
             {
                 _dirt.sprite = s;
             }
+
+            _dirt.color = _dirtTint; // keep the theme tint across crack-state swaps
         }
     }
 }
