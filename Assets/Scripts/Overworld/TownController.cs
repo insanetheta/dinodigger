@@ -42,6 +42,25 @@ namespace DinoDigger.Overworld
         private readonly List<DinoController> _builders = new List<DinoController>();
         private float _workPuffTimer;
 
+        // Recess Time (DinoDigger-x07): transient dino parties thrown by tapping a FINISHED
+        // building. One recess per building at a time; multiple different buildings CAN party
+        // simultaneously (recruitment naturally de-dupes, since a party-goer is IsBusy while
+        // commuting/orbiting and so is never re-recruited). NEVER saved — a reload comes back
+        // to a calm town.
+        private readonly List<Recess> _recesses = new List<Recess>();
+        private int _recessTapFeedback; // test-observable: taps that fired instant feedback
+
+        /// <summary>One running recess: the host building + its recruited party-goers, a run
+        /// timer, and a spacing timer for the periodic star/confetti pops.</summary>
+        private class Recess
+        {
+            public int Index;
+            public BuildingController Building;
+            public readonly List<DinoController> Dinos = new List<DinoController>();
+            public float Elapsed;
+            public float PopTimer;
+        }
+
         /// <summary>True once the building at <paramref name="index"/> in build order has
         /// FINISHED. Finished buildings occupy plots 0.._nextIndex-1, so this is derived
         /// straight from the queue index (no per-building lookup). Used by the Fruit Stand
@@ -59,6 +78,22 @@ namespace DinoDigger.Overworld
         internal int TestNextIndex => _nextIndex;
         internal int TestBuilderCount => _builders.Count;
         internal IReadOnlyList<DinoController> TestBuilders => _builders;
+        internal int TestRecessCount => _recesses.Count;
+        internal int TestRecessTapFeedback => _recessTapFeedback;
+        internal bool TestIsRecessRunning(int index) => IsRecessRunning(index);
+        internal int TestRecessDinoTotal
+        {
+            get
+            {
+                int n = 0;
+                for (int i = 0; i < _recesses.Count; i++)
+                {
+                    n += _recesses[i] != null ? _recesses[i].Dinos.Count : 0;
+                }
+
+                return n;
+            }
+        }
 
         private void OnEnable()
         {
@@ -93,6 +128,10 @@ namespace DinoDigger.Overworld
             {
                 return;
             }
+
+            // Recess parties run independently of the build queue (they use free residents,
+            // never builders), so advance them every frame regardless of build state.
+            TickRecesses(dt);
 
             if (_activeSite == null)
             {
@@ -173,6 +212,11 @@ namespace DinoDigger.Overworld
             {
                 building.MarkFruitStand(_library.Fruit(0));
             }
+
+            // Recess Time (DinoDigger-x07): hand the building its owning town + build-order
+            // index so a tap on the FINISHED building can reach the recess flow (the building
+            // installs its own tap collider only once IsFinished).
+            building.WireRecess(this, index);
 
             return building;
         }
@@ -324,6 +368,172 @@ namespace DinoDigger.Overworld
             gm.TownPersist(); // the finished building + advanced queue index land in the save
         }
 
+        // ------------------------------------------------------------ recess time
+
+        /// <summary>A FINISHED building was tapped (routed here by <see cref="BuildingController"/>).
+        /// EVERY tap gives instant feedback — a squash-and-stretch bounce, a cheerful chime, and
+        /// a small confetti pop — even if no dinos are free and even mid-party (the toddler rule:
+        /// every tap responds). Then, if no recess is already running on THIS building, recruit
+        /// 2..RecessMaxDinos free residents to trot over and throw a ~RecessSeconds party.</summary>
+        internal void OnBuildingTapped(BuildingController building, int index)
+        {
+            _recessTapFeedback++;
+
+            GameManager gm = GameManager.Instance;
+            if (building != null)
+            {
+                Tween.PunchScale(building.transform, 0.18f, 0.35f); // re-bounces on every tap
+                gm?.TownSpawnConfetti(building.transform.position + new Vector3(0f, 0.5f, 0f));
+            }
+
+            gm?.Audio?.Chime();
+
+            // One recess per building at a time: a tap during a running party is just feedback.
+            if (IsRecessRunning(index))
+            {
+                return;
+            }
+
+            StartRecess(building, index);
+        }
+
+        private bool IsRecessRunning(int index)
+        {
+            for (int i = 0; i < _recesses.Count; i++)
+            {
+                if (_recesses[i] != null && _recesses[i].Index == index)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Recruit up to <see cref="GameConfig.RecessMaxDinos"/> eligible residents (same
+        /// pool the builder draft/seller pick uses — non-buddy, not the ceremony dino, not busy,
+        /// not a seller, and NOT a builder on an active site, since a commuting/working builder
+        /// reads as busy), trot them to the building, then orbit-party it with staggered phases.
+        /// With zero free dinos the tap already gave full feedback — nothing else happens.</summary>
+        private void StartRecess(BuildingController building, int index)
+        {
+            GameManager gm = GameManager.Instance;
+            if (gm == null || _area == null || building == null)
+            {
+                return;
+            }
+
+            int max = Mathf.Max(1, _config != null ? _config.RecessMaxDinos : 4);
+            List<DinoController> goers = gm.TownAcquireRecessGoers(max);
+            if (goers.Count == 0)
+            {
+                return; // nobody free: the bounce/chime/confetti was the whole reaction
+            }
+
+            var recess = new Recess { Index = index, Building = building, Elapsed = 0f, PopTimer = 0f };
+            Vector3 center = _area.PlotWorld(index);
+            float duration = _config != null ? Mathf.Max(1f, _config.RecessSeconds) : 15f;
+            float speed = _config != null ? _config.TownBuilderCommuteSpeed : 1.1f;
+
+            for (int i = 0; i < goers.Count; i++)
+            {
+                DinoController d = goers[i];
+                if (d == null)
+                {
+                    continue;
+                }
+
+                recess.Dinos.Add(d);
+                float phase = (i / (float)goers.Count) * Mathf.PI * 2f; // spread the ring out
+                Vector3 stand = _area.StandWorld(index, i);
+                // Trot over (builder commute speed), then orbit-party the plot for the recess.
+                d.WalkTo(stand, speed, () =>
+                {
+                    if (d != null)
+                    {
+                        d.StartParade(center, phase, duration);
+                    }
+                });
+            }
+
+            _recesses.Add(recess);
+            gm.Audio?.Grow(); // a little party-start sting
+        }
+
+        /// <summary>Advance every running recess: drop any party-goer that left (tapped into a
+        /// buddy mid-party, or destroyed — mirrors the seller watchdog), pop the occasional
+        /// star/confetti burst, and once the run timer elapses (or everyone left) end it with a
+        /// final dance so the residents trot home and resume their meadow role on their own.</summary>
+        private void TickRecesses(float dt)
+        {
+            if (_recesses.Count == 0)
+            {
+                return;
+            }
+
+            GameManager gm = GameManager.Instance;
+
+            for (int r = _recesses.Count - 1; r >= 0; r--)
+            {
+                Recess rec = _recesses[r];
+                if (rec == null || rec.Building == null)
+                {
+                    _recesses.RemoveAt(r);
+                    continue;
+                }
+
+                // Watchdog: a party-goer promoted to buddy (tap-to-swap) or destroyed cleanly
+                // leaves the party — it's no longer ours to orbit.
+                for (int i = rec.Dinos.Count - 1; i >= 0; i--)
+                {
+                    DinoController d = rec.Dinos[i];
+                    if (d == null || d.IsBuddy)
+                    {
+                        rec.Dinos.RemoveAt(i);
+                    }
+                }
+
+                rec.Elapsed += dt;
+
+                // Occasional star/confetti pops (with a soft chime) while the party runs.
+                rec.PopTimer -= dt;
+                if (rec.PopTimer <= 0f && gm != null)
+                {
+                    rec.PopTimer = 2f;
+                    gm.TownSpawnConfetti(rec.Building.transform.position + new Vector3(0f, 0.6f, 0f));
+                    gm.Audio?.Chime();
+                }
+
+                float duration = _config != null ? Mathf.Max(1f, _config.RecessSeconds) : 15f;
+                if (rec.Elapsed >= duration || rec.Dinos.Count == 0)
+                {
+                    EndRecess(rec);
+                    _recesses.RemoveAt(r);
+                }
+            }
+        }
+
+        /// <summary>End a recess: everyone does a final <see cref="DinoController.Dance"/> (which
+        /// then resumes the resident role and trots home), plus one last confetti pop.</summary>
+        private void EndRecess(Recess rec)
+        {
+            if (rec == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < rec.Dinos.Count; i++)
+            {
+                rec.Dinos[i]?.Dance(); // Dance -> ResumeRole -> walk back to the meadow
+            }
+
+            if (rec.Building != null)
+            {
+                GameManager.Instance?.TownSpawnConfetti(
+                    rec.Building.transform.position + new Vector3(0f, 0.5f, 0f));
+            }
+        }
+
         // -------------------------------------------------------------- persistence
 
         /// <summary>Write the town's build state into <paramref name="data"/> (save schema
@@ -446,6 +656,17 @@ namespace DinoDigger.Overworld
             }
 
             _builders.Clear();
+
+            // Recess is transient (never saved): end any running party so its dinos stop
+            // orbiting and resume their role, then forget them. GameManager.TestReset destroys
+            // the dinos anyway; EndRecess keeps a stand-alone TestResetTown tidy too.
+            for (int i = 0; i < _recesses.Count; i++)
+            {
+                EndRecess(_recesses[i]);
+            }
+
+            _recesses.Clear();
+            _recessTapFeedback = 0;
 
             ClearAllSites();
             _nextIndex = 0;

@@ -14,7 +14,7 @@ namespace DinoDigger.Overworld
     /// <see cref="Core.GameEvents"/>. Fully null-tolerant so a scene missing building
     /// art still advances (the state number is what matters to tests).
     /// </summary>
-    public class BuildingController : MonoBehaviour
+    public class BuildingController : MonoBehaviour, ITappable
     {
         /// <summary>Number of under-construction states (0..3); reaching this index means FINISHED.</summary>
         public const int ConstructionStates = 4;
@@ -46,6 +46,15 @@ namespace DinoDigger.Overworld
         private int _state;        // 0..3 building; == ConstructionStates (4) means finished
         private float _worked;     // seconds of builder work banked toward the next state
         private float _perState = 8f;
+
+        // Recess Time (DinoDigger-x07): once FINISHED, the building becomes a tap target — a
+        // BoxCollider2D sized to its sprite plus ITappable routing, so GameManager.FindTappable
+        // picks it up and a tap throws a 15s dino party. Wired to its owning TownController +
+        // build-order index so the tap can reach the recess service. Under-construction sites
+        // stay non-tappable (no collider until IsFinished).
+        private TownController _town;
+        private int _index = -1;
+        private BoxCollider2D _tapCollider;
 
         /// <summary>Current construction-state index (0..3), or <see cref="ConstructionStates"/> when done.</summary>
         public int State => _state;
@@ -88,6 +97,66 @@ namespace DinoDigger.Overworld
             }
 
             ApplyVisual();
+            RefreshTappable(); // a restored-finished building is immediately a tap target
+        }
+
+        // TEST HOOK (integration runner; no reflection).
+        internal bool TestIsTappable => _tapCollider != null;
+
+        /// <summary>Wire the building to its owning town service + build-order index so a tap
+        /// can reach the recess flow, then (re)evaluate its tap collider. Called by
+        /// <see cref="TownController"/> right after <see cref="Init"/>, on both the fresh
+        /// break-ground and the reload paths.</summary>
+        internal void WireRecess(TownController town, int index)
+        {
+            _town = town;
+            _index = index;
+            RefreshTappable();
+        }
+
+        /// <summary>A finished building is a tap target: give it a BoxCollider2D sized to its
+        /// sprite (a sensible 1x1 default in placeholder-only, no-art runs) so
+        /// <see cref="GameManager.FindTappable"/> resolves the tap to this building. No-op while
+        /// under construction (never tappable) and idempotent once the collider exists.</summary>
+        private void RefreshTappable()
+        {
+            if (!IsFinished || _tapCollider != null)
+            {
+                return;
+            }
+
+            _tapCollider = gameObject.GetComponent<BoxCollider2D>();
+            if (_tapCollider == null)
+            {
+                _tapCollider = gameObject.AddComponent<BoxCollider2D>();
+            }
+
+            _tapCollider.isTrigger = true;
+
+            if (_renderer != null && _renderer.sprite != null)
+            {
+                Bounds b = _renderer.sprite.bounds; // local sprite space (building GO is unscaled)
+                _tapCollider.size = b.size;
+                _tapCollider.offset = b.center;
+            }
+            else
+            {
+                _tapCollider.size = Vector2.one;
+                _tapCollider.offset = Vector2.zero;
+            }
+        }
+
+        /// <summary>Tap on a FINISHED building: route to the town's recess service (bounce +
+        /// chime + confetti, and a party if any residents are free). The collider only exists
+        /// once finished, so the IsFinished guard is just belt-and-braces.</summary>
+        public void OnTapped(Vector2 worldPoint)
+        {
+            if (!IsFinished)
+            {
+                return;
+            }
+
+            _town?.OnBuildingTapped(this, _index);
         }
 
         /// <summary>Bank <paramref name="seconds"/> of builder work; advances one state per
@@ -108,6 +177,11 @@ namespace DinoDigger.Overworld
                 _state++;
                 advanced++;
                 ApplyVisual();
+            }
+
+            if (IsFinished)
+            {
+                RefreshTappable(); // just finished: becomes a tap target for a recess party
             }
 
             return advanced;

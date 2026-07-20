@@ -1839,6 +1839,44 @@ namespace DinoDigger.Core
             return result;
         }
 
+        /// <summary>Up to <paramref name="max"/> residents free to join a recess party: the SAME
+        /// eligibility as the builder draft/seller pick — NON-buddy, not the ceremony baby, not a
+        /// seller, and not BUSY (eating, dancing, traveling, parading, OR working/commuting to a
+        /// build site, since <see cref="DinoController.IsBusy"/> covers all of those). Excluding
+        /// busy dinos means a builder on an active site is never poached, and a dino already
+        /// commuting to / orbiting another recess is never double-booked (so different buildings
+        /// can party at once). Buddies and the player backhoe can never appear here.</summary>
+        internal List<DinoController> TownAcquireRecessGoers(int max)
+        {
+            var result = new List<DinoController>();
+            if (max <= 0)
+            {
+                return result;
+            }
+
+            for (int i = 0; i < _dinos.Count; i++)
+            {
+                DinoController d = _dinos[i];
+                if (d == null || d.IsBuddy || d.IsBusy || d == _ceremonyDino)
+                {
+                    continue;
+                }
+
+                if (_buddies.Contains(d) || _sellers.Contains(d))
+                {
+                    continue;
+                }
+
+                result.Add(d);
+                if (result.Count >= max)
+                {
+                    break;
+                }
+            }
+
+            return result;
+        }
+
         /// <summary>The town's build state changed (a site broke ground, advanced a state,
         /// or finished): write it to disk. Routes through <see cref="SaveNow"/> so the town's
         /// per-building progress is persisted alongside the rest of the save.</summary>

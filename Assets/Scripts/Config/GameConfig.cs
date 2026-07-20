@@ -156,6 +156,14 @@ namespace DinoDigger.Config
         [Tooltip("Walk-speed multiplier for a resident commuting from the meadow to a build site.")]
         public float TownBuilderCommuteSpeed = 1.1f;
 
+        [Tooltip("Recess Time: seconds a tapped FINISHED building throws a dino party (residents " +
+                 "trot over and orbit it) before everyone does a final dance and heads home.")]
+        public float RecessSeconds = 15f;
+
+        [Tooltip("Max NON-BUDDY residents recruited to one recess party (min 2 implicit — recruit " +
+                 "up to this many, then party with whoever showed up, even 1).")]
+        public int RecessMaxDinos = 4;
+
         [Header("Rock Smash (Ankylosaurus)")]
         [Tooltip("A buddy Ankylosaurus must be at least this close to a tapped rock to " +
                  "smash it open (same reach as the Brachio tree-shake).")]

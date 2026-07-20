@@ -542,6 +542,171 @@ namespace DinoDigger.Testing
             }
         }
 
+        // ============================================= DinoDigger-x07 Recess Time
+
+        // Tapping a FINISHED building throws a 15s dino party. Proves: (a) a finished building
+        // is tappable and bounces (instant feedback fires); (b) an under-construction building
+        // is NOT tappable; (c) a recess recruits free residents but never poaches a busy
+        // builder off an active site; (d) a repeat tap during a running recess re-bounces but
+        // does not re-recruit; (e) the party runs then ends, its residents heading home; and
+        // (f) a tap with zero free dinos still responds (feedback only, never an error).
+        private IEnumerator Case_RecessTime(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            MeadowArea meadow = gm.TestMeadow;
+            ctx.Assert(meadow != null, "no MeadowArea in the scene");
+            TownController town = EnsureTown(ctx);
+            ctx.Assert(town.TestArea != null && town.TestArea.PlotCount >= 2,
+                $"need >=2 plots for recess (have {(town.TestArea != null ? town.TestArea.PlotCount : 0)})");
+
+            GameConfig cfg = gm.TestConfig;
+            float savedRecess = cfg.RecessSeconds;
+            float savedPerState = cfg.TownSecondsPerBuildState;
+            int savedNext = gm.Save.Data.TownNextIndex;
+            List<TownBuildingSave> savedList = gm.Save.Data.TownBuildings;
+            int savedWallet = gm.Save.Data.TreasureCount;
+            try
+            {
+                cfg.RecessSeconds = 1.0f;             // short party so the case finishes fast
+                cfg.TownSecondsPerBuildState = 100f; // building 1 stays UNDER CONSTRUCTION all case
+
+                // Author building 0 FINISHED; the queue continues at plot 1.
+                gm.Save.Data.TreasureCount = 0;
+                gm.Save.Data.TownNextIndex = 1;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>
+                {
+                    new TownBuildingSave { Finished = true, State = BuildingController.ConstructionStates },
+                };
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+
+                Transform b0t = town.transform.Find("Building_0");
+                BuildingController b0 = b0t != null ? b0t.GetComponent<BuildingController>() : null;
+                ctx.Assert(b0 != null && b0.IsFinished, "building 0 not restored finished");
+
+                // (a) A finished building is TAPPABLE: it carries a tap collider.
+                ctx.Assert(b0.TestIsTappable && b0.GetComponent<Collider2D>() != null,
+                    "finished building is not tappable (no collider)");
+
+                // Four meadow residents: two get drafted as builders (busy), two stay free.
+                var residents = new List<DinoController>();
+                DinoType[] types =
+                {
+                    DinoType.TRex, DinoType.Stegosaurus, DinoType.Triceratops, DinoType.Brachiosaurus
+                };
+                for (int i = 0; i < types.Length; i++)
+                {
+                    DinoController d = gm.TestSpawnDino(types[i], GrowthStage.Big);
+                    gm.TestMakeResident(d, teleportIntoMeadow: true);
+                    residents.Add(d);
+                }
+
+                yield return ctx.WaitFrames(2);
+
+                // Break ground on plot 1 so a crew is drafted and genuinely busy.
+                gm.Save.Data.TreasureCount = cfg.TownBuildingPrice(1);
+                yield return ctx.WaitUntil(() => town.TestActiveSite != null);
+                BuildingController site = town.TestActiveSite;
+                ctx.Assert(!site.IsFinished, "active site finished too fast (per-state timing)");
+
+                // (b) An UNDER-CONSTRUCTION building is NOT tappable.
+                ctx.Assert(!site.TestIsTappable && site.GetComponent<Collider2D>() == null,
+                    "under-construction building is tappable (should not be)");
+
+                yield return ctx.WaitUntil(() => AnyBuilderWorking(town));
+                DinoController worker = FirstWorkingBuilder(town);
+                ctx.Assert(worker != null, "no builder reached the site");
+                int builderCount = town.TestBuilderCount;
+
+                // (a cont.) A REAL routed tap on the finished building fires instant feedback and
+                // starts a recess. Let a physics step register the collider, then tap a point on
+                // it where the building is the FIRST ITappable (mirrors FindTappable) — robust
+                // against a respawned mound whose footprint occasionally clips the building.
+                yield return new WaitForFixedUpdate();
+                Physics2D.SyncTransforms();
+                int fbBefore = town.TestRecessTapFeedback;
+                bool routed = RoutedTapOnBuilding(gm, b0, 0);
+                ctx.Assert(routed, "routed tap did not resolve to the finished building");
+                ctx.Assert(town.TestRecessTapFeedback == fbBefore + 1,
+                    "tap on finished building gave no instant feedback");
+
+                yield return ctx.WaitUntil(() => town.TestIsRecessRunning(0));
+                ctx.Assert(town.TestRecessDinoTotal >= 1,
+                    "recess recruited nobody though free residents existed");
+
+                // (c) The busy builder was NOT poached: the crew is intact and still working.
+                ctx.Assert(worker.IsWorking, "a working builder was pulled off the site by the recess");
+                ctx.Assert(town.TestBuilderCount == builderCount,
+                    $"builder crew changed during recess ({town.TestBuilderCount} != {builderCount})");
+
+                // (d) A repeat tap during the running recess re-bounces but does NOT re-recruit or
+                // start a second recess on the same building. Call the handler directly here so
+                // the assertion can't be confused by a party-goer now standing over the plot.
+                int fb2 = town.TestRecessTapFeedback;
+                int recCount = town.TestRecessCount;
+                town.OnBuildingTapped(b0, 0);
+                ctx.Assert(town.TestRecessTapFeedback == fb2 + 1, "repeat tap gave no feedback");
+                ctx.Assert(town.TestRecessCount == recCount,
+                    "repeat tap started a second recess on the same building");
+
+                // (e) The party runs then ends: the recess clears and its residents head home.
+                yield return ctx.WaitUntil(() => !town.TestIsRecessRunning(0) && town.TestRecessCount == 0);
+                yield return ctx.WaitUntil(() =>
+                {
+                    for (int i = 0; i < residents.Count; i++)
+                    {
+                        DinoController d = residents[i];
+                        if (d == null || d.IsWorking)
+                        {
+                            continue; // builders stay on their site
+                        }
+
+                        if (!meadow.ContainsInterior(d.transform.position))
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                });
+                ctx.Assert(worker.IsWorking, "builder stopped working after the party ended");
+
+                // (f) Zero free dinos: reset the town, re-finish building 0 with NO residents,
+                // and tap — the tap still responds (feedback), no recess, no error.
+                gm.TestReset();
+                town.RestoreFromSave(gm.Save.Data); // TownNextIndex=1, building 0 finished
+                yield return ctx.WaitFrames(2);
+                Transform b0t2 = town.transform.Find("Building_0");
+                BuildingController b0b = b0t2 != null ? b0t2.GetComponent<BuildingController>() : null;
+                ctx.Assert(b0b != null && b0b.TestIsTappable, "re-restored building 0 not tappable");
+
+                yield return new WaitForFixedUpdate();
+                Physics2D.SyncTransforms();
+                int fb3 = town.TestRecessTapFeedback;
+                bool routed2 = RoutedTapOnBuilding(gm, b0b, 0);
+                ctx.Assert(routed2, "zero-free routed tap did not resolve to the building");
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(town.TestRecessTapFeedback == fb3 + 1,
+                    "tap with zero free dinos gave no feedback");
+                ctx.Assert(town.TestRecessCount == 0,
+                    "a recess started with zero free dinos (should be feedback-only)");
+
+                ctx.Log("recess: finished building tappable+bounces, under-construction not tappable; " +
+                        "party recruited free residents (busy builder not poached), repeat tap re-bounced " +
+                        "without re-recruiting, party ended and residents went home; zero-free tap still responded");
+            }
+            finally
+            {
+                cfg.RecessSeconds = savedRecess;
+                cfg.TownSecondsPerBuildState = savedPerState;
+                gm.Save.Data.TownNextIndex = savedNext;
+                gm.Save.Data.TownBuildings = savedList ?? new List<TownBuildingSave>();
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
         // ================================================================= HELPERS
 
         /// <summary>Return the scene's town (real or previously-injected), building a small
@@ -630,6 +795,77 @@ namespace DinoDigger.Testing
             }
 
             return null;
+        }
+
+        /// <summary>Route a REAL world tap (through GameManager.FindTappable) onto a finished
+        /// building, choosing a point on its collider where the building is the ONLY ITappable so
+        /// the routing is deterministic regardless of OverlapPointAll ordering (and immune to a
+        /// respawned mound clipping part of the footprint). Returns false if no clear point exists
+        /// (the whole footprint is covered by another tappable — effectively never).</summary>
+        private bool RoutedTapOnBuilding(GameManager gm, BuildingController b, int index)
+        {
+            Collider2D col = b != null ? b.GetComponent<Collider2D>() : null;
+            if (col == null)
+            {
+                return false;
+            }
+
+            Bounds bb = col.bounds;
+            // Candidates high on the sprite first (least likely to collide with a ground mound).
+            Vector3[] cands =
+            {
+                bb.center + new Vector3(0f, bb.extents.y * 0.6f, 0f),
+                bb.center,
+                bb.center + new Vector3(bb.extents.x * 0.5f, bb.extents.y * 0.3f, 0f),
+                bb.center + new Vector3(-bb.extents.x * 0.5f, bb.extents.y * 0.3f, 0f),
+                bb.center + new Vector3(0f, -bb.extents.y * 0.4f, 0f),
+            };
+
+            for (int c = 0; c < cands.Length; c++)
+            {
+                if (OnlyBuildingTappable(cands[c], b))
+                {
+                    gm.TestTapWorldRouted(cands[c]);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>True when the ONLY ITappable overlapping <paramref name="p"/> is
+        /// <paramref name="b"/> — so GameManager.FindTappable (which returns the first ITappable
+        /// hit) is guaranteed to resolve a tap there to this building.</summary>
+        private bool OnlyBuildingTappable(Vector3 p, BuildingController b)
+        {
+            Collider2D[] hits = Physics2D.OverlapPointAll(p);
+            bool foundBuilding = false;
+            for (int i = 0; i < hits.Length; i++)
+            {
+                if (hits[i] == null)
+                {
+                    continue;
+                }
+
+                var t = hits[i].GetComponent<ITappable>() ?? hits[i].GetComponentInParent<ITappable>();
+                if (t == null)
+                {
+                    continue; // non-tappable collider (ground/stream): FindTappable skips it
+                }
+
+                bool isBuilding = hits[i].GetComponent<BuildingController>() == b ||
+                                  hits[i].GetComponentInParent<BuildingController>() == b;
+                if (isBuilding)
+                {
+                    foundBuilding = true;
+                }
+                else
+                {
+                    return false; // another tappable overlaps -> ambiguous, skip this point
+                }
+            }
+
+            return foundBuilding;
         }
 
         private static string Join(List<int> xs) => string.Join(",", xs);
