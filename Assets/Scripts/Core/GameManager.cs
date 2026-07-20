@@ -211,6 +211,11 @@ namespace DinoDigger.Core
             // Show the egg's assembly state for the banked shard count right away.
             _nest?.RefreshAssembly(Save.Data.ShardCount);
 
+            // Rebuild Dino Town: finished buildings return finished (no crew/confetti), a
+            // partial site resumes accepting crew, and the queue continues from the saved
+            // index. A v3 (or earlier) save has no town fields, so the town stays empty.
+            _town?.RestoreFromSave(Save.Data);
+
             if (Save.Data.Dinos != null)
             {
                 // Backward compatibility: saves from before the buddy system (v1)
@@ -1454,6 +1459,11 @@ namespace DinoDigger.Core
             return result;
         }
 
+        /// <summary>The town's build state changed (a site broke ground, advanced a state,
+        /// or finished): write it to disk. Routes through <see cref="SaveNow"/> so the town's
+        /// per-building progress is persisted alongside the rest of the save.</summary>
+        internal void TownPersist() => SaveNow();
+
         /// <summary>Reuse the shared confetti burst for a building completion.</summary>
         internal void TownSpawnConfetti(Vector3 pos) => SpawnConfetti(pos);
 
@@ -1859,6 +1869,10 @@ namespace DinoDigger.Core
                 });
             }
 
+            // Capture live Dino Town state (queue index + per-building progress) so every
+            // save — treasure, feed, hatch, or a town build event — persists the town too.
+            _town?.WriteSave(Save.Data);
+
             Save.Save();
         }
 
@@ -2082,8 +2096,9 @@ namespace DinoDigger.Core
             _courierScanTimer = 0f;
             _idleTimer = 0f;
 
-            // Town builder: clear any in-progress/finished sites cleanly (no save state
-            // in phase 1, so a reset fully wipes the town).
+            // Town builder: clear any in-progress/finished sites and rewind the queue. The
+            // caller owns Save.Data.Town* (a save-state test sets/clears those explicitly);
+            // this only wipes the live scene town between cases.
             _town?.TestResetTown();
         }
 

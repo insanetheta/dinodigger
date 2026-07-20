@@ -88,8 +88,8 @@ namespace DinoDigger.Config
         [Header("Dino Town (idle builder)")]
         [Tooltip("Curated build-price curve for the town, buildings 1..N (indexed 0-based). " +
                  "Coins auto-spend on the next building the moment the wallet clears its price. " +
-                 "Phase 1 builds only entry [0] (Pebble Playground). Values from the design doc's " +
-                 "roster: 10/25/50/90/150/240/380/490/600 (~x1.6 step).")]
+                 "All nine entries build in order, one per town plot. Values from the design " +
+                 "doc's roster: 10/25/50/90/150/240/380/490/600 (~x1.6 step).")]
         public int[] TownBuildingPrices = { 10, 25, 50, 90, 150, 240, 380, 490, 600 };
 
         [Tooltip("Seconds of builder WORK time to advance one construction state (0->1->2->3->finished). " +

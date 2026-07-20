@@ -58,6 +58,7 @@ namespace DinoDigger.Testing
                 new TestCase("DuckCatch",            20f, Case_DuckCatch),
                 new TestCase("TownAvoidsMoundAndStream", 25f, Case_TownAvoidsMoundAndStream),
                 new TestCase("TownWiredInScene",         10f, Case_TownWiredInScene),
+                new TestCase("TownStatePersists",        15f, Case_TownStatePersists),
                 new TestCase("CoinsAutoSpendStartsBuild",    25f, Case_CoinsAutoSpendStartsBuild),
                 new TestCase("BuildAdvancesThroughStates",   45f, Case_BuildAdvancesThroughStates),
                 new TestCase("BuilderCommutesFromMeadow",    45f, Case_BuilderCommutesFromMeadow),
@@ -1497,12 +1498,19 @@ namespace DinoDigger.Testing
                 sm.Data.ShardCount = 77;
                 sm.Data.Dinos.Clear();
                 sm.Data.Dinos.Add(new DinoSave { Type = DinoType.Stegosaurus, Stage = GrowthStage.Kid, FruitEaten = 3 });
+                // v4 Dino Town: 1 finished building + 1 mid-build site at state 1.
+                sm.Data.TownNextIndex = 1;
+                sm.Data.TownBuildings.Clear();
+                sm.Data.TownBuildings.Add(new TownBuildingSave { Finished = true, State = 4 });
+                sm.Data.TownBuildings.Add(new TownBuildingSave { Finished = false, State = 1, Worked = 2.5f });
                 sm.Save();
 
                 // Mutate in memory, then reload from disk.
                 sm.Data.TreasureCount = 0;
                 sm.Data.ShardCount = 0;
                 sm.Data.Dinos.Clear();
+                sm.Data.TownNextIndex = 0;
+                sm.Data.TownBuildings.Clear();
                 sm.Load();
 
                 ctx.Assert(sm.Data.TreasureCount == 4242, $"treasure not restored ({sm.Data.TreasureCount})");
@@ -1513,8 +1521,17 @@ namespace DinoDigger.Testing
                 ctx.Assert(d.Type == DinoType.Stegosaurus && d.Stage == GrowthStage.Kid && d.FruitEaten == 3,
                     $"dino fields not restored ({d.Type}/{d.Stage}/{d.FruitEaten})");
 
-                // v2 -> v3 migration: a save written before ShardCount/NestSpeciesQueue
-                // existed must load cleanly with those fields at their defaults.
+                // v4 town fields survive the roundtrip verbatim.
+                ctx.Assert(sm.Data.TownNextIndex == 1, $"town next index not restored ({sm.Data.TownNextIndex})");
+                ctx.Assert(sm.Data.TownBuildings.Count == 2, $"town building count {sm.Data.TownBuildings.Count} != 2");
+                ctx.Assert(sm.Data.TownBuildings[0].Finished && sm.Data.TownBuildings[0].State == 4,
+                    "finished town building not restored");
+                ctx.Assert(!sm.Data.TownBuildings[1].Finished && sm.Data.TownBuildings[1].State == 1 &&
+                           Mathf.Approximately(sm.Data.TownBuildings[1].Worked, 2.5f),
+                    "in-progress town building fields not restored");
+
+                // v2 -> v4 migration: a save written before ShardCount/NestSpeciesQueue and
+                // before the town fields must load cleanly with all of them at their defaults.
                 File.WriteAllText(path,
                     "{\"Version\":2,\"TreasureCount\":11,\"Dinos\":[],\"ParadeDone\":true}");
                 sm.Load();
@@ -1522,7 +1539,11 @@ namespace DinoDigger.Testing
                     "v2 fields lost on migration");
                 ctx.Assert(sm.Data.ShardCount == 0, $"migrated v2 save should default ShardCount=0 (got {sm.Data.ShardCount})");
                 ctx.Assert(sm.Data.NestSpeciesQueue != null, "migrated v2 save left NestSpeciesQueue null");
-                ctx.Log("save roundtrip (treasure=4242, shards=77, v3) + v2 migrates with ShardCount defaulting to 0");
+                ctx.Assert(sm.Data.TownNextIndex == 0, $"migrated save should default TownNextIndex=0 (got {sm.Data.TownNextIndex})");
+                ctx.Assert(sm.Data.TownBuildings != null && sm.Data.TownBuildings.Count == 0,
+                    "migrated save should default TownBuildings to empty (an empty town)");
+                ctx.Log("save roundtrip (treasure=4242, shards=77, town 1 done + 1 building, v4) + " +
+                        "old save migrates with town defaulting to empty");
             }
             finally
             {

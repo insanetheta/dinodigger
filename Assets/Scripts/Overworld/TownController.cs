@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using DinoDigger.Config;
 using DinoDigger.Core;
+using DinoDigger.Managers;
 
 namespace DinoDigger.Overworld
 {
@@ -20,8 +21,13 @@ namespace DinoDigger.Overworld
     /// this class simply cannot reach, not by a runtime check.
     ///
     /// Wired by SceneBuilder (the town-district ticket) via <see cref="Configure"/>;
-    /// ticked by <see cref="GameManager"/>. Persists NO town state in phase 1 (deferred
-    /// to a later save-version bump), but resets cleanly for the integration runner.
+    /// ticked by <see cref="GameManager"/>. Town state PERSISTS across restarts (save
+    /// schema v4): the queue index + every building's progress are written via
+    /// <see cref="WriteSave"/> (captured by GameManager.SaveNow and pushed on each build
+    /// event through <see cref="GameManager.TownPersist"/>) and rebuilt on load via
+    /// <see cref="RestoreFromSave"/> — finished buildings return finished (no crew, no
+    /// confetti), a partial site resumes accepting crew, and the queue continues from the
+    /// saved index. Also resets cleanly for the integration runner.
     /// </summary>
     public class TownController : MonoBehaviour
     {
@@ -103,7 +109,7 @@ namespace DinoDigger.Overworld
 
             if (_nextIndex >= _area.PlotCount)
             {
-                return; // no free plot in curated order (phase 1: only the first)
+                return; // no free plot: the whole curated queue is built out
             }
 
             int price = _config.TownBuildingPrice(_nextIndex);
@@ -117,8 +123,24 @@ namespace DinoDigger.Overworld
                 return; // deduction failed (save-written spend is the single money gate)
             }
 
-            Vector3 plot = _area.PlotWorld(_nextIndex);
-            var go = new GameObject($"Building_{_nextIndex}");
+            _activeSite = CreateBuildingObject(_nextIndex, 0, 0f);
+            _activeIndex = _nextIndex;
+            _workPuffTimer = 0f;
+            GameEvents.RaiseTownBuildStarted(_activeIndex);
+            gm.TownPersist(); // capture the freshly broken-ground site (state 0) in the save
+            // The crew joins over the next few ticks (TickActiveSite drafts them).
+        }
+
+        /// <summary>Spawn one building GameObject at the plot for <paramref name="index"/>,
+        /// wired to its renderer + crumb particles and initialised to the given construction
+        /// state / banked partial. Shared by a fresh break-ground (state 0) and a reload
+        /// (<see cref="RestoreFromSave"/>), so both paths build identical sites.</summary>
+        private BuildingController CreateBuildingObject(int index, int initialState, float initialWorked)
+        {
+            GameManager gm = GameManager.Instance;
+            Vector3 plot = _area.PlotWorld(index);
+
+            var go = new GameObject($"Building_{index}");
             go.transform.SetParent(transform, false);
             go.transform.position = plot;
 
@@ -126,16 +148,13 @@ namespace DinoDigger.Overworld
             sr.sortingOrder = 12; // sits among overworld props
 
             var building = go.AddComponent<BuildingController>();
-            ParticleSystem crumbs = gm.TownCreateParticles(go.transform,
-                _library != null ? _library.CrumbParticle : null,
-                new Color(0.78f, 0.62f, 0.42f), 0.3f);
-            building.Init(_library, _config, sr, crumbs);
-
-            _activeSite = building;
-            _activeIndex = _nextIndex;
-            _workPuffTimer = 0f;
-            GameEvents.RaiseTownBuildStarted(_activeIndex);
-            // The crew joins over the next few ticks (TickActiveSite drafts them).
+            ParticleSystem crumbs = gm != null
+                ? gm.TownCreateParticles(go.transform,
+                    _library != null ? _library.CrumbParticle : null,
+                    new Color(0.78f, 0.62f, 0.42f), 0.3f)
+                : null;
+            building.Init(_library, _config, sr, crumbs, initialState, initialWorked);
+            return building;
         }
 
         // ---------------------------------------------------------- active site
@@ -186,6 +205,14 @@ namespace DinoDigger.Overworld
                 }
 
                 GameEvents.RaiseBuildingStateAdvanced(st);
+            }
+
+            // Persist the new construction state whenever a boundary was crossed (the
+            // finished case already persisted inside FinishSite). Only on boundaries, so
+            // the mid-state partial isn't written to disk every frame.
+            if (_activeSite != null && _activeSite.State != before)
+            {
+                gm.TownPersist();
             }
         }
 
@@ -274,6 +301,116 @@ namespace DinoDigger.Overworld
             _activeSite = null;
             _activeIndex = -1;
             _nextIndex++; // curated order advances to the next building/plot
+            gm.TownPersist(); // the finished building + advanced queue index land in the save
+        }
+
+        // -------------------------------------------------------------- persistence
+
+        /// <summary>Write the town's build state into <paramref name="data"/> (save schema
+        /// v4): the queue index plus one <see cref="TownBuildingSave"/> per building in
+        /// order — the first <see cref="_nextIndex"/> finished, then the in-progress site
+        /// (if any). Called by GameManager.SaveNow so every save captures the live town.</summary>
+        public void WriteSave(SaveData data)
+        {
+            if (data == null)
+            {
+                return;
+            }
+
+            data.TownNextIndex = _nextIndex;
+            if (data.TownBuildings == null)
+            {
+                data.TownBuildings = new List<TownBuildingSave>();
+            }
+
+            data.TownBuildings.Clear();
+
+            // Finished buildings occupy plots 0.._nextIndex-1.
+            for (int i = 0; i < _nextIndex; i++)
+            {
+                data.TownBuildings.Add(new TownBuildingSave
+                {
+                    Finished = true,
+                    State = BuildingController.ConstructionStates,
+                    Worked = 0f,
+                });
+            }
+
+            // The one site still under construction (if any) sits at plot _nextIndex.
+            if (_activeSite != null)
+            {
+                data.TownBuildings.Add(new TownBuildingSave
+                {
+                    Finished = false,
+                    State = _activeSite.State,
+                    Worked = _activeSite.WorkedPartial,
+                });
+            }
+        }
+
+        /// <summary>Rebuild the town from <paramref name="data"/> on load: finished
+        /// buildings reappear finished (no crew, no confetti), a partially-built site is
+        /// restored to its construction state + banked work and resumes as the active site
+        /// (the crew clocks back in on the next tick), and the queue continues from the
+        /// saved index. A v3 (or earlier) save has no town fields, so the town stays empty.</summary>
+        public void RestoreFromSave(SaveData data)
+        {
+            if (_area == null || _config == null || data == null)
+            {
+                return;
+            }
+
+            ClearAllSites(); // defensive: Start runs on a fresh town, but never double-place
+
+            int plots = _area.PlotCount;
+            _nextIndex = Mathf.Clamp(data.TownNextIndex, 0, plots);
+
+            List<TownBuildingSave> list = data.TownBuildings;
+            if (list == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < list.Count && i < plots; i++)
+            {
+                TownBuildingSave b = list[i];
+                if (b == null)
+                {
+                    continue;
+                }
+
+                if (b.Finished)
+                {
+                    CreateBuildingObject(i, BuildingController.ConstructionStates, 0f);
+                }
+                else
+                {
+                    // Resume the in-progress site: restored state + banked partial, made
+                    // active so TickActiveSite re-drafts a crew and finishes it off.
+                    _activeSite = CreateBuildingObject(i,
+                        Mathf.Clamp(b.State, 0, BuildingController.ConstructionStates - 1),
+                        Mathf.Max(0f, b.Worked));
+                    _activeIndex = i;
+                    _workPuffTimer = 0f;
+                }
+            }
+        }
+
+        /// <summary>Destroy every placed building (in-progress + finished) and clear the
+        /// active-site pointers. Shared by <see cref="RestoreFromSave"/> and the test reset.</summary>
+        private void ClearAllSites()
+        {
+            for (int i = transform.childCount - 1; i >= 0; i--)
+            {
+                Transform c = transform.GetChild(i);
+                if (c != null && c.GetComponent<BuildingController>() != null)
+                {
+                    Destroy(c.gameObject);
+                }
+            }
+
+            _activeSite = null;
+            _activeIndex = -1;
         }
 
         // ------------------------------------------------------------ test reset
@@ -290,17 +427,7 @@ namespace DinoDigger.Overworld
 
             _builders.Clear();
 
-            for (int i = transform.childCount - 1; i >= 0; i--)
-            {
-                Transform c = transform.GetChild(i);
-                if (c != null && c.GetComponent<BuildingController>() != null)
-                {
-                    Destroy(c.gameObject);
-                }
-            }
-
-            _activeSite = null;
-            _activeIndex = -1;
+            ClearAllSites();
             _nextIndex = 0;
             _workPuffTimer = 0f;
         }

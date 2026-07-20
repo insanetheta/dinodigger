@@ -1242,22 +1242,32 @@ namespace DinoDigger.EditorTools
             return area;
         }
 
-        // Town plot layout inside the district (local cell offsets). Four 2x2-cell
-        // building plots in a 2x2 arrangement with a 1-cell margin and gaps between,
-        // reading front-to-back / left-to-right (0=SW, 1=SE, 2=NW, 3=NE). Each pair is
-        // the SW-most cell of a 2x2 block; the plot's world center is the middle of
-        // that block. Kept small + centered so an 8x6 district holds all four with
-        // clear spacing (buildings import ~2.2 world units wide).
+        // Town plot layout inside the district (local cell offsets). NINE 2x2-cell
+        // building plots — one per entry in the curated price curve — packed as a 3x3
+        // grid so the whole build queue runs end to end within the existing 8x6 district
+        // footprint. Each entry is the SW-most cell of a 2x2 block; the plot's world
+        // center is the middle of that block. Ordered front-to-back (screen-south rows
+        // first) then left-to-right, so the queue fills the town from the front. Columns
+        // sit at local X 1/3/5 (a 1-cell side margin), rows at local Y 0/2/4 (filling the
+        // 6-cell height). Buildings import ~2.2 world units wide, so neighbours overlap a
+        // little in the isometric projection — the transparency sort (screen-Y axis) draws
+        // back rows behind front ones, reading as a compact little town (the same iso
+        // overlap the original 4-plot cluster already shipped with).
         private static readonly Vector2Int[] PlotLocalCells =
         {
-            new Vector2Int(1, 1), // SW: cells (1..2, 1..2)
-            new Vector2Int(5, 1), // SE: cells (5..6, 1..2)
-            new Vector2Int(1, 4), // NW: cells (1..2, 4..5)
-            new Vector2Int(5, 4), // NE: cells (5..6, 4..5)
+            new Vector2Int(1, 0), // row 0 (front): cells (1..2, 0..1)
+            new Vector2Int(3, 0),
+            new Vector2Int(5, 0),
+            new Vector2Int(1, 2), // row 1 (middle)
+            new Vector2Int(3, 2),
+            new Vector2Int(5, 2),
+            new Vector2Int(1, 4), // row 2 (back)
+            new Vector2Int(3, 4),
+            new Vector2Int(5, 4),
         };
 
         /// <summary>Create the Dino Town district: a "Town" root at the district center
-        /// carrying the data-only <see cref="TownArea"/> (center + the four curated plot
+        /// carrying the data-only <see cref="TownArea"/> (center + the nine curated plot
         /// world-positions + footprint radius) and the <see cref="TownController"/> build
         /// queue that watches the wallet and breaks ground on those plots. Buildings the
         /// controller spawns at runtime parent under this same root. Returns the wired

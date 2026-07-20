@@ -41,23 +41,38 @@ namespace DinoDigger.Overworld
         /// <summary>True once every construction state has been worked through.</summary>
         public bool IsFinished => _state >= ConstructionStates;
 
+        /// <summary>Seconds of builder work banked toward the next state (the mid-state
+        /// partial). Persisted so a reloaded site resumes exactly where it left off.</summary>
+        public float WorkedPartial => _worked;
+
         // TEST HOOKS (integration runner; no reflection).
         internal int TestState => _state;
         internal Sprite TestSprite => _renderer != null ? _renderer.sprite : null;
         internal bool TestSignActive => _sign != null && _sign.activeSelf;
 
-        /// <summary>Wire the site's renderer, work particles, and per-state timing.</summary>
+        /// <summary>Wire the site's renderer, work particles, and per-state timing. Starts
+        /// fresh at construction state 0 by default; a reloaded site passes its saved
+        /// <paramref name="initialState"/> (0..3, or <see cref="ConstructionStates"/> for a
+        /// finished building) and <paramref name="initialWorked"/> banked partial so it
+        /// resumes in place. A restored FINISHED building shows its finished art with no
+        /// construction sign (nothing to dismiss, so no pop replay).</summary>
         public void Init(PlaceholderLibrary library, GameConfig config, SpriteRenderer renderer,
-            ParticleSystem workFx)
+            ParticleSystem workFx, int initialState = 0, float initialWorked = 0f)
         {
             _library = library;
             _renderer = renderer;
             _workFx = workFx;
             _perState = config != null ? Mathf.Max(0.05f, config.TownSecondsPerBuildState) : 8f;
-            _state = 0;
-            _worked = 0f;
+            _state = Mathf.Clamp(initialState, 0, ConstructionStates);
+            _worked = Mathf.Max(0f, initialWorked);
             _signDismissed = false;
-            EnsureSign();
+            if (!IsFinished)
+            {
+                // Only an in-progress site carries the "under construction" barrier sign;
+                // a restored finished building never creates one (no dismiss animation).
+                EnsureSign();
+            }
+
             ApplyVisual();
         }
 

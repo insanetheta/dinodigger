@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using DinoDigger.Config;
 using DinoDigger.Core;
+using DinoDigger.Managers;
 using DinoDigger.Overworld;
 
 namespace DinoDigger.Testing
@@ -13,7 +14,7 @@ namespace DinoDigger.Testing
     /// NPC loop + celebration, plus the HARD-RULE case that proves town construction
     /// never commandeers the player backhoe or a walk buddy.
     ///
-    /// SceneBuilder ships a live, wired town (TownController + a 4-plot TownArea on the
+    /// SceneBuilder ships a live, wired town (TownController + a 9-plot TownArea on the
     /// "Town" root, wired into GameManager._town) — <see cref="Case_TownWiredInScene"/>
     /// proves that directly. The behavioural cases below stay robust either way:
     /// <see cref="EnsureTown"/> prefers the scene's town when present, and only falls back
@@ -25,7 +26,7 @@ namespace DinoDigger.Testing
         // =============================================== scene wiring (regression)
 
         // The BUILT scene must ship a live, wired Dino Town: SceneBuilder attaches a
-        // TownController (with its 4-plot TownArea) to the "Town" root and strict-wires it
+        // TownController (with its 9-plot TownArea) to the "Town" root and strict-wires it
         // into GameManager._town. This asserts that BEFORE any test-side EnsureTown /
         // TestInstallTown runs — so it proves a real player's banked treasure would find a
         // town to build in, not just the self-installed test rig that once masked this gap.
@@ -39,11 +40,94 @@ namespace DinoDigger.Testing
                 "scene ships no wired TownController (GameManager._town is null) — " +
                 "SceneBuilder must build + wire the town");
             ctx.Assert(town.TestArea != null, "scene town has no TownArea wired");
-            ctx.Assert(town.TestArea.PlotCount == 4,
-                $"scene town has {town.TestArea.PlotCount} plots (expected 4)");
+            ctx.Assert(town.TestArea.PlotCount == 9,
+                $"scene town has {town.TestArea.PlotCount} plots (expected 9)");
             ctx.Log("built scene ships a live TownController wired into GameManager._town " +
-                    "with a 4-plot TownArea");
+                    "with a 9-plot TownArea");
             yield break;
+        }
+
+        // ============================================== town state persistence (v4)
+
+        // A saved town rebuilds on load (TownController.RestoreFromSave): finished
+        // buildings reappear FINISHED with no crew and no confetti replay, a partially-
+        // built site is restored to its construction state as the active site and resumes
+        // accepting crew, and the queue index continues from where it left off. Old saves
+        // with no town fields restore an empty town.
+        private IEnumerator Case_TownStatePersists(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset(); // clears all dinos, so nothing gets drafted mid-check
+            TownController town = EnsureTown(ctx);
+            ctx.Assert(town.TestArea != null && town.TestArea.PlotCount >= 3,
+                $"need >=3 plots for the persistence test (have {(town.TestArea != null ? town.TestArea.PlotCount : 0)})");
+
+            int finished = 0;
+            Action<int> onFin = _ => finished++;
+            int started = 0;
+            Action<int> onStart = _ => started++;
+            GameEvents.BuildingFinished += onFin;
+            GameEvents.TownBuildStarted += onStart;
+
+            int savedNext = gm.Save.Data.TownNextIndex;
+            List<TownBuildingSave> savedList = gm.Save.Data.TownBuildings;
+            try
+            {
+                // Author a save: plots 0 and 1 finished, plot 2 mid-build at state 2.
+                gm.Save.Data.TownNextIndex = 2;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>
+                {
+                    new TownBuildingSave { Finished = true, State = BuildingController.ConstructionStates },
+                    new TownBuildingSave { Finished = true, State = BuildingController.ConstructionStates },
+                    new TownBuildingSave { Finished = false, State = 2, Worked = 0f },
+                };
+
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+
+                // Restoring must not replay build-start/finish events (no confetti).
+                ctx.Assert(finished == 0, $"restore replayed BuildingFinished ({finished}x)");
+                ctx.Assert(started == 0, $"restore fired TownBuildStarted ({started}x)");
+
+                // The queue continues from the saved index...
+                ctx.Assert(town.TestNextIndex == 2,
+                    $"restored queue index {town.TestNextIndex} != 2");
+
+                // ...the partial site is restored, active, at its saved construction state...
+                ctx.Assert(town.TestActiveSite != null, "partial site not restored as the active site");
+                ctx.Assert(town.TestActiveSite.State == 2,
+                    $"restored active site at state {town.TestActiveSite.State} != 2");
+                ctx.Assert(!town.TestActiveSite.IsFinished, "restored partial site is finished (should be mid-build)");
+
+                // ...and three building objects exist (2 finished + 1 active).
+                int buildings = town.transform.GetComponentsInChildren<BuildingController>(true).Length;
+                ctx.Assert(buildings == 3, $"restored {buildings} building objects (expected 3)");
+
+                // With no residents in the scene, no crew is drafted, so the site holds
+                // its restored state (proving it resumes WAITING for crew, not auto-finishing).
+                ctx.Assert(town.TestBuilderCount == 0, "a crew was drafted with no residents present");
+
+                // A v3-style save (no town fields) restores an empty town.
+                gm.Save.Data.TownNextIndex = 0;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>();
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(town.TestActiveSite == null && town.TestNextIndex == 0,
+                    "empty-town save did not restore an empty town");
+                int after = town.transform.GetComponentsInChildren<BuildingController>(true).Length;
+                ctx.Assert(after == 0, $"empty-town restore left {after} building objects");
+
+                ctx.Log("town persistence: 2 finished + 1 state-2 site restored (no crew/confetti), " +
+                        "queue continued at index 2; empty save restored an empty town");
+            }
+            finally
+            {
+                GameEvents.BuildingFinished -= onFin;
+                GameEvents.TownBuildStarted -= onStart;
+                gm.Save.Data.TownNextIndex = savedNext;
+                gm.Save.Data.TownBuildings = savedList ?? new List<TownBuildingSave>();
+                gm.TestReset();
+            }
         }
 
         // ===================================================== 5li.1 economy/queue
