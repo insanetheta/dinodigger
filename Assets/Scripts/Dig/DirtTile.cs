@@ -21,6 +21,9 @@ namespace DinoDigger.Dig
         private bool _destroyed;
         private Color _peekTint = Color.white;
         private Color _dirtTint = Color.white; // theme multiply (Dig Postcards)
+        // Resting buried-peek alpha (raised by the Stegosaurus "treasure map" power so
+        // the hint reads brighter all round). Default 0.55 = the baseline buried hint.
+        private float _restPeekAlpha = 0.55f;
 
         public int Row { get; private set; }
         public int Col { get; private set; }
@@ -85,10 +88,34 @@ namespace DinoDigger.Dig
                 _peek.sprite = itemSprite;
                 // Clear color hint visible from the start (2x boosted per playtest
                 // feedback); strengthens further as the dirt cracks.
-                _peek.color = new Color(tint.r, tint.g, tint.b, 0.55f);
+                _peek.color = new Color(tint.r, tint.g, tint.b, _restPeekAlpha);
                 _peek.transform.localScale = Vector3.one * 0.7f;
                 _peek.enabled = true;
             }
+        }
+
+        /// <summary>Stegosaurus "treasure map": briefly flash the buried-item peek up to
+        /// <paramref name="flashAlpha"/>, then settle it at <paramref name="settleAlpha"/>
+        /// (brighter than the default buried hint) so it reads clearly for the rest of the
+        /// round. No-op on a plain (unburied) tile.</summary>
+        public void FlashPeek(float flashAlpha, float settleAlpha)
+        {
+            if (!HasItem || _peek == null)
+            {
+                return;
+            }
+
+            _restPeekAlpha = settleAlpha;
+            Tween.Run(0.6f, t =>
+            {
+                if (_peek == null)
+                {
+                    return;
+                }
+
+                float a = Mathf.Lerp(flashAlpha, settleAlpha, t);
+                _peek.color = new Color(_peekTint.r, _peekTint.g, _peekTint.b, a);
+            });
         }
 
         public void OnTapped(Vector2 worldPoint)

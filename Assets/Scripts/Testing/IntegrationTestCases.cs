@@ -69,6 +69,11 @@ namespace DinoDigger.Testing
                 new TestCase("FruitStandSellsSurplus", 40f, Case_FruitStandSellsSurplus),
                 new TestCase("SnackBuilders",         45f, Case_SnackBuilders),
                 new TestCase("RecessTime",            45f, Case_RecessTime),
+                // Runs late (after the count-exact TreasureCounter and the town cases): a
+                // buddy dig can finish a round and bank a random amount of treasure, which
+                // would inflate the persistent wallet over the town's build threshold and
+                // let the always-on town builder spend during a count-exact case.
+                new TestCase("BuddyDigCrew",         80f, Case_BuddyDigCrew),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }
@@ -1531,6 +1536,183 @@ namespace DinoDigger.Testing
             ctx.Assert(tile.TestDamage >= tileBefore + 1, "tapped tile not damaged");
             ctx.Assert(neighborAfter >= neighborBefore + 1, "helper did not also damage an adjacent tile");
             ctx.Log($"helper enabled; tap damaged tile + adjacent (neighborSum {neighborBefore}->{neighborAfter})");
+            gm.TestForceRoam();
+        }
+
+        // Buddy Dig Crew: every buddy species gets an automatic dig superpower, fired on
+        // the child's own bites (never by the child). Covers helper display, the Trike
+        // headbutt column-clear cadence, the Stego treasure-map start, the Brachio one-shot
+        // bonus fruit (routed through ResolveDugItem), the Big-T-Rex adjacent clear, and the
+        // no-buddy baseline.
+        private IEnumerator Case_BuddyDigCrew(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+
+            // ---- Two-helper crew + Stego treasure-map + Trike headbutt cadence ----
+            gm.TestReset();
+            gm.TestSpawnDino(DinoType.Triceratops, GrowthStage.Big); // Big -> headbutt every 4th bite
+            gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Kid);
+            yield return ctx.WaitFrames(2);
+
+            yield return EnterDig(ctx);
+            DigModeController dm = gm.TestDigMode;
+            ctx.Assert(dm.TestCrewCount == 2, $"crew shows {dm.TestCrewCount} helpers (expected 2 buddies)");
+            ctx.Assert(dm.TestCrewHas(DinoType.Triceratops) && dm.TestCrewHas(DinoType.Stegosaurus),
+                "crew missing the Triceratops/Stegosaurus helpers");
+            ctx.Assert(dm.TestHelperEnabled, "slot-0 helper renderer not shown for a staffed crew");
+
+            // Stego treasure-map: the buried peeks flash and settle brighter than the 0.55 default.
+            List<DirtTile> buried = dm.TestBuriedTiles();
+            ctx.Assert(buried.Count > 0, "no buried tiles to brighten");
+            yield return ctx.WaitSecondsScaled(1f); // let the flash tween settle (~0.6s)
+            bool anyBright = false;
+            for (int i = 0; i < buried.Count; i++)
+            {
+                if (buried[i] != null && buried[i].TestPeekAlpha > 0.7f)
+                {
+                    anyBright = true;
+                    break;
+                }
+            }
+
+            ctx.Assert(anyBright, "Stego treasure-map did not brighten any buried peek at round start");
+
+            // Trike headbutt: every 4th bite (Big) clears the last-tapped tile's whole column.
+            int budget = 0;
+            while (dm.TestHeadbuttCount == 0 && dm.IsOpen && budget++ < 30)
+            {
+                DirtTile plain = FindPlainTile(dm);
+                if (plain == null)
+                {
+                    break;
+                }
+
+                yield return ctx.WaitUntil(() => dm.TestArmReady || !dm.IsOpen);
+                if (!dm.IsOpen)
+                {
+                    break;
+                }
+
+                int before = plain.TestDamage;
+                ctx.TapWorld(plain.transform.position);
+                yield return ctx.WaitUntil(() => plain.TestDamage > before || plain.IsDestroyed || !dm.IsOpen);
+            }
+
+            ctx.Assert(dm.TestHeadbuttCount >= 1, "Trike headbutt never fired on cadence");
+            int col = dm.TestHeadbuttColumn;
+            ctx.Assert(col >= 0, "headbutt column not recorded");
+            yield return ctx.WaitSecondsScaled(0.7f); // let the top-to-bottom cascade finish
+            if (dm.IsOpen)
+            {
+                for (int r = 0; r < dm.TestRows; r++)
+                {
+                    DirtTile t = dm.TestTileAt(r, col);
+                    ctx.Assert(t == null || t.IsDestroyed, $"headbutt left tile ({r},{col}) intact");
+                }
+            }
+
+            gm.TestForceRoam();
+
+            // ---- Brachiosaurus one-shot bonus fruit, routed through ResolveDugItem ----
+            gm.TestReset();
+            gm.TestSpawnDino(DinoType.Brachiosaurus, GrowthStage.Big); // Big -> bonus after the 6th bite
+            yield return ctx.WaitFrames(2);
+            yield return EnterDig(ctx);
+            dm = gm.TestDigMode;
+
+            int foundBefore = dm.TestFoundCount;
+            budget = 0;
+            while (dm.TestBonusFruitDropped == 0 && dm.IsOpen && budget++ < 40)
+            {
+                DirtTile plain = FindPlainTile(dm);
+                if (plain == null)
+                {
+                    break;
+                }
+
+                yield return ctx.WaitUntil(() => dm.TestArmReady || !dm.IsOpen);
+                if (!dm.IsOpen)
+                {
+                    break;
+                }
+
+                int before = plain.TestDamage;
+                ctx.TapWorld(plain.transform.position);
+                yield return ctx.WaitUntil(() => plain.TestDamage > before || plain.IsDestroyed || !dm.IsOpen);
+            }
+
+            ctx.Assert(dm.TestBonusFruitDropped == 1,
+                $"Brachio bonus fruit dropped {dm.TestBonusFruitDropped}x (expected exactly 1)");
+            ctx.Assert(dm.TestFoundCount > foundBefore, "bonus fruit not banked into the dug batch");
+
+            // More bites must NOT drop a second bonus (strictly one-shot per round).
+            DirtTile more = FindPlainTile(dm);
+            if (more != null && dm.IsOpen)
+            {
+                yield return TapTileUntilDestroyed(ctx, dm, more);
+            }
+
+            ctx.Assert(dm.TestBonusFruitDropped == 1, "Brachio bonus fruit dropped more than once");
+
+            // ResolveDugItem coverage: the bonus rides the normal dug-item batch (_found),
+            // which FinishDig runs through ResolveDugItem exactly like any dug fruit. Prove
+            // that a bonus-fruit DugItemInfo passes cleanly through the REAL resolution (the
+            // glut guard may downgrade it to treasure — that IS the guard applying), so it
+            // can never wedge or throw. We deliberately do NOT finish the round here: a
+            // dig-out spills+banks a random amount of treasure, which would inflate the
+            // persistent wallet over the town's build threshold and let the always-on town
+            // builder spend during a later count-exact case (TreasureCounter).
+            DugItemInfo bonusResolved = gm.TestResolveItem(
+                new DugItemInfo(ItemType.Fruit, DinoType.TRex, 0, Vector3.zero));
+            ctx.Assert(bonusResolved.Type == ItemType.Fruit || bonusResolved.Type == ItemType.Treasure,
+                $"bonus fruit resolved to an unexpected {bonusResolved.Type}");
+            gm.TestForceRoam();
+
+            // ---- No-buddy dig: no helpers, plain digging still works ----
+            gm.TestReset();
+            yield return EnterDig(ctx);
+            dm = gm.TestDigMode;
+            ctx.Assert(dm.TestCrewCount == 0, $"no-buddy dig shows {dm.TestCrewCount} helpers (expected 0)");
+            ctx.Assert(!dm.TestHelperEnabled, "no-buddy dig still shows a helper renderer");
+
+            DirtTile plainSolo = FindPlainTile(dm);
+            ctx.Assert(plainSolo != null, "no plain tile in the no-buddy dig");
+            yield return TapTileUntilDestroyed(ctx, dm, plainSolo);
+            ctx.Assert(plainSolo.IsDestroyed, "plain tile did not crumble in the no-buddy dig");
+            gm.TestForceRoam();
+
+            // ---- Big T-Rex still clears an adjacent tile ----
+            gm.TestReset();
+            gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
+            yield return ctx.WaitFrames(2);
+            yield return EnterDig(ctx);
+            dm = gm.TestDigMode;
+            ctx.Assert(dm.TestCrewHas(DinoType.TRex) && dm.TestHelperEnabled, "Big T-Rex helper not shown");
+
+            DirtTile target = null;
+            for (int r = 1; r < dm.TestRows && target == null; r++)
+            {
+                for (int c = 0; c < dm.TestCols; c++)
+                {
+                    DirtTile t = dm.TestTileAt(r, c);
+                    if (t != null && !t.HasItem && !t.IsDestroyed && NeighborsIntactCount(dm, t) > 0)
+                    {
+                        target = t;
+                        break;
+                    }
+                }
+            }
+
+            ctx.Assert(target != null, "no interior plain tile with an intact neighbor");
+            int nBefore = NeighborDamageSum(dm, target);
+            int tBefore = target.TestDamage;
+            ctx.TapWorld(target.transform.position);
+            yield return ctx.WaitUntil(() => target.TestDamage > tBefore || target.IsDestroyed);
+            int nAfter = NeighborDamageSum(dm, target);
+            ctx.Assert(nAfter >= nBefore + 1, "Big T-Rex did not also clear an adjacent tile");
+
+            ctx.Log("crew: 2 helpers + Stego map + Trike headbutt; Brachio bonus x1 through ResolveDugItem; " +
+                    "no-buddy clean; Big T-Rex adjacent clear ok");
             gm.TestForceRoam();
         }
 

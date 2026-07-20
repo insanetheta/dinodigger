@@ -20,6 +20,32 @@ namespace DinoDigger.Dig
             public int Variant;
         }
 
+        /// <summary>One walk buddy that came along on the dig, distilled to just what a
+        /// dig superpower needs: its species and growth stage. Built by GameManager from
+        /// the live <c>_buddies</c> roster and handed to <see cref="Open(DigTheme, IReadOnlyList{DigBuddy})"/>.</summary>
+        public struct DigBuddy
+        {
+            public DinoType Type;
+            public GrowthStage Stage;
+
+            public DigBuddy(DinoType type, GrowthStage stage)
+            {
+                Type = type;
+                Stage = stage;
+            }
+        }
+
+        /// <summary>A helper dino shown at the pit edge, plus the per-round state its
+        /// superpower needs. One per buddy (up to two), fed from the buddies' species art.</summary>
+        private class Crew
+        {
+            public DinoType Type;
+            public GrowthStage Stage;
+            public SpriteRenderer Sprite;
+            public Vector3 RestPos;
+            public bool BonusDropped; // Brachiosaurus one-shot bonus-fruit guard
+        }
+
         [SerializeField] private Transform _root;
         [SerializeField] private SpriteRenderer _backhoeBody;
         [SerializeField] private SpriteRenderer _helperDino;
@@ -50,7 +76,30 @@ namespace DinoDigger.Dig
         private int _cols;
         private bool _open;
         private bool _finished;
-        private bool _bigDinoHelps;
+
+        // ---- Buddy Dig Crew --------------------------------------------------
+        // The buddies that came along (species + stage), the live helper sprites shown
+        // at the pit edge, and the per-round cadence counter that fires the powers. All
+        // powers are STRICTLY ADDITIVE (the child's tap always resolves normally first)
+        // and fire automatically on the child's own bites — the child never triggers them.
+        private IReadOnlyList<DigBuddy> _crewBuddies;
+        private readonly List<Crew> _crew = new List<Crew>();
+        private SpriteRenderer _helperDino2; // runtime second-slot helper renderer
+        private bool _trexBigHelps;          // a Big T-Rex buddy is present (adjacent clear)
+        private int _bites;                  // player bites this round (drives cadences)
+        private int _bonusFruitDropped;      // test-observable Brachio bonus-fruit count
+        private int _headbuttCount;          // test-observable Trike column-clear count
+        private int _headbuttColumn = -1;    // column cleared by the last Trike headbutt
+
+        // Power cadences (in player bites). Big-stage buddies get a slightly stronger
+        // cadence so a grown pet visibly helps more (toddler rule: never worse, only
+        // more generous). One knob per power, in the existing hardcoded-tuning style.
+        private const int TrikeCadence = 5;        // headbutt every 5th bite...
+        private const int TrikeCadenceBig = 4;     // ...or every 4th when Big
+        private const int BrachioBonusBite = 8;    // bonus fruit after the 8th bite...
+        private const int BrachioBonusBiteBig = 6; // ...or the 6th when Big
+        private const int CheerCadence = 6;        // powerless species cheer every 6th bite
+        private const float HeadbuttStagger = 0.06f; // per-row crumble delay (top-to-bottom cascade)
         // Active dig postcard theme (tints + loot skew + item count). Null = the flat
         // default config weights/counts + no tint (identical to Meadow Classic).
         private DigTheme _theme;
@@ -163,6 +212,15 @@ namespace DinoDigger.Dig
         internal bool TestHelperEnabled => _helperDino != null && _helperDino.enabled;
         internal ParticleSystem TestCrumbs => _crumbs;
 
+        // ---- Buddy Dig Crew test hooks ----
+        internal int TestCrewCount => _crew.Count;
+        internal bool TestCrewHas(DinoType type) => FindCrew(type) != null;
+        internal int TestBonusFruitDropped => _bonusFruitDropped;
+        internal int TestHeadbuttCount => _headbuttCount;
+        internal int TestHeadbuttColumn => _headbuttColumn;
+        internal int TestBites => _bites;
+        internal int TestFoundCount => _found.Count;
+
         // True when the excavator arm is parked and free to accept a fresh tap:
         // no bite in flight and an empty dig queue. The arm bites ONE tile at a
         // time and dedups a tile that is already the active/queued bite, so a
@@ -215,7 +273,7 @@ namespace DinoDigger.Dig
             _open = true;
             _finished = false;
             _found.Clear();
-            _bigDinoHelps = false;
+            _crewBuddies = null;
             _theme = theme;
             BuildGrid();
         }
@@ -233,16 +291,28 @@ namespace DinoDigger.Dig
 
         /// <summary>Build a fresh dig site and reveal it. Camera move is external.
         /// <paramref name="theme"/> is the mound's rolled dig postcard (null = the flat
-        /// default look/weights).</summary>
-        public void Open(bool bigDinoHelps, DigTheme theme = null)
+        /// default look/weights); <paramref name="buddies"/> is the walk roster that came
+        /// along (up to two), which staffs the Buddy Dig Crew and its superpowers. A null
+        /// or empty list = no helpers shown (the old no-buddy behavior).</summary>
+        public void Open(DigTheme theme, IReadOnlyList<DigBuddy> buddies)
         {
             _open = true;
             _finished = false;
             _found.Clear();
-            _bigDinoHelps = bigDinoHelps;
+            _crewBuddies = buddies;
             _theme = theme;
             BuildGrid();
             GameEvents.RaiseDigModeEntered();
+        }
+
+        /// <summary>Back-compat overload (pre-crew callers/tests): a single Big T-Rex
+        /// helper when <paramref name="bigDinoHelps"/> is true, otherwise no helpers.</summary>
+        public void Open(bool bigDinoHelps, DigTheme theme = null)
+        {
+            var buddies = bigDinoHelps
+                ? new List<DigBuddy> { new DigBuddy(DinoType.TRex, GrowthStage.Big) }
+                : null;
+            Open(theme, buddies);
         }
 
         public void Close()
@@ -253,9 +323,16 @@ namespace DinoDigger.Dig
             _activeTile = null;
             _arm = ArmState.Idle;
             ClearGrid();
+            _crew.Clear();
+            _crewBuddies = null;
             if (_helperDino != null)
             {
                 _helperDino.enabled = false;
+            }
+
+            if (_helperDino2 != null)
+            {
+                _helperDino2.enabled = false;
             }
 
             GameEvents.RaiseDigModeExited();
@@ -299,6 +376,18 @@ namespace DinoDigger.Dig
 
             PlaceItems();
             PlaceBackhoe(origin, halfW);
+
+            // Stegosaurus "treasure map": once at the start of the round, every buried
+            // peek flashes bright and settles a little brighter than the default hint.
+            Crew stego = FindCrew(DinoType.Stegosaurus);
+            if (stego != null)
+            {
+                Cheer(stego);
+                foreach (DirtTile t in _buried.Keys)
+                {
+                    t.FlashPeek(0.95f, 0.75f);
+                }
+            }
 
             // Frame body + grid: midpoint between the body's roof (with margin)
             // and the deepest tile row (with margin). Rows=5 => y = -1.5; paired
@@ -420,15 +509,314 @@ namespace DinoDigger.Dig
                 SolveIK(_effTarget, float.PositiveInfinity);
             }
 
+            SetupCrew(surface);
+        }
+
+        // ---- Buddy Dig Crew ---------------------------------------------------
+
+        /// <summary>Staff the pit-edge helper crew from the buddies that came along (up to
+        /// two). Slot 0 reuses the scene-wired <see cref="_helperDino"/> renderer; slot 1
+        /// uses a runtime renderer. Each helper shows its buddy's own species art and gets
+        /// a Crew entry that its superpower fires off. No buddies = no helpers shown.</summary>
+        private void SetupCrew(Vector3 surface)
+        {
+            _crew.Clear();
+            _bites = 0;
+            _bonusFruitDropped = 0;
+            _headbuttCount = 0;
+            _headbuttColumn = -1;
+            _trexBigHelps = false;
+
             if (_helperDino != null)
             {
-                _helperDino.enabled = _bigDinoHelps;
-                if (_bigDinoHelps)
+                _helperDino.enabled = false;
+            }
+
+            if (_helperDino2 != null)
+            {
+                _helperDino2.enabled = false;
+            }
+
+            if (_crewBuddies == null)
+            {
+                return;
+            }
+
+            int slot = 0;
+            for (int i = 0; i < _crewBuddies.Count && slot < 2; i++)
+            {
+                DigBuddy b = _crewBuddies[i];
+                SpriteRenderer sr = GetHelperRenderer(slot);
+                if (sr == null)
                 {
-                    // Right side of the frame, clear of the body's traverse range.
-                    _helperDino.transform.position = surface + new Vector3(4.4f, 0f, 0f);
+                    continue;
+                }
+
+                Sprite art = HelperSprite(b);
+                if (art != null)
+                {
+                    sr.sprite = art;
+                }
+
+                // Right side of the frame, clear of the body's traverse range; the second
+                // helper is stacked up-and-back so two never overlap.
+                Vector3 pos = surface + (slot == 0
+                    ? new Vector3(4.4f, 0f, 0f)
+                    : new Vector3(5.2f, 1.1f, 0f));
+                sr.transform.position = pos;
+                sr.enabled = true;
+
+                _crew.Add(new Crew { Type = b.Type, Stage = b.Stage, Sprite = sr, RestPos = pos });
+                if (b.Type == DinoType.TRex && b.Stage == GrowthStage.Big)
+                {
+                    _trexBigHelps = true;
+                }
+
+                slot++;
+            }
+        }
+
+        /// <summary>The renderer for a helper slot: slot 0 is the scene-wired helper; slot
+        /// 1 is a runtime child created once (mirroring slot 0's parent + sorting + scale).</summary>
+        private SpriteRenderer GetHelperRenderer(int slot)
+        {
+            if (slot == 0)
+            {
+                return _helperDino;
+            }
+
+            if (_helperDino2 == null)
+            {
+                Transform parent = _helperDino != null ? _helperDino.transform.parent
+                    : (_root != null ? _root : transform);
+                var go = new GameObject("HelperDino2");
+                go.transform.SetParent(parent, false);
+                _helperDino2 = go.AddComponent<SpriteRenderer>();
+                if (_helperDino != null)
+                {
+                    _helperDino2.sortingLayerID = _helperDino.sortingLayerID;
+                    _helperDino2.sortingOrder = _helperDino.sortingOrder;
+                    _helperDino2.transform.localScale = _helperDino.transform.localScale;
+                }
+                else
+                {
+                    _helperDino2.sortingOrder = 15;
                 }
             }
+
+            return _helperDino2;
+        }
+
+        /// <summary>The buddy's own species art for the pit-edge helper: the W (grid-facing)
+        /// walk sprite at the buddy's growth stage, falling back to the species idle.</summary>
+        private Sprite HelperSprite(DigBuddy b)
+        {
+            DinoDefinition def = _config != null ? _config.GetDino(b.Type) : null;
+            if (def == null)
+            {
+                return _helperDino != null ? _helperDino.sprite : null;
+            }
+
+            Sprite s = def.GetSprite(Dir8.W, b.Stage);
+            return s != null ? s : def.GetIdle();
+        }
+
+        private Crew FindCrew(DinoType type)
+        {
+            for (int i = 0; i < _crew.Count; i++)
+            {
+                if (_crew[i] != null && _crew[i].Type == type)
+                {
+                    return _crew[i];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Fire the automatic buddy superpowers for this player bite. Runs AFTER
+        /// the tap has resolved normally, so every power is purely additive and never
+        /// blocks or delays the child's own digging.</summary>
+        private void FireCrewPowers(DirtTile lastTile)
+        {
+            for (int i = 0; i < _crew.Count && !_finished; i++)
+            {
+                Crew c = _crew[i];
+                if (c == null)
+                {
+                    continue;
+                }
+
+                switch (c.Type)
+                {
+                    case DinoType.Triceratops:
+                        int trikeEvery = c.Stage == GrowthStage.Big ? TrikeCadenceBig : TrikeCadence;
+                        if (_bites % trikeEvery == 0)
+                        {
+                            HeadbuttColumn(lastTile, c);
+                        }
+
+                        break;
+
+                    case DinoType.Brachiosaurus:
+                        int brachioBite = c.Stage == GrowthStage.Big ? BrachioBonusBiteBig : BrachioBonusBite;
+                        if (!c.BonusDropped && _bites >= brachioBite)
+                        {
+                            c.BonusDropped = true;
+                            DropBonusFruit(c);
+                        }
+
+                        break;
+
+                    // T-Rex (adjacent clear) fires inline in ResolveDig; Stegosaurus fires
+                    // once at round start; Pteranodon fires on each uncover. Every other
+                    // species has no dig power, so it just cheers the digger on.
+                    case DinoType.TRex:
+                    case DinoType.Stegosaurus:
+                    case DinoType.Pteranodon:
+                        break;
+
+                    default:
+                        if (_bites % CheerCadence == 0)
+                        {
+                            Cheer(c);
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        /// <summary>Triceratops headbutt: clear the whole column of the last-tapped tile in
+        /// a quick top-to-bottom cascade (rows staggered so it reads as a tumble).</summary>
+        private void HeadbuttColumn(DirtTile tile, Crew c)
+        {
+            if (tile == null || _grid == null)
+            {
+                return;
+            }
+
+            int col = tile.Col;
+            _headbuttCount++;
+            _headbuttColumn = col;
+            Cheer(c);
+
+            for (int r = 0; r < _rows; r++)
+            {
+                int row = r;
+                Tween.After(row * HeadbuttStagger, () =>
+                {
+                    if (!_open || _finished || _grid == null || row >= _rows || col >= _cols)
+                    {
+                        return;
+                    }
+
+                    DirtTile t = _grid[row, col];
+                    ClearTileFully(t);
+                });
+            }
+        }
+
+        /// <summary>Damage a tile until it crumbles, then collect anything it hid. Used by
+        /// the Triceratops column cascade (these are helper hits, NOT player bites, so they
+        /// never advance the power cadence).</summary>
+        private void ClearTileFully(DirtTile t)
+        {
+            if (t == null || t.IsDestroyed)
+            {
+                return;
+            }
+
+            int guard = 0;
+            while (!t.IsDestroyed && guard++ < 8)
+            {
+                t.Damage();
+            }
+
+            if (t.IsDestroyed)
+            {
+                CollectIfBuried(t);
+            }
+        }
+
+        /// <summary>Brachiosaurus bonus fruit: drop one extra fruit into the round's spill
+        /// batch (it rides the normal dug-item path, so FinishDig runs it through
+        /// ResolveDugItem and the glut guard just like any dug fruit), plus a little
+        /// falling-fruit flourish from the top of the frame.</summary>
+        private void DropBonusFruit(Crew c)
+        {
+            Cheer(c);
+
+            int variants = _config != null ? Mathf.Max(1, _config.FruitVariants) : 1;
+            var info = new DugItemInfo(ItemType.Fruit, DinoType.TRex, Random.Range(0, variants),
+                _origin);
+            _found.Add(info);
+            _bonusFruitDropped++;
+            GameManager.Instance?.Audio?.ItemPop();
+
+            SpawnFallingFruitVisual(info.Variant);
+        }
+
+        /// <summary>Purely decorative: a fruit sprite tumbles from the top of the frame down
+        /// toward the spill side of the pit, then despawns (the real fruit is banked in
+        /// <see cref="_found"/> and spills on FinishDig).</summary>
+        private void SpawnFallingFruitVisual(int variant)
+        {
+            Sprite fruit = _lib != null ? _lib.Fruit(variant) : null;
+            if (fruit == null)
+            {
+                return;
+            }
+
+            var go = new GameObject("BonusFruitFX");
+            go.transform.SetParent(_root != null ? _root : transform, false);
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = fruit;
+            sr.sortingOrder = 20;
+
+            Vector3 from = _origin + new Vector3(0f, SurfaceY + DigBodyH + 0.5f, 0f);
+            Vector3 to = _bodyBase + new Vector3(0.6f, 0.2f, 0f);
+            go.transform.position = from;
+            Tween.MoveArc(go.transform, from, to, 1.4f, 0.6f, () =>
+            {
+                if (go != null)
+                {
+                    Destroy(go);
+                }
+            });
+        }
+
+        /// <summary>Pteranodon flourish: swoop the helper sprite in an arc out over the pit
+        /// to the tile that was just uncovered and back to its perch. Pure spectacle.</summary>
+        private void SwoopPteranodon(Crew c, Vector3 over)
+        {
+            if (c == null || c.Sprite == null)
+            {
+                return;
+            }
+
+            Vector3 rest = c.RestPos;
+            Vector3 peak = over + new Vector3(0f, 0.6f, 0f);
+            Tween.MoveArc(c.Sprite.transform, rest, peak, 1.2f, 0.35f, () =>
+            {
+                if (c.Sprite != null)
+                {
+                    Tween.MoveArc(c.Sprite.transform, peak, rest, 1.2f, 0.35f);
+                }
+            });
+        }
+
+        /// <summary>A helper's little "I helped!" beat: a punch-scale dance + a cheerful
+        /// chime so the child reads the cause-and-effect of the power that just fired.</summary>
+        private void Cheer(Crew c)
+        {
+            if (c == null || c.Sprite == null)
+            {
+                return;
+            }
+
+            Tween.PunchScale(c.Sprite.transform, 0.25f, 0.25f);
+            GameManager.Instance?.Audio?.Chime();
         }
 
         // ---- Anatomical segment mounting (pin-to-pin, zero stretching) -------
@@ -737,18 +1125,21 @@ namespace DinoDigger.Dig
                 return;
             }
 
+            _bites++;
             bool destroyed = tile.Damage();
             GameManager.Instance?.Audio?.Crumble();
 
-            // Big dino helper clears one adjacent intact tile as well.
-            if (_bigDinoHelps)
+            // T-Rex superpower (Big-stage gate): the big fella's bite clears one adjacent
+            // intact tile as well. Keyed off a Big T-Rex buddy being on the crew.
+            if (_trexBigHelps)
             {
                 DirtTile adjacent = FindAdjacentIntact(tile);
                 if (adjacent != null)
                 {
-                    if (_helperDino != null)
+                    Crew trex = FindCrew(DinoType.TRex);
+                    if (trex != null && trex.Sprite != null)
                     {
-                        Tween.PunchScale(_helperDino.transform, 0.25f, 0.25f);
+                        Tween.PunchScale(trex.Sprite.transform, 0.25f, 0.25f);
                     }
 
                     bool adjDestroyed = adjacent.Damage();
@@ -763,6 +1154,10 @@ namespace DinoDigger.Dig
             {
                 CollectIfBuried(tile);
             }
+
+            // Fire the rest of the crew's automatic powers on this bite (additive; the
+            // tap has already fully resolved above).
+            FireCrewPowers(tile);
         }
 
         /// <summary>
@@ -782,6 +1177,14 @@ namespace DinoDigger.Dig
             _found.Add(info);
             GameManager.Instance?.Audio?.ItemPop();
             GameEvents.RaiseItemDug(info);
+
+            // Pteranodon flourish: swoop over the pit as the item pops out (pure spectacle).
+            Crew ptero = FindCrew(DinoType.Pteranodon);
+            if (ptero != null)
+            {
+                Cheer(ptero);
+                SwoopPteranodon(ptero, tile.transform.position);
+            }
 
             if (_buried.Count == 0)
             {

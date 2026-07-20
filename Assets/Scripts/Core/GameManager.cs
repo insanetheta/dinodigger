@@ -436,13 +436,14 @@ namespace DinoDigger.Core
             _activeMound = mound;
             State.Set(GameState.Transition);
 
-            bool bigHelps = HasBigDino();
             // The mound carries its rolled dig postcard: the site reads it for tints,
             // loot skew and buried-item count. Null-safe -> flat default look.
             Config.DigTheme theme = (_config != null && mound != null)
                 ? _config.GetTheme(mound.ThemeIndex)
                 : null;
-            _digMode.Open(bigHelps, theme);
+            // The whole walk roster (up to two) comes along and staffs the Buddy Dig Crew;
+            // each species runs its own automatic dig superpower inside the site.
+            _digMode.Open(theme, BuildDigCrew());
 
             if (_cameraFollow != null)
             {
@@ -519,20 +520,22 @@ namespace DinoDigger.Core
             }
         }
 
-        /// <summary>Dig-helper gate (T-Rex superpower): a BIG T-REX that is
-        /// currently a walk buddy. Name kept for hook compatibility.</summary>
-        private bool HasBigDino()
+        /// <summary>Snapshot the live walk buddies (species + growth stage) for the dig
+        /// site's Buddy Dig Crew. Up to two, in join order; nulls are pruned first.</summary>
+        private List<DigModeController.DigBuddy> BuildDigCrew()
         {
+            PruneBuddies();
+            var crew = new List<DigModeController.DigBuddy>(_buddies.Count);
             for (int i = 0; i < _buddies.Count; i++)
             {
                 DinoController b = _buddies[i];
-                if (b != null && b.IsBig && b.Type == Config.DinoType.TRex)
+                if (b != null)
                 {
-                    return true;
+                    crew.Add(new DigModeController.DigBuddy(b.Type, b.Stage));
                 }
             }
 
-            return false;
+            return crew;
         }
 
         // ------------------------------------------------------- item spawning
@@ -1838,14 +1841,20 @@ namespace DinoDigger.Core
 
             Tween.MoveArc(treasure.transform, treasure.transform.position, target, 1.2f, 0.6f, () =>
             {
+                // A treasure destroyed mid-flight (only ever a TestReset / scene teardown —
+                // never real play) must NOT phantom-bank: the tween's onComplete always
+                // fires, so guard the bank here. Otherwise a stray +value could land a
+                // frame (or a whole test case) later and corrupt a count-exact assertion.
+                if (treasure == null)
+                {
+                    return;
+                }
+
                 Save.Data.TreasureCount += value;
                 Audio?.Treasure();
                 GameEvents.RaiseTreasureCollected(Save.Data.TreasureCount);
                 SaveNow();
-                if (treasure != null)
-                {
-                    Destroy(treasure.gameObject);
-                }
+                Destroy(treasure.gameObject);
             });
         }
 
@@ -1978,14 +1987,19 @@ namespace DinoDigger.Core
 
             Tween.MoveArc(shard.transform, shard.transform.position, target, 1.2f, 0.6f, () =>
             {
+                // Same guard as CollectTreasure: a shard destroyed mid-flight (TestReset /
+                // teardown, never real play) must not phantom-bank a stray count or kick
+                // off a ceremony from a later frame.
+                if (shard == null)
+                {
+                    return;
+                }
+
                 Save.Data.ShardCount++;
                 Audio?.Chime();
                 GameEvents.RaiseShardCollected(Save.Data.ShardCount); // nest advances its assembly sprite
                 SaveNow();
-                if (shard != null)
-                {
-                    Destroy(shard.gameObject);
-                }
+                Destroy(shard.gameObject);
 
                 // A full nest hatches a new shard-exclusive species (if any remain).
                 TryBeginCeremony();
