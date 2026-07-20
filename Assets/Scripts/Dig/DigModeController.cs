@@ -185,6 +185,11 @@ namespace DinoDigger.Dig
             return (tile != null && _buried.TryGetValue(tile, out Buried b)) ? b.Type : ItemType.Fruit;
         }
 
+        internal int TestBuriedVariant(DirtTile tile)
+        {
+            return (tile != null && _buried.TryGetValue(tile, out Buried b)) ? b.Variant : 0;
+        }
+
         /// <summary>TEST HOOK. Roll a single buried item using the real loot weights
         /// (including the owned-species egg-shard nerf) and hand it back as a
         /// DugItemInfo, so shard-drop-rate tests never have to grind slow dig loops.</summary>

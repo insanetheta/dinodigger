@@ -38,11 +38,15 @@ namespace DinoDigger.UI
 
         private void OnTreasureCollected(int total)
         {
+            // Value banked by this collect (denominations bank >1), inferred from the
+            // jump in total so no extra plumbing is needed. A bigger coin pops harder.
+            int gained = total - _count;
             _count = total;
             Refresh();
             if (_iconRect != null)
             {
-                Tween.PunchScale(_iconRect, 0.4f, 0.3f);
+                float punch = Mathf.Min(0.4f + 0.08f * Mathf.Max(0, gained - 1), 0.7f);
+                Tween.PunchScale(_iconRect, punch, 0.3f);
             }
         }
 

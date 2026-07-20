@@ -568,6 +568,26 @@ namespace DinoDigger.Core
                     : new DugItemInfo(ItemType.Treasure, info.DinoType, info.Variant, info.OriginWorld);
             }
 
+            // FRUIT GLUT GUARD: fruit is 40% of drops but demand is finite (a Big dino is
+            // never hungry). When nothing wants fruit, most of it downgrades to a random
+            // treasure so uneaten fruit can't pile up; the rest stays fruit so the world
+            // still has some. NOTE: the hunger condition is intentionally narrow today —
+            // it will later widen to include builder-snack and fruit-stand demand
+            // (planned follow-up issues), at which point "AnyDinoHungry" becomes "any
+            // fruit demand".
+            if (info.Type == ItemType.Fruit)
+            {
+                if (_config != null && !AnyDinoHungry() &&
+                    Random.value < _config.FruitDowngradeFraction)
+                {
+                    int treasureVariants = Mathf.Max(1, _config.TreasureVariants);
+                    return new DugItemInfo(ItemType.Treasure, info.DinoType,
+                        Random.Range(0, treasureVariants), info.OriginWorld);
+                }
+
+                return info;
+            }
+
             if (info.Type != ItemType.Egg)
             {
                 return info;
@@ -906,6 +926,22 @@ namespace DinoDigger.Core
 
                 SaveNow();
             });
+        }
+
+        /// <summary>True while at least one dino in the scene still wants fruit. Gates the
+        /// fruit-&gt;treasure downgrade so drops only convert once fruit demand is exhausted.</summary>
+        private bool AnyDinoHungry()
+        {
+            for (int i = 0; i < _dinos.Count; i++)
+            {
+                DinoController d = _dinos[i];
+                if (d != null && d.IsHungry)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private DinoController NearestHungryDino(Vector3 pos)
@@ -1340,9 +1376,13 @@ namespace DinoDigger.Core
                 ? _treasureCounter.GetWorldTarget(_mainCamera)
                 : treasure.transform.position + Vector3.up * 3f;
 
+            // Denominations: each treasure variant banks its configured value (coin=1,
+            // gem=3, boot=1, bone=2), clamped so an odd variant safely banks 1.
+            int value = _config != null ? _config.TreasureValue(treasure.Variant) : 1;
+
             Tween.MoveArc(treasure.transform, treasure.transform.position, target, 1.2f, 0.6f, () =>
             {
-                Save.Data.TreasureCount++;
+                Save.Data.TreasureCount += value;
                 Audio?.Treasure();
                 GameEvents.RaiseTreasureCollected(Save.Data.TreasureCount);
                 SaveNow();

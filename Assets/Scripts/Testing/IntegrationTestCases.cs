@@ -769,6 +769,12 @@ namespace DinoDigger.Testing
         private IEnumerator Case_MultiItemCollection(TestContext ctx)
         {
             GameManager gm = ctx.GM;
+
+            // Keep a hungry dino present so dug fruit keeps its identity: the
+            // fruit->treasure downgrade only fires when NOTHING is hungry, and this
+            // case asserts exact per-type collection outcomes.
+            gm.TestSpawnDino(DinoType.TRex, GrowthStage.Baby);
+
             yield return EnterDig(ctx);
             DigModeController dm = gm.TestDigMode;
 
@@ -776,13 +782,17 @@ namespace DinoDigger.Testing
             ctx.Assert(buried.Count > 0, "no buried items to collect");
 
             int eggs = 0, fruit = 0, treasure = 0;
+            int expectedTreasureGain = 0; // denominations: each treasure banks its variant value
             for (int i = 0; i < buried.Count; i++)
             {
                 switch (dm.TestBuriedType(buried[i]))
                 {
                     case ItemType.Egg: eggs++; break;
                     case ItemType.Fruit: fruit++; break;
-                    default: treasure++; break;
+                    default:
+                        treasure++;
+                        expectedTreasureGain += gm.TestConfig.TreasureValue(dm.TestBuriedVariant(buried[i]));
+                        break;
                 }
             }
 
@@ -810,13 +820,14 @@ namespace DinoDigger.Testing
             ctx.Assert(!gm.State.Is(GameState.Dig), "still in dig after clearing every item");
             yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam));
 
-            // Non-treasure items become pickups; treasure auto-flies to the counter.
-            // This window is after items spawn + treasures fly, but before eggs hatch.
+            // Non-treasure items become pickups; treasure auto-flies to the counter and
+            // banks its per-variant denomination (coin=1, gem=3, boot=1, bone=2). This
+            // window is after items spawn + treasures fly, but before eggs hatch.
             yield return ctx.WaitUntil(() =>
                 CountOverworldPickups(gm, true) == expectedPickups &&
-                gm.Save.Data.TreasureCount == treasureBefore + treasure);
+                gm.Save.Data.TreasureCount == treasureBefore + expectedTreasureGain);
 
-            ctx.Log($"eggs={eggs} fruit={fruit} treasure={treasure}: {expectedPickups} pickups spawned, treasure+={treasure}");
+            ctx.Log($"eggs={eggs} fruit={fruit} treasure={treasure}: {expectedPickups} pickups spawned, treasure+={expectedTreasureGain}");
             gm.TestReset();
         }
 
@@ -1389,9 +1400,11 @@ namespace DinoDigger.Testing
 
             int before = gm.Save.Data.TreasureCount;
             Vector3 pos = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position + new Vector3(0.6f, 0.6f, 0f));
-            gm.TestSpawnItem(ItemType.Treasure, DinoType.TRex, 0, pos);
 
-            yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount == before + 1);
+            // A coin (variant 0) banks its face value of 1.
+            int coinValue = gm.TestConfig.TreasureValue(0);
+            gm.TestSpawnItem(ItemType.Treasure, DinoType.TRex, 0, pos);
+            yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount == before + coinValue);
 
             var counter = gm.TestTreasureCounter;
             ctx.Assert(counter != null, "no treasure counter");
@@ -1399,7 +1412,17 @@ namespace DinoDigger.Testing
                 $"counter {counter.TestCount} != save {gm.Save.Data.TreasureCount}");
             ctx.Assert(counter.TestCountText == gm.Save.Data.TreasureCount.ToString(),
                 $"counter text '{counter.TestCountText}' != {gm.Save.Data.TreasureCount}");
-            ctx.Log($"treasure {before}->{gm.Save.Data.TreasureCount}, UI text '{counter.TestCountText}'");
+
+            // Denominations: a gem (variant 1) banks its higher value in one collect.
+            int afterCoin = gm.Save.Data.TreasureCount;
+            int gemValue = gm.TestConfig.TreasureValue(1);
+            Vector3 pos2 = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position + new Vector3(-0.6f, 0.6f, 0f));
+            gm.TestSpawnItem(ItemType.Treasure, DinoType.TRex, 1, pos2);
+            yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount == afterCoin + gemValue);
+            ctx.Assert(counter.TestCount == gm.Save.Data.TreasureCount,
+                $"counter {counter.TestCount} != save {gm.Save.Data.TreasureCount} after gem");
+
+            ctx.Log($"treasure {before}->{gm.Save.Data.TreasureCount} (coin+{coinValue}, gem+{gemValue}), UI text '{counter.TestCountText}'");
         }
 
         // ================================================================ SPAWNS

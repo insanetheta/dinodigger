@@ -41,6 +41,14 @@ namespace DinoDigger.Config
         [Tooltip("Number of treasure sprite variants (coin, gem, boot, bone).")]
         public int TreasureVariants = 4;
 
+        [Tooltip("Coins banked per treasure variant when collected (coin, gem, boot, bone). " +
+                 "Out-of-range variants safely bank 1 via TreasureValue().")]
+        public int[] TreasureValues = { 1, 3, 1, 2 };
+
+        [Tooltip("Chance a dug FRUIT downgrades to a random treasure when NOTHING is hungry, " +
+                 "so uneaten fruit can't pile up; the rest stays fruit so the world keeps some.")]
+        public float FruitDowngradeFraction = 0.75f;
+
         [Header("Dig grid")]
         public int DigRows = 5;      // 4-6 layers of dirt
         public int DigColumns = 7;
@@ -120,6 +128,19 @@ namespace DinoDigger.Config
         /// Runtime code should prefer <see cref="GetShardRequirement"/> (via
         /// GameManager.ShardsPerHatch) for the escalating value.</summary>
         public int ShardsPerHatch => GetShardRequirement(0);
+
+        /// <summary>Coins banked when the treasure <paramref name="variant"/> is collected
+        /// (clamped). An out-of-range or unconfigured variant safely banks 1.</summary>
+        public int TreasureValue(int variant)
+        {
+            if (TreasureValues == null || TreasureValues.Length == 0)
+            {
+                return 1;
+            }
+
+            variant = Mathf.Clamp(variant, 0, TreasureValues.Length - 1);
+            return Mathf.Max(1, TreasureValues[variant]);
+        }
 
         public float StageScale(GrowthStage stage)
         {

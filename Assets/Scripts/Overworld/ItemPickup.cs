@@ -17,6 +17,7 @@ namespace DinoDigger.Overworld
 
         private ItemType _type;
         private DinoType _dinoType;
+        private int _variant;   // treasure/fruit sub-kind; treasure uses it for its coin value
         private GameConfig _config;
         private PlaceholderLibrary _lib;
 
@@ -30,6 +31,7 @@ namespace DinoDigger.Overworld
 
         public ItemType Type => _type;
         public DinoType DinoType => _dinoType;
+        public int Variant => _variant;
         public bool IsConsumed => _consumed;
         public bool IsCarried => _carried;
 
@@ -62,6 +64,7 @@ namespace DinoDigger.Overworld
         {
             _type = info.Type;
             _dinoType = info.DinoType;
+            _variant = info.Variant;
             _config = config;
             _lib = lib;
 
