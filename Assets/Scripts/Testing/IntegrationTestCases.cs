@@ -29,6 +29,7 @@ namespace DinoDigger.Testing
                 new TestCase("PeekVisible",          20f, Case_PeekVisible),
                 new TestCase("MultiItemCollection",  30f, Case_MultiItemCollection),
                 new TestCase("DigThemes",            25f, Case_DigThemes),
+                new TestCase("TileHardness",         25f, Case_TileHardness),
                 new TestCase("EggHatch",             20f, Case_EggHatch),
                 new TestCase("UniqueDinoNoDupes",    20f, Case_UniqueDinoNoDupes),
                 new TestCase("ShardDropRate",        20f, Case_ShardDropRate),
@@ -958,6 +959,127 @@ namespace DinoDigger.Testing
             gm.TestForceRoam();
             ctx.Log($"themes={themeCount}; {checkedMounds} mounds tinted; golden=4 all-treasure; " +
                     $"berry fruitFrac={fruitFrac:F2}; picks golden={counts[golden]} < meadow={counts[meadow]}");
+            gm.TestReset();
+        }
+
+        // Per-tile break-tap hardness: tiles vary by theme with capped, LOW-biased jitter
+        // (roll twice, keep the smaller) instead of a uniform 3 taps. Verifies the range is
+        // honoured, never exceeds [1,4], skews soft, Sparkle Cave is harder than Berry Bog,
+        // and the DirtTile crack sprite still maps correctly at maxHealth != 3.
+        private IEnumerator Case_TileHardness(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            GameConfig cfg = gm.TestConfig;
+            ctx.Assert(cfg != null, "no config");
+
+            int berry = FindThemeIndex(cfg, "Berry Bog");
+            int sparkle = FindThemeIndex(cfg, "Sparkle Cave");
+            ctx.Assert(berry >= 0 && sparkle >= 0, "Berry Bog / Sparkle Cave themes not found by name");
+
+            cfg.GetTheme(berry).GetTapRange(out int bMin, out int bMax);
+            cfg.GetTheme(sparkle).GetTapRange(out int sMin, out int sMax);
+            ctx.Assert(bMin == 1 && bMax == 2, $"Berry Bog tap range {bMin}-{bMax} (expected 1-2)");
+            ctx.Assert(sMin == 3 && sMax == 4, $"Sparkle Cave tap range {sMin}-{sMax} (expected 3-4)");
+
+            DigModeController dm = gm.TestDigMode;
+
+            // ---- Sample many tiles across several rebuilds per theme. ----
+            double berrySum = 0; int berryTiles = 0, berryAtMin = 0, berryAtMax = 0;
+            double sparkleSum = 0; int sparkleTiles = 0, sparkleAtMin = 0, sparkleAtMax = 0;
+            const int rebuilds = 6;
+
+            for (int build = 0; build < rebuilds; build++)
+            {
+                gm.TestBuildThemedDigSite(berry);
+                yield return ctx.WaitFrames(1);
+                foreach (DirtTile t in dm.TestTiles)
+                {
+                    int h = t.TestMaxHealth;
+                    ctx.Assert(h >= 1 && h <= 4, $"berry tile health {h} outside the hard cap [1,4]");
+                    ctx.Assert(h >= bMin && h <= bMax, $"berry tile health {h} outside theme range [{bMin},{bMax}]");
+                    berrySum += h; berryTiles++;
+                    if (h == bMin) berryAtMin++;
+                    if (h == bMax) berryAtMax++;
+                }
+
+                gm.TestForceRoam();
+                yield return ctx.WaitFrames(1);
+
+                gm.TestBuildThemedDigSite(sparkle);
+                yield return ctx.WaitFrames(1);
+                foreach (DirtTile t in dm.TestTiles)
+                {
+                    int h = t.TestMaxHealth;
+                    ctx.Assert(h >= 1 && h <= 4, $"sparkle tile health {h} outside the hard cap [1,4]");
+                    ctx.Assert(h >= sMin && h <= sMax, $"sparkle tile health {h} outside theme range [{sMin},{sMax}]");
+                    sparkleSum += h; sparkleTiles++;
+                    if (h == sMin) sparkleAtMin++;
+                    if (h == sMax) sparkleAtMax++;
+                }
+
+                gm.TestForceRoam();
+                yield return ctx.WaitFrames(1);
+            }
+
+            ctx.Assert(berryTiles > 100 && sparkleTiles > 100,
+                $"too few tiles sampled (berry={berryTiles}, sparkle={sparkleTiles})");
+
+            // ---- LOW bias: a healthy share sit at MinTaps and few at MaxTaps. ----
+            float berryMinFrac = berryAtMin / (float)berryTiles;
+            float berryMaxFrac = berryAtMax / (float)berryTiles;
+            ctx.Assert(berryMinFrac > 0.5f, $"Berry MinTaps share {berryMinFrac:F2} not >0.5 (should skew soft)");
+            ctx.Assert(berryMinFrac > berryMaxFrac,
+                $"Berry not low-biased (min share {berryMinFrac:F2} <= max share {berryMaxFrac:F2})");
+
+            float sparkleMinFrac = sparkleAtMin / (float)sparkleTiles;
+            float sparkleMaxFrac = sparkleAtMax / (float)sparkleTiles;
+            ctx.Assert(sparkleMinFrac > sparkleMaxFrac,
+                $"Sparkle not low-biased (min share {sparkleMinFrac:F2} <= max share {sparkleMaxFrac:F2})");
+
+            // ---- Sparkle Cave is harder on average than Berry Bog. ----
+            float berryAvg = (float)(berrySum / berryTiles);
+            float sparkleAvg = (float)(sparkleSum / sparkleTiles);
+            ctx.Assert(sparkleAvg > berryAvg,
+                $"Sparkle avg {sparkleAvg:F2} not > Berry avg {berryAvg:F2}");
+
+            // ---- Crack-sprite state maps correctly at maxHealth != 3 (Damage() alone crumbles
+            //      a tile; it never runs the controller's collect/finish path, so no side effects). ----
+            gm.TestBuildThemedDigSite(sparkle);
+            yield return ctx.WaitFrames(1);
+            var tiles = new List<DirtTile>(dm.TestTiles);
+            ctx.Assert(tiles.Count >= 2, "built site has too few tiles to probe crack states");
+
+            // maxHealth 1 -> one hit crumbles it.
+            DirtTile one = tiles[0];
+            one.TestSetMaxHealth(1);
+            bool crumbled = one.Damage();
+            ctx.Assert(crumbled && one.IsDestroyed, "maxHealth-1 tile did not crumble in a single hit");
+
+            // maxHealth 4 -> intermediate crack states across the first 3 hits, crumbles on the 4th.
+            DirtTile four = tiles[1];
+            four.TestSetMaxHealth(4);
+            var states = new HashSet<Sprite> { four.TestDirtSprite };
+            for (int hit = 1; hit <= 4; hit++)
+            {
+                bool d = four.Damage();
+                if (hit < 4)
+                {
+                    ctx.Assert(!d && !four.IsDestroyed, $"maxHealth-4 tile crumbled early on hit {hit}");
+                    states.Add(four.TestDirtSprite);
+                }
+                else
+                {
+                    ctx.Assert(d && four.IsDestroyed, "maxHealth-4 tile did not crumble on the 4th hit");
+                }
+            }
+
+            ctx.Assert(states.Count >= 2, "maxHealth-4 tile never showed intermediate crack states");
+
+            gm.TestForceRoam();
+            ctx.Log($"berry avg={berryAvg:F2} (minFrac={berryMinFrac:F2}, maxFrac={berryMaxFrac:F2}); " +
+                    $"sparkle avg={sparkleAvg:F2} (minFrac={sparkleMinFrac:F2}, maxFrac={sparkleMaxFrac:F2}); " +
+                    $"crack states at max4={states.Count}");
             gm.TestReset();
         }
 

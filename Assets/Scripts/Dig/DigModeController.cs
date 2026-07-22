@@ -395,7 +395,6 @@ namespace DinoDigger.Dig
 
             _rows = _config != null ? Mathf.Clamp(_config.DigRows, 4, 6) : 5;
             _cols = _config != null ? Mathf.Max(3, _config.DigColumns) : 7;
-            int health = _config != null ? _config.DirtHealth : 3;
 
             _grid = new DirtTile[_rows, _cols];
             Vector3 origin = _root != null ? _root.position : transform.position;
@@ -417,7 +416,7 @@ namespace DinoDigger.Dig
                     box.size = new Vector2(1.0f, 1.0f); // generous touch target
 
                     var tile = go.AddComponent<DirtTile>();
-                    tile.Build(this, _lib, r, c, health, _crumbs);
+                    tile.Build(this, _lib, r, c, RollTileHardness(), _crumbs);
                     tile.SetDirtTint(dirtTint); // theme multiply over the crack sprites
 
                     _tiles.Add(tile);
@@ -447,6 +446,26 @@ namespace DinoDigger.Dig
             float frameTop = SurfaceY + DigBodyH + 0.2f;
             float frameBottom = -(_rows + 0.7f);
             DigCenter = origin + new Vector3(0f, (frameTop + frameBottom) * 0.5f, 0f);
+        }
+
+        /// <summary>Roll one dirt tile's break-tap hardness, LOW-biased so most tiles crumble
+        /// at the soft end of the active theme's range and its max is rare — the fast crumble is
+        /// the delight, a stubborn tile reads as a chore. Method: roll twice in the theme's
+        /// [MinTaps,MaxTaps] (already clamped to [1,4]) and keep the SMALLER, which linearly skews
+        /// toward MinTaps (e.g. a 2-3 theme lands ~75% at 2). Hardness is deliberately independent
+        /// of buried contents — peek hints already telegraph loot; gating it behind taps would
+        /// invert the reward curve. No theme active = the flat DirtHealth (legacy, unchanged).</summary>
+        private int RollTileHardness()
+        {
+            if (_theme == null)
+            {
+                return _config != null ? _config.DirtHealth : 3;
+            }
+
+            _theme.GetTapRange(out int min, out int max);
+            int a = Random.Range(min, max + 1);
+            int b = Random.Range(min, max + 1);
+            return Mathf.Min(a, b);
         }
 
         /// <summary>Tint the full-bleed dig backdrop for the active theme. Resolves the

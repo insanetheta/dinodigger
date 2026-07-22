@@ -36,8 +36,28 @@ namespace DinoDigger.Config
         public int MinItems = 2;
         public int MaxItems = 4;
 
+        [Tooltip("Base per-tile break-tap hardness range for this theme (inclusive). A tile " +
+                 "rolls a LOW-biased value in [MinTaps,MaxTaps] so most tiles crumble at the " +
+                 "soft end and the max is rare. Kept generous — read via GetTapRange, which " +
+                 "clamps to [1,4] (a 1-tap tile is pure toddler joy; never a slog past 4).")]
+        public int MinTaps = 2;
+        public int MaxTaps = 3;
+
         [Tooltip("Relative chance a (re)spawning mound rolls THIS theme. Higher = more common.")]
         public float RollWeight = 1f;
+
+        /// <summary>This theme's break-tap range, clamped defensively to [1,4] with min &lt;= max.
+        /// Never exceeds 4 (the toddler-generosity cap); a bad serialized value can't make a
+        /// tile a chore.</summary>
+        public void GetTapRange(out int min, out int max)
+        {
+            min = Mathf.Clamp(MinTaps, 1, 4);
+            max = Mathf.Clamp(MaxTaps, 1, 4);
+            if (max < min)
+            {
+                max = min;
+            }
+        }
     }
 
     /// <summary>All designer-tunable numbers in one asset.</summary>
@@ -350,6 +370,7 @@ namespace DinoDigger.Config
                     MoundTint = Color.white,
                     EggWeight = 0.35f, FruitWeight = 0.40f, TreasureWeight = 0.25f,
                     MinItems = 2, MaxItems = 4,
+                    MinTaps = 2, MaxTaps = 3,
                     RollWeight = 4f,
                 },
                 // Berry Bog: muddy brown dirt, fruit-heavy.
@@ -361,6 +382,7 @@ namespace DinoDigger.Config
                     MoundTint = new Color(0.72f, 0.55f, 0.40f),
                     EggWeight = 0.25f, FruitWeight = 0.60f, TreasureWeight = 0.15f,
                     MinItems = 2, MaxItems = 4,
+                    MinTaps = 1, MaxTaps = 2,   // soft mud — the fastest crumble
                     RollWeight = 2f,
                 },
                 // Sparkle Cave: purple dirt + a slightly darker/cooler backdrop, treasure-heavy.
@@ -372,6 +394,7 @@ namespace DinoDigger.Config
                     MoundTint = new Color(0.78f, 0.62f, 0.95f),
                     EggWeight = 0.20f, FruitWeight = 0.20f, TreasureWeight = 0.60f,
                     MinItems = 2, MaxItems = 4,
+                    MinTaps = 3, MaxTaps = 4,   // crystal-hard
                     RollWeight = 2f,
                 },
                 // Golden Mound: warm gold everywhere, ALL treasure, always 4 items — rare
@@ -384,6 +407,7 @@ namespace DinoDigger.Config
                     MoundTint = new Color(1.0f, 0.82f, 0.35f),
                     EggWeight = 0f, FruitWeight = 0f, TreasureWeight = 1.0f,
                     MinItems = 4, MaxItems = 4,
+                    MinTaps = 2, MaxTaps = 3,   // keep the jackpot site snappy, not a slog
                     RollWeight = 1f,
                 },
             };

@@ -49,6 +49,17 @@ namespace DinoDigger.Dig
         internal float TestPeekAlpha => _peek != null ? _peek.color.a : 0f;
         internal bool TestIsSurprise => _isSurprise;
 
+        /// <summary>TEST HOOK. Re-seat this tile's max health (clamped >= 1) and reset its
+        /// damage, refreshing the crack sprite, so a test can verify the proportional
+        /// crack-state mapping at maxHealth != 3.</summary>
+        internal void TestSetMaxHealth(int maxHealth)
+        {
+            _maxHealth = Mathf.Max(1, maxHealth);
+            _damage = 0;
+            _destroyed = false;
+            RefreshSprite();
+        }
+
         public void Build(DigModeController owner, PlaceholderLibrary lib, int row, int col,
             int maxHealth, ParticleSystem crumbs)
         {
