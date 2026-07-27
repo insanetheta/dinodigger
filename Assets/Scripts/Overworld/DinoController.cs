@@ -34,11 +34,10 @@ namespace DinoDigger.Overworld
         private const float NapAngle = -22f;         // lie-down lean (deg)
         private const float WalkAnimFps = 6f;        // walk-cycle frames/sec at base follow speed
 
-        // Builder construction-worker gear (DinoDigger-771).
-        private const float HatInsetFrac = 0.15f;    // hat sits this far below the head-bounds top
-        private const float HatTilt = -8f;           // jaunty tilt (deg)
-        private const float MalletHeightFrac = 0.6f; // mallet rides this far up the body bounds
-        private const float MalletSideFrac = 0.45f;  // ...and this far out toward the build site
+        // Builder construction-worker gear (DinoDigger-771). Placement is driven by the
+        // pixel-measured per-species/per-facing table in BuilderPropAnchors; the only local
+        // knob left is the jaunty hat tilt. Sizes/offsets/overlap live in that generated class.
+        private const float HatTilt = -8f;           // jaunty tilt (deg), leans toward the facing
 
         [SerializeField] private SpriteRenderer _renderer;
         [SerializeField] private ParticleSystem _hearts;
@@ -110,7 +109,6 @@ namespace DinoDigger.Overworld
         private SpriteRenderer _hatRenderer;
         private GameObject _mallet;
         private SpriteRenderer _malletRenderer;
-        private float _buildingX;                    // world-x of the site being built (mallet side)
 
         // Parade.
         private Vector3 _paradeCenter;
@@ -642,12 +640,13 @@ namespace DinoDigger.Overworld
         /// a stay-put work loop (bobbing in place, counted as busy) that — unlike Idle —
         /// never sends a resident home. Reuses the existing WalkTo travel + BFS movement.
         /// Only ever called for NON-buddy residents by <see cref="TownController"/>; the
-        /// player backhoe and walk buddies are never routed here.</summary>
+        /// player backhoe and walk buddies are never routed here.
+        /// <paramref name="buildingCenter"/> is retained for call-site compatibility; gear
+        /// placement is now driven entirely by the dino's facing (see BuilderPropAnchors).</summary>
         public void GoWork(Vector3 site, Vector3 buildingCenter, float speedMul, Action onWorking,
             PlaceholderLibrary library)
         {
             _library = library;
-            _buildingX = buildingCenter.x; // which side the structure is on (mallet flip)
             _headingToWork = true;
             EquipBuilderGear();            // "puts on" the hard hat for the commute + shift
             WalkTo(site, speedMul, () =>
@@ -701,9 +700,14 @@ namespace DinoDigger.Overworld
             UpdateMallet();
         }
 
-        // The hat is worn from dispatch (commute) through the whole shift; pinned to the
-        // top-center of the body bounds, inset down a little onto the head, one sort step
-        // above the dino, at a jaunty tilt.
+        // West-ish DISPLAYED facings are drawn as the mirror of the single 3/4-view prop art,
+        // so the hat (and the hammer, by its placed side) get a horizontal flip to match.
+        private static bool FacesWest(Dir8 d) => d == Dir8.W || d == Dir8.SW || d == Dir8.NW;
+
+        // The hat is worn from dispatch (commute) through the whole shift. Sized to the
+        // measured head width and seated ON the crown (brim overlapping the head top by
+        // HatCrownOverlap of its height) at the pixel-measured head center for the CURRENT
+        // facing, one sort step above the dino, at a jaunty tilt that leans with the facing.
         private void UpdateHat()
         {
             if (_hat == null)
@@ -723,15 +727,32 @@ namespace DinoDigger.Overworld
                 return;
             }
 
-            Bounds b = _renderer.bounds;
-            _hat.transform.position = new Vector3(
-                b.center.x, b.max.y - b.size.y * HatInsetFrac, transform.position.z);
-            _hat.transform.rotation = Quaternion.Euler(0f, 0f, HatTilt);
+            BuilderPropAnchor a = BuilderPropAnchors.Get(Type, _facing);
+            Bounds b = _renderer.bounds;                 // world bounds INCLUDE stage scale
+            bool flip = FacesWest(_facing);
+
+            // Target on-screen hat width, then the uniform localScale that yields it (bounds
+            // already carry the growth-stage scale, so this auto-sizes for Baby/Kid/Big).
+            float targetW = BuilderPropAnchors.HatWidthMul * a.HeadW * b.size.x;
+            Vector2 spriteSize = _hatRenderer.sprite.bounds.size;
+            float parentScale = Mathf.Max(1e-4f, Mathf.Abs(transform.lossyScale.x));
+            float uni = spriteSize.x > 1e-4f ? targetW / (spriteSize.x * parentScale) : 1f;
+            float hatWorldH = spriteSize.x > 1e-4f ? targetW * spriteSize.y / spriteSize.x : 0f;
+
+            float cx = b.min.x + a.HeadCx * b.size.x;
+            // Crown ~= top of bounds; raise the hat center so its brim dips HatCrownOverlap
+            // of the hat height below the crown (sits ON the head, never buries the eyes).
+            float cy = b.max.y + (0.5f - BuilderPropAnchors.HatCrownOverlap) * hatWorldH;
+
+            _hat.transform.position = new Vector3(cx, cy, transform.position.z);
+            _hat.transform.localScale = new Vector3(flip ? -uni : uni, uni, 1f);
+            _hat.transform.rotation = Quaternion.Euler(0f, 0f, flip ? -HatTilt : HatTilt);
             _hatRenderer.sortingOrder = _renderer.sortingOrder + 1;
         }
 
-        // The mallet is held only while actually working; parked at the side of the body
-        // toward the structure (flipped by which side that is) and rocked by TickWork.
+        // The mallet is held only while actually working; placed at the facing-side body
+        // extreme (FrontX) at MalletHeightFrac down from the top, sized to the body, flipped
+        // so its head points outward. Rotation is left to the TickWork swing (we don't stomp it).
         private void UpdateMallet()
         {
             if (_mallet == null)
@@ -750,15 +771,21 @@ namespace DinoDigger.Overworld
                 return;
             }
 
+            BuilderPropAnchor a = BuilderPropAnchors.Get(Type, _facing);
             Bounds b = _renderer.bounds;
-            float side = _buildingX >= transform.position.x ? 1f : -1f;
-            _mallet.transform.position = new Vector3(
-                b.center.x + side * b.size.x * MalletSideFrac,
-                b.min.y + b.size.y * MalletHeightFrac,
-                transform.position.z);
-            // Flip toward the site (parent scale is uniform-positive, so a -1 x mirrors it);
-            // rotation is left to the TickWork swing so we don't stomp it here.
-            _mallet.transform.localScale = new Vector3(side, 1f, 1f);
+            bool flip = a.FrontX < 0.5f;                 // placed on the left half -> point left
+
+            float targetH = BuilderPropAnchors.MalletHeightMul * b.size.y;
+            Vector2 spriteSize = _malletRenderer.sprite.bounds.size;
+            float parentScale = Mathf.Max(1e-4f, Mathf.Abs(transform.lossyScale.x));
+            float uni = spriteSize.y > 1e-4f ? targetH / (spriteSize.y * parentScale) : 1f;
+
+            float mx = b.min.x + a.FrontX * b.size.x;
+            float my = b.max.y - BuilderPropAnchors.MalletHeightFrac * b.size.y;
+
+            _mallet.transform.position = new Vector3(mx, my, transform.position.z);
+            // Uniform scale (keeps aspect); a -1 on x mirrors it (parent scale is uniform-positive).
+            _mallet.transform.localScale = new Vector3(flip ? -uni : uni, uni, 1f);
             _malletRenderer.sortingOrder = _renderer.sortingOrder + 1;
         }
 
