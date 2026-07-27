@@ -12,7 +12,9 @@ namespace DinoDigger.Overworld
     /// curated price: it deducts the coins (save written), breaks ground on the next
     /// free <see cref="TownArea"/> plot, then drafts up to
     /// <see cref="GameConfig.TownMaxBuilders"/> NON-BUDDY meadow residents to commute
-    /// in, work the site through its states, celebrate, and trot home.
+    /// in, work the site through its states, celebrate, and trot home. Each builder's
+    /// contribution is scaled by how GROWN it is (DinoDigger-s90 — see
+    /// <see cref="CrewWorkRate"/>), so feeding the meadow visibly raises the town faster.
     ///
     /// THE PLAYER IS NEVER TOUCHED. This controller holds no reference to the backhoe
     /// and cannot move it; its only labor source is <see cref="GameManager.TownAcquireBuilders"/>,
@@ -28,6 +30,10 @@ namespace DinoDigger.Overworld
     /// <see cref="RestoreFromSave"/> — finished buildings return finished (no crew, no
     /// confetti), a partial site resumes accepting crew, and the queue continues from the
     /// saved index. Also resets cleanly for the integration runner.
+    ///
+    /// CONSTRUCTION ONLY. What a FINISHED building does — the townsfolk who drop by to slide,
+    /// sip, soak and splash — belongs to the sibling <see cref="TownLifeController"/> this
+    /// class ensures and ticks but never reaches into (DinoDigger-3pz).
     /// </summary>
     public class TownController : MonoBehaviour
     {
@@ -35,12 +41,23 @@ namespace DinoDigger.Overworld
         [SerializeField] private PlaceholderLibrary _library;
         [SerializeField] private GameConfig _config;
 
+        // Ambient town LIFE (DinoDigger-3pz), a separate concern living on the same root: once
+        // a building is finished, residents drop by to play its little scene. This controller
+        // owns nothing about those visits beyond the component's lifetime + tick — see
+        // TownLifeController. Ensured in Configure, so the built scene and the test rig alike
+        // always have one.
+        [SerializeField] private TownLifeController _life;
+
         // Curated order: _nextIndex is both the next building AND its plot slot.
         private int _nextIndex;
         private BuildingController _activeSite;
         private int _activeIndex = -1;
         private readonly List<DinoController> _builders = new List<DinoController>();
         private float _workPuffTimer;
+        // Test-observable build-work accrual (DinoDigger-s90). Both counters advance in the
+        // SAME tick, so _workBanked / _workElapsed is an exact crew work-rate with no clock.
+        private float _workBanked;  // crew work-seconds banked into the active site
+        private float _workElapsed; // real seconds ticked while a crew was on that site
 
         // Recess Time (DinoDigger-x07): transient dino parties thrown by tapping a FINISHED
         // building. One recess per building at a time; multiple different buildings CAN party
@@ -66,6 +83,12 @@ namespace DinoDigger.Overworld
         /// straight from the queue index (no per-building lookup). Used by the Fruit Stand
         /// sell flow to ask "is the stand open for business?".</summary>
         public bool IsBuildingFinished(int index) => index >= 0 && index < _nextIndex;
+
+        /// <summary>How many buildings are FINISHED (they occupy plots 0..count-1, in curated
+        /// build order). The ambient <see cref="TownLifeController"/> picks its visit targets
+        /// from this range; zero means the plaza is still an empty lot and nothing is alive
+        /// yet.</summary>
+        public int FinishedBuildingCount => _nextIndex;
 
         /// <summary>World position of the plot for the building at <paramref name="index"/>
         /// (the drop-off point the Fruit Stand sell flow walks fruit to). Null-tolerant.</summary>
@@ -157,6 +180,7 @@ namespace DinoDigger.Overworld
         internal int TestNextIndex => _nextIndex;
         internal int TestBuilderCount => _builders.Count;
         internal IReadOnlyList<DinoController> TestBuilders => _builders;
+        internal TownLifeController TestLife => _life;
         internal int TestRecessCount => _recesses.Count;
         internal int TestRecessTapFeedback => _recessTapFeedback;
         internal bool TestIsRecessRunning(int index) => IsRecessRunning(index);
@@ -174,6 +198,25 @@ namespace DinoDigger.Overworld
             }
         }
 
+        /// <summary>Cumulative crew work-seconds banked into the active site by
+        /// <see cref="TickActiveSite"/> since the last town reset (DinoDigger-s90).</summary>
+        internal float TestWorkBanked => _workBanked;
+
+        /// <summary>Cumulative REAL seconds ticked while a crew was on site, over the same window
+        /// as <see cref="TestWorkBanked"/>. Both advance inside one tick, so their delta ratio is
+        /// the crew's exact work rate — BigDinoBuildsFaster compares growth-stage crews that way
+        /// instead of racing two builds against the wall clock.</summary>
+        internal float TestWorkElapsed => _workElapsed;
+
+        private void Awake()
+        {
+            // Self-heal: a scene SAVED before the town-life service existed has no
+            // TownLifeController serialized on this root, and nothing calls Configure at
+            // runtime. Ensuring it here means ambient life comes up from the serialized
+            // wiring alone — no scene rebuild required.
+            EnsureLife();
+        }
+
         private void OnEnable()
         {
             // Self-register: a banked coin should break ground immediately, not only on
@@ -186,12 +229,35 @@ namespace DinoDigger.Overworld
             GameEvents.TreasureCollected -= OnTreasureCollected;
         }
 
-        /// <summary>Wire the district, art library, and tuning. Null-tolerant.</summary>
+        /// <summary>Wire the district, art library, and tuning. Null-tolerant. Also ensures the
+        /// sibling <see cref="TownLifeController"/> (ambient townsfolk visits) exists and is
+        /// wired with the same district/art/tuning — construction and life stay separate
+        /// classes, but one call site wires both.</summary>
         public void Configure(TownArea area, PlaceholderLibrary library, GameConfig config)
         {
             _area = area;
             _library = library;
             _config = config;
+            EnsureLife();
+        }
+
+        /// <summary>Ensure the sibling ambient-life service exists on this root and is wired to
+        /// the same district/art/tuning. Idempotent — safe from both <see cref="Configure"/>
+        /// (SceneBuilder, the test rig) and <see cref="Awake"/> (a scene serialized before the
+        /// service existed).</summary>
+        private void EnsureLife()
+        {
+            if (_life == null)
+            {
+                _life = GetComponent<TownLifeController>();
+            }
+
+            if (_life == null)
+            {
+                _life = gameObject.AddComponent<TownLifeController>();
+            }
+
+            _life.Configure(_area, this, _library, _config);
         }
 
         private void OnTreasureCollected(int total)
@@ -211,6 +277,10 @@ namespace DinoDigger.Overworld
             // Recess parties run independently of the build queue (they use free residents,
             // never builders), so advance them every frame regardless of build state.
             TickRecesses(dt);
+
+            // Ambient life does too: townsfolk visit FINISHED buildings while the next one
+            // goes up. A visitor is freely draftable, so this can never starve a build.
+            _life?.Tick(dt);
 
             if (_activeSite == null)
             {
@@ -282,7 +352,11 @@ namespace DinoDigger.Overworld
                     _library != null ? _library.CrumbParticle : null,
                     new Color(0.78f, 0.62f, 0.42f), 0.3f)
                 : null;
-            building.Init(_library, _config, sr, crumbs, initialState, initialWorked);
+            // Per-building art (DinoDigger-ggy), picked by BUILD-ORDER INDEX: each plot raises
+            // its OWN structure. Null (art not generated yet) or a partial set degrades to the
+            // generic BuildingStates placeholder inside BuildingController, state by state.
+            BuildingArt art = _library != null ? _library.TownBuilding(index) : null;
+            building.Init(_library, _config, sr, crumbs, initialState, initialWorked, art);
 
             // Fruit Stand identity: the stand plot gets a warm tint + a bobbing fruit sign
             // once it finishes (deferred inside BuildingController until IsFinished). Reuses
@@ -312,22 +386,18 @@ namespace DinoDigger.Overworld
 
             ManageBuilders(gm);
 
-            int working = 0;
-            for (int i = 0; i < _builders.Count; i++)
-            {
-                if (_builders[i] != null && _builders[i].IsWorking)
-                {
-                    working++;
-                }
-            }
-
-            if (working <= 0)
+            float rate = CrewWorkRate();
+            if (rate <= 0f)
             {
                 return; // no crew on site: construction WAITS (never drafts buddies/player)
             }
 
+            float banked = dt * rate;
+            _workBanked += banked;
+            _workElapsed += dt;
+
             int before = _activeSite.State;
-            _activeSite.AddWork(dt * working);
+            _activeSite.AddWork(banked);
 
             // Puff dust/crumbs at the site while the crew hammers.
             _workPuffTimer -= dt;
@@ -357,6 +427,25 @@ namespace DinoDigger.Overworld
             {
                 gm.TownPersist();
             }
+        }
+
+        /// <summary>Build-work SECONDS this crew banks per real second (DinoDigger-s90). Only
+        /// builders physically ON SITE count, and each contributes its growth-stage multiplier
+        /// (<see cref="GameConfig.BuildSpeedFor"/>: Baby x1.0, Kid x1.6, Big x2.5) instead of a
+        /// flat 1 — so feeding the meadow visibly speeds the town up. Zero means the site waits.</summary>
+        private float CrewWorkRate()
+        {
+            float rate = 0f;
+            for (int i = 0; i < _builders.Count; i++)
+            {
+                DinoController d = _builders[i];
+                if (d != null && d.IsWorking)
+                {
+                    rate += _config != null ? _config.BuildSpeedFor(d.Stage) : 1f;
+                }
+            }
+
+            return rate;
         }
 
         private void ManageBuilders(GameManager gm)
@@ -747,9 +836,15 @@ namespace DinoDigger.Overworld
             _recesses.Clear();
             _recessTapFeedback = 0;
 
+            // Ambient visits are transient too (never saved): send every visitor home, destroy
+            // its props, and rewind the life tallies so the next case starts on a quiet plaza.
+            _life?.TestResetLife();
+
             ClearAllSites();
             _nextIndex = 0;
             _workPuffTimer = 0f;
+            _workBanked = 0f;
+            _workElapsed = 0f;
         }
     }
 }

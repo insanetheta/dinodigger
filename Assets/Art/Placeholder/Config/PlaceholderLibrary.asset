@@ -82,6 +82,61 @@ MonoBehaviour:
   - {fileID: 21300000, guid: c21c0496185e7458fa0099af13844325, type: 3}
   - {fileID: 21300000, guid: 12c94c1a017ad40b4892f88d39a51ee0, type: 3}
   - {fileID: 21300000, guid: 4d0f3d42387984c01bfa5a685f98b96a, type: 3}
+  TownBuildings:
+  - States:
+    - {fileID: 21300000, guid: 9a60c3f4d2a424d07b9f9e7ab2e43055, type: 3}
+    - {fileID: 21300000, guid: 4b5087871647f4814a5af484622a8d6c, type: 3}
+    - {fileID: 21300000, guid: c21c0496185e7458fa0099af13844325, type: 3}
+    - {fileID: 21300000, guid: 12c94c1a017ad40b4892f88d39a51ee0, type: 3}
+    - {fileID: 21300000, guid: 4d0f3d42387984c01bfa5a685f98b96a, type: 3}
+  - States:
+    - {fileID: 21300000, guid: 9a1d408b72ba241e9a585e49a4681e01, type: 3}
+    - {fileID: 21300000, guid: 1d0a421e6ad804ee5b344de32c47a8f9, type: 3}
+    - {fileID: 21300000, guid: b02ea023e149e4fccb26b679ef4206d5, type: 3}
+    - {fileID: 21300000, guid: 37971370701964be58a44a1a123ac1d2, type: 3}
+    - {fileID: 21300000, guid: c527c8183afd5408aaa9c711ef1e5e9b, type: 3}
+  - States:
+    - {fileID: 21300000, guid: 06cba63fdcab94c4387740b8a824521b, type: 3}
+    - {fileID: 21300000, guid: 736900a9f843940f1af9354e922ed727, type: 3}
+    - {fileID: 21300000, guid: 992fecbd64701418c85ee864b4ae9aa5, type: 3}
+    - {fileID: 21300000, guid: cdcfaeb84b9f546ab8078c09b1bfe315, type: 3}
+    - {fileID: 21300000, guid: b4f10684b7cb74111b090266e65714f4, type: 3}
+  - States:
+    - {fileID: 21300000, guid: 43dfb4745225845589eb93f6c8d6bf43, type: 3}
+    - {fileID: 21300000, guid: a084548210c4f40329bcf9f5dc4dc2b3, type: 3}
+    - {fileID: 21300000, guid: 18123344f184e4d6fab84927b959a579, type: 3}
+    - {fileID: 21300000, guid: 671d455e2d61a45dfb08af295236af4a, type: 3}
+    - {fileID: 21300000, guid: c320bb0c828a6473292c447832eac7b3, type: 3}
+  - States:
+    - {fileID: 21300000, guid: 88cdc3bd70aeb43469dea976a94b0549, type: 3}
+    - {fileID: 21300000, guid: 81e55083e09ac4c878148b64bac17127, type: 3}
+    - {fileID: 21300000, guid: 1c71b3fb3cdca4bf0b30227f6daf6db5, type: 3}
+    - {fileID: 21300000, guid: 8da7752ff0ad74f17a7a473e7d068e93, type: 3}
+    - {fileID: 21300000, guid: 42b31694f6ca049dbb0529ae0c3c3b79, type: 3}
+  - States:
+    - {fileID: 21300000, guid: c56b188d980994c7b8081f1055e333b5, type: 3}
+    - {fileID: 21300000, guid: e0528fc810c3d49a898699482b1acf81, type: 3}
+    - {fileID: 21300000, guid: 55a1afb63d2894eb5a156d3464da0ad0, type: 3}
+    - {fileID: 21300000, guid: aba48c77338474e70a8f97b0da6e5c26, type: 3}
+    - {fileID: 21300000, guid: f3c38e83f5398472a94ef285884d6ded, type: 3}
+  - States:
+    - {fileID: 21300000, guid: b67df4f1a220541158946a35b6f2d1a2, type: 3}
+    - {fileID: 21300000, guid: cf2d54e47b1b640ad92dd0bb88973e92, type: 3}
+    - {fileID: 21300000, guid: 1060862e332b14cd49029bd738a975d5, type: 3}
+    - {fileID: 21300000, guid: aaa3bc08eac7840b9b76e5c7123ddd51, type: 3}
+    - {fileID: 21300000, guid: 84e5c7fcc74724d12a53d724833422ca, type: 3}
+  - States:
+    - {fileID: 0}
+    - {fileID: 0}
+    - {fileID: 0}
+    - {fileID: 21300000, guid: 27e1caaf27807478cbbb5cc81d03e01e, type: 3}
+    - {fileID: 21300000, guid: 9aaa734b787444a3990dbd0e11979c0b, type: 3}
+  - States:
+    - {fileID: 0}
+    - {fileID: 0}
+    - {fileID: 0}
+    - {fileID: 0}
+    - {fileID: 0}
   HardHat: {fileID: 21300000, guid: d360f7b9ce2a4477d9d3ebbda1214afe, type: 3}
   ToolHammer: {fileID: 21300000, guid: c300babd43f66490ba031d948ea3892e, type: 3}
   ConstructionSign: {fileID: 21300000, guid: 8b23e0f19948b4b478b7390fd6f1a0f3, type: 3}

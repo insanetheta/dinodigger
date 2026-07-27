@@ -2053,6 +2053,30 @@ namespace DinoDigger.Core
         internal ParticleSystem TownCreateParticles(Transform parent, Sprite sprite, Color color, float size) =>
             CreateParticles(parent, sprite, color, size);
 
+        /// <summary>One-shot ambient FX burst for town life (DinoDigger-3pz): a small puff of
+        /// <paramref name="count"/> particles of an EXISTING library sprite at a world point —
+        /// hearts over a coffee sip, tinted crumbs as spa bubbles, stars as fountain splash.
+        /// Same throwaway-system + auto-destroy shape as <see cref="SpawnConfetti"/>, so no new
+        /// art and no pooling; null sprite just tints the default particle.</summary>
+        internal void TownSpawnFx(Vector3 pos, Sprite sprite, Color color, float size, int count)
+        {
+            ParticleSystem ps = CreateParticles(_overworldRoot, sprite, color, size);
+            if (ps == null)
+            {
+                return;
+            }
+
+            ps.transform.position = pos;
+            ps.Emit(Mathf.Clamp(count, 1, 24));
+            Tween.After(2f, () =>
+            {
+                if (ps != null)
+                {
+                    Destroy(ps.gameObject);
+                }
+            });
+        }
+
         // -------------------------------------------------------------- shards
 
         /// <summary>An egg shard was dug up: fly it to the nest (or a graceful

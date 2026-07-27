@@ -512,6 +512,204 @@ SPRITES = [
             "green leaf canopies on wooden poles for shade. Chunky, rounded, colorful, "
             "sturdy and inviting. It is a BUILDING/playset, an object only — it has NO "
             "face, no eyes, no mouth and is not a character"),
+        "kind": "playground",
+        "s3_frame": "the boulder ring and the main frame",
+        "s3_missing": ("one or two leaf canopies not yet added, the slide slab only "
+                       "half mounted"),
+        "s2_frame": ("the ring of foundation boulders and a few bare upright wooden "
+                     "support poles / partial stone walls"),
+        "s2_gaps": "the slide, see-saw and leaf canopies",
+        "s1_none": "NO slide, NO see-saw, NO canopies",
+    },
+    {
+        "name": "boulder_brew", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style COFFEE SHOP, a single small "
+            "structure centered in the frame, built entirely from natural prehistoric "
+            "materials: a long thick grey stone-slab serving counter across the front, "
+            "a big bright green leaf awning stretched over it on two chunky log posts, "
+            "and behind the counter a fat round clay pot of bubbling tar-black brew "
+            "steaming on a nest of glowing hot orange stones, with a couple of stacked "
+            "stone cups on the counter. Chunky, rounded, cozy, warm and inviting. It "
+            "is a BUILDING, an object only — it has NO face, no eyes, no mouth and is "
+            "not a character, and there is NO writing or sign lettering anywhere"),
+        # The leaf awning seals two pockets of background magenta above the brew
+        # pot that the border flood cannot reach; without this they survive the key
+        # as pink blobs that read as a pair of eyes. See clear_magenta_pockets.
+        "pocket_states": ["done"],
+        "kind": "coffee shop",
+        "s3_frame": "the counter slab and the awning posts",
+        "s3_missing": ("the leaf awning only half draped over one post, the brew pot "
+                       "not yet set on its hot stones"),
+        "s2_frame": ("the low stone foundation blocks and two bare upright log posts "
+                     "with a half-built counter slab"),
+        "s2_gaps": "the leaf awning, the brew pot and the hot stones",
+        "s1_none": "NO counter, NO awning, NO brew pot",
+    },
+    {
+        "name": "slate_library", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style LIBRARY, a single tall "
+            "structure centered in the frame, built entirely from natural prehistoric "
+            "materials: chunky stacked grey stone-slab walls with big open square "
+            "window openings, and through those openings you can see tall shelves of "
+            "neatly stacked flat stone tablets inside. A tall ladder made of a log "
+            "frame with log rungs leans against the front wall. A big bright green "
+            "leaf roof caps it, and a large upright carved stone tablet stands out "
+            "front on two little rock feet as a sign — the tablet face is completely "
+            "BLANK and smooth with absolutely nothing carved or written on it. Chunky, "
+            "rounded, scholarly and inviting. It is a BUILDING, an object only — it "
+            "has NO face, no eyes, no mouth and is not a character, and there is NO "
+            "writing, no letters and no symbols anywhere in the picture"),
+        "kind": "library",
+        "s3_frame": "the stone-slab walls and the roof beams",
+        "s3_missing": ("part of the leaf roof not yet laid, the blank tablet sign not "
+                       "yet stood up out front, the shelves only half filled"),
+        "s2_frame": ("the foundation slabs and half-height bare stone walls with a few "
+                     "upright log roof posts"),
+        "s2_gaps": "the leaf roof, the shelves, the log ladder and the tablet sign",
+        "s1_none": "NO shelves, NO roof, NO ladder, NO sign",
+    },
+    {
+        "name": "bedrock_bijou", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style MOVIE THEATER, a single grand "
+            "structure centered in the frame, built entirely from natural prehistoric "
+            "materials: a wide heavy grey stone-slab marquee canopy jutting out over "
+            "the entrance, its underside and rim studded with rows of round glowing "
+            "warm-yellow firefly bulbs in little stone cups. The marquee board itself "
+            "is completely BLANK smooth stone with absolutely nothing written on it. "
+            "The entrance below is a tall arched opening hung with a heavy draped "
+            "brown-and-tan animal hide curtain, tied back at one side. Chunky stone "
+            "block walls and a big green leaf roof above. Chunky, rounded, grand, "
+            "festive and inviting. It is a BUILDING, an object only — it has NO face, "
+            "no eyes, no mouth and is not a character, and there is absolutely NO "
+            "text, NO letters and NO numbers anywhere in the picture"),
+        "kind": "movie theater",
+        "s3_frame": "the stone walls and the marquee slab",
+        "s3_missing": ("about half the firefly bulbs not yet fitted into their stone "
+                       "cups, the hide curtain not yet hung in the doorway"),
+        "s2_frame": ("the foundation slabs and half-height bare stone block walls with "
+                     "bare log posts where the marquee will sit"),
+        "s2_gaps": "the marquee slab, the firefly bulbs, the hide curtain and the roof",
+        "s1_none": "NO marquee, NO bulbs, NO curtain",
+    },
+    {
+        "name": "boneanza_bowling", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style BOWLING ALLEY, a single long "
+            "low structure centered in the frame seen at a friendly three-quarter "
+            "angle, built entirely from natural prehistoric materials: one long "
+            "polished flat grey stone lane running away from the viewer with smooth "
+            "log gutter rails down both sides, sheltered under an open roof of thick "
+            "log beams topped with big green leaves. At the far end of the lane stands "
+            "a neat triangular rack of ten chunky pale white dinosaur-bone pins, and a "
+            "big round grey stone bowling ball sits at the near end. Chunky, rounded, "
+            "playful and inviting. It is a BUILDING, an object only — it has NO face, "
+            "no eyes, no mouth and is not a character, and there is NO writing or "
+            "scoreboard lettering anywhere"),
+        "kind": "bowling alley",
+        "s3_frame": "the lane slab and the log roof beams",
+        "s3_missing": ("part of the leaf roof not yet laid over the beams, one gutter "
+                       "rail log missing, the bone pins not yet racked at the end"),
+        "s2_frame": ("the long foundation of rough unpolished stone blocks and a few "
+                     "bare upright log posts along the sides"),
+        "s2_gaps": "the polished lane surface, the roof, the gutter rails and the bone pins",
+        "s1_none": "NO lane, NO roof, NO rails, NO pins",
+    },
+    {
+        "name": "dino_daycare", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style baby NURSERY hut, a single "
+            "small low round structure centered in the frame, built entirely from "
+            "natural prehistoric materials: a squat rounded dome of smooth pastel-grey "
+            "river stones, extra cozy and pillowy, capped with a thick shaggy roof of "
+            "overlapping big green leaves. Two tiny low arched doorways in the front "
+            "are hung with soft little flaps of pale cream hide. Through a low round "
+            "side opening you can see soft nests woven from green leaves and dry golden "
+            "grass inside. A couple of speckled round eggs rest in the nearest nest. "
+            "Chunky, rounded, soft, warm and inviting. It is a BUILDING, an object "
+            "only — it has NO face, no eyes, no mouth and is not a character, there "
+            "are NO baby animals or creatures in it, and NO writing anywhere"),
+        "kind": "nursery hut",
+        "s3_frame": "the round stone dome walls",
+        "s3_missing": ("part of the leaf roof still open at the top, the little hide "
+                       "door-flaps not yet hung, only one leaf-nest placed inside"),
+        "s2_frame": ("the low circular ring of foundation stones and a half-height "
+                     "curved bare stone wall with bent log ribs arching over it"),
+        "s2_gaps": "the leaf roof, the door-flaps and the soft leaf-nests",
+        "s1_none": "NO dome, NO roof, NO door-flaps, NO nests",
+    },
+    {
+        "name": "tarpit_springs", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style SPA, a single sunken bathing "
+            "pool centered in the frame, built entirely from natural prehistoric "
+            "materials: a round sunken basin of warm creamy caramel-brown bubbling mud "
+            "with fat glossy bubbles doming up on its surface and soft curls of white "
+            "steam rising, ringed all the way around by a rim of big smooth rounded "
+            "soaking stones in soft greys and warm tans, with two or three wide flat "
+            "stones set as seats along the rim and a small leafy potted fern beside it. "
+            "Chunky, rounded, relaxing, warm and inviting. It is a BUILDING/structure, "
+            "an object only — it has NO face, no eyes, no mouth and is not a character, "
+            "there are NO people or animals bathing in it, and NO writing anywhere"),
+        "kind": "spa bathing pool",
+        "s3_frame": "the dug basin and most of the stone rim",
+        "s3_missing": ("a gap in the ring of soaking stones where two rocks are not "
+                       "yet set, the basin only part filled so the mud is not bubbling "
+                       "yet"),
+        "s2_frame": ("the empty dug-out earth basin lined with a few rough foundation "
+                     "stones and a couple of upright marker stakes"),
+        "s2_gaps": "the smooth soaking-stone rim, the seats and the warm bubbling mud",
+        "s1_none": "NO pool, NO mud, NO stone rim, NO seats",
+    },
+    {
+        "name": "gronks_grocer", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style open-air MARKET stall, a "
+            "single structure centered in the frame, built entirely from natural "
+            "prehistoric materials: two or three open-fronted stalls of flat grey "
+            "stone-slab tables on chunky rock legs, heaped high with giant colorful "
+            "prehistoric produce — oversized red and purple berries, big orange and "
+            "yellow gourds, fat green melons and bunches of leafy greens spilling out "
+            "of woven baskets. Overhead a wide canopy of big leaves in alternating "
+            "bright green and pale yellow-green STRIPES is slung on chunky log poles. "
+            "Chunky, rounded, abundant, colorful and inviting. It is a BUILDING/market "
+            "stall, an object only — it has NO face, no eyes, no mouth and is not a "
+            "character, there are NO shoppers or vendors, and there is NO writing, no "
+            "price signs and no lettering anywhere"),
+        "kind": "market stall",
+        "s3_frame": "the slab stall tables and the canopy poles",
+        "s3_missing": ("the striped leaf canopy only half slung across the poles, one "
+                       "stall table still bare and empty of produce"),
+        "s2_frame": ("the foundation stones and a few bare upright log poles with one "
+                     "half-laid slab table"),
+        "s2_gaps": "the striped leaf canopy, the stall tables and all the produce",
+        "s1_none": "NO stalls, NO canopy, NO produce, NO baskets",
+    },
+    {
+        "name": "fossil_fountain", "category": "town", "outdir": "town",
+        "finished_subject": (
+            "a finished cute stone-age Flintstones-style town-plaza FOUNTAIN, a single "
+            "structure centered in the frame, built entirely from natural prehistoric "
+            "materials: a wide round basin of chunky grey stone blocks holding clear "
+            "bright blue water, and rising from its middle a carved centerpiece of "
+            "pale cream dinosaur bones — a tall curving rib-bone arch and a big round "
+            "skull-less bone bowl — spouting arcs of sparkling water with little white "
+            "sparkle dots and droplets splashing back into the basin. Around the "
+            "outside sits a ring of big smooth rounded sitting-stones in soft greys "
+            "and tans. Chunky, rounded, cheerful and inviting. It is a FOUNTAIN "
+            "structure, an object only — it has NO face, no eyes, no mouth, no skull "
+            "and is not a character, and there is NO writing anywhere"),
+        "kind": "plaza fountain",
+        "s3_frame": "the round stone basin and the bone centerpiece",
+        "s3_missing": ("the basin still empty and dry with no water and no spouting "
+                       "yet, two of the ring of sitting-stones not yet rolled into "
+                       "place"),
+        "s2_frame": ("the circular ring of rough foundation blocks forming a low "
+                     "half-height basin wall with a bare stub post in the middle"),
+        "s2_gaps": "the bone centerpiece, the water and the sitting-stones",
+        "s1_none": "NO basin, NO bone centerpiece, NO water, NO sitting-stones",
     },
 ]
 
@@ -556,27 +754,46 @@ BUILDING_STYLE = (
 # Order matters: s3 is edited from the finished image, then s2 from s3, etc.
 TOWN_STATES = ["s3", "s2", "s1", "s0"]
 TOWN_SEED = {"s3": "done", "s2": "s3", "s1": "s2", "s0": "s1"}
+
+# Town buildings sit on the ISOMETRIC overworld tilemap, so every state must be
+# drawn from the same overhead three-quarter camera the Pebble Playground landed on
+# by luck. Left unsaid, the model draws a flat straight-on elevation, which reads as
+# a different game next to the isometric map. Applied to the finished gen AND every
+# un-build rung so the camera can't drift down the chain.
+TOWN_CAMERA = (
+    "Drawn in a three-quarter overhead ISOMETRIC view for an isometric game map: the "
+    "camera looks DOWN at the structure from about 45 degrees above and off to one "
+    "side, so you clearly see the TOP of the building, its front and one side at "
+    "once, and the ground footprint it stands on recedes as a diamond/rhombus shape. "
+    "Not a flat straight-on front elevation. The structure sits on its own small "
+    "patch of ground (grass or packed dirt) cut out in that same isometric diamond "
+    "footprint, and nothing extends beyond that patch. "
+)
+#
+# The four rungs are TEMPLATES: each building fills in its own kind/frame/parts
+# wording from its spec, so an un-build reads about the right structure (the
+# library's shelves and ladder, not the playground's slide and see-saw). The
+# playground's spec supplies the original wording verbatim, so its chain is
+# unchanged.
 TOWN_UNBUILD = {
-    "s3": ("Show this SAME playground at an EARLIER construction stage, NEARLY "
-           "FINISHED but still a building site: the boulder ring and the main frame "
+    "s3": ("Show this SAME {kind} at an EARLIER construction stage, NEARLY "
+           "FINISHED but still a building site: {s3_frame} "
            "are up and most pieces are in place, but a few final parts are still "
-           "MISSING (one or two leaf canopies not yet added, the slide slab only "
-           "half mounted), and a couple of wooden scaffolding poles and stacked "
+           "MISSING ({s3_missing}), and a couple of wooden scaffolding poles and stacked "
            "loose stones sit beside it. Keep the EXACT same location, footprint, "
            "camera angle, art style, colors and outline; only make it look slightly "
            "less complete, like it is almost done being built."),
-    "s2": ("Show this SAME playground HALF BUILT: only the basic skeleton FRAME is "
-           "standing — the ring of foundation boulders and a few bare upright wooden "
-           "support poles / partial stone walls — with big obvious GAPS where the "
-           "slide, see-saw and leaf canopies will go (those are NOT built yet). A few "
+    "s2": ("Show this SAME {kind} HALF BUILT: only the basic skeleton FRAME is "
+           "standing — {s2_frame} — with big obvious GAPS where "
+           "{s2_gaps} will go (those are NOT built yet). A few "
            "scaffolding poles and piles of loose stones and logs lie around the site. "
            "Keep the EXACT same location, footprint, camera angle, art style, colors "
            "and outline; only strip it back to a half-finished frame."),
     "s1": ("Show this SAME building site at the FOUNDATION stage: nothing is standing "
            "up yet — just flat grey rectangular stone FOUNDATION SLABS laid out on the "
            "ground in the building's footprint, with a few stacked stones and logs and "
-           "one or two short corner stakes. NO walls, NO frame, NO slide, NO see-saw, "
-           "NO canopies. Keep the EXACT same location, footprint, camera angle, art "
+           "one or two short corner stakes. NO walls, NO frame, {s1_none}. "
+           "Keep the EXACT same location, footprint, camera angle, art "
            "style, colors and outline; only show bare foundation slabs on the ground."),
     "s0": ("Show this SAME spot at GROUND-BREAKING, before any building: just a bare "
            "brown DIRT PATCH cleared on the grass in the building's footprint, marked "
@@ -1064,16 +1281,31 @@ def generate_imgedit(spec: dict, force: bool, retries: int = 2) -> str:
 
 def town_finished_prompt(spec: dict) -> str:
     """Fresh single-subject generation of the finished building (no reference)."""
-    return (f"Generate an image. {BUILDING_STYLE}Draw {spec['finished_subject']}. "
+    return (f"Generate an image. {BUILDING_STYLE}{TOWN_CAMERA}"
+            f"Draw {spec['finished_subject']}. "
             f"One single centered structure, its whole base/footprint visible. "
             f"Solid flat magenta #FF00FF background.")
 
 
-def town_unbuild_prompt(state: str) -> str:
-    """img2img prompt that un-builds the supplied reference to an earlier state."""
+def town_unbuild_prompt(state: str, spec: dict) -> str:
+    """img2img prompt that un-builds the supplied reference to an earlier state.
+
+    The rung template is filled from the spec so each building is un-built in its
+    own vocabulary (see TOWN_UNBUILD)."""
+    kind = spec.get("kind", "building")
+    rung = TOWN_UNBUILD[state].format(
+        kind=kind,
+        s3_frame=spec.get("s3_frame", "the foundation and the main frame"),
+        s3_missing=spec.get("s3_missing", "a couple of final pieces not yet added"),
+        s2_frame=spec.get("s2_frame", "the foundation stones and a few bare upright "
+                                      "wooden support poles / partial stone walls"),
+        s2_gaps=spec.get("s2_gaps", "the roof and the finishing pieces"),
+        s1_none=spec.get("s1_none", "NO roof, NO fittings"),
+    )
     return (f"Generate an image. Here is a reference picture of a cartoon stone-age "
-            f"playground building. {TOWN_UNBUILD[state]} It stays a single centered "
-            f"structure with its base/footprint in the same place. {BUILDING_STYLE}"
+            f"{kind} building. {rung} It stays a single centered "
+            f"structure with its base/footprint in the same place, seen from the "
+            f"EXACT same camera as the reference. {BUILDING_STYLE}{TOWN_CAMERA}"
             f"Solid flat magenta #FF00FF background.")
 
 
@@ -1124,7 +1356,8 @@ def generate_town(spec: dict, force: bool, retries: int = 2) -> str:
 
         with open(seed_path, "rb") as f:
             seed_b64 = base64.b64encode(f.read()).decode()
-        b64 = _attempt(town_unbuild_prompt(state), seed_b64, f"{name}_{state}", retries)
+        b64 = _attempt(town_unbuild_prompt(state, spec), seed_b64,
+                       f"{name}_{state}", retries)
         if not b64:
             print(f"       FAILED {name}_{state}")
             ok = False

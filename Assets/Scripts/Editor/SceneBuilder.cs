@@ -305,9 +305,14 @@ namespace DinoDigger.EditorTools
         // Meadow patch size (cells, including the decorative fence ring).
         private const int MeadowSize = 7;
 
-        // Town district size (cells): a cleared ~8x6 building plot beside the meadow.
-        private const int DistrictW = 8;
-        private const int DistrictH = 6;
+        // Town district size (cells): a cleared 9x9 block beside the meadow, big enough for
+        // the nine-plot plaza (see PlotLocalCells). 9x9 is the LARGEST window that still fits
+        // in the preferred spot west of the meadow — it is boxed in by the pond (cells x<=20),
+        // the vertical path band (x30..31) and the northern path band (y34..35), which leaves
+        // exactly x21..29 / y25..33. Anything bigger falls out of the preferred scan and lands
+        // on the far side of the island, stranding the builder commute.
+        private const int DistrictW = 9;
+        private const int DistrictH = 9;
 
         private static char[,] BuildMap(out RectInt meadowRect, out RectInt districtRect,
             out RectInt gardenRect)
@@ -1426,28 +1431,48 @@ namespace DinoDigger.EditorTools
             return area;
         }
 
-        // Town plot layout inside the district (local cell offsets). NINE 2x2-cell
-        // building plots — one per entry in the curated price curve — packed as a 3x3
-        // grid so the whole build queue runs end to end within the existing 8x6 district
-        // footprint. Each entry is the SW-most cell of a 2x2 block; the plot's world
-        // center is the middle of that block. Ordered front-to-back (screen-south rows
-        // first) then left-to-right, so the queue fills the town from the front. Columns
-        // sit at local X 1/3/5 (a 1-cell side margin), rows at local Y 0/2/4 (filling the
-        // 6-cell height). Buildings import ~2.2 world units wide, so neighbours overlap a
-        // little in the isometric projection — the transparency sort (screen-Y axis) draws
-        // back rows behind front ones, reading as a compact little town (the same iso
-        // overlap the original 4-plot cluster already shipped with).
+        // Town plot layout inside the district (local cell offsets, one per curated price).
+        // NINE plots on a 3x3 cell lattice with a 4-CELL pitch — local X and Y each run
+        // 0 / 4 / 8, filling the 9x9 district corner to corner. Each entry is the plot's
+        // anchor CELL; the building plants its bottom-center pivot on that cell's center.
+        //
+        // Why a 4-cell pitch: this Grid is IsometricZAsY with cellSize (1, 0.5), so one cell
+        // step is (0.5, 0.25) in world/screen space and a 4-cell step is (2.0, 1.0). Town
+        // buildings import ~2.2 world units WIDE (PlaceholderLibrary BuildingTargetW), so
+        // nearest neighbours clear each other almost exactly while sitting a full 1.0 apart
+        // in screen-Y — the transparency sort (screen-Y axis) then stacks them cleanly, and
+        // every plot keeps room for its three builder stand-points and a toddler-sized tap
+        // target. (The previous 3x3-of-2x2-blocks layout used a 2-cell pitch and packed
+        // neighbours only 1.12 units apart, so 2.2-wide buildings overlapped by half.)
+        //
+        // In screen space the lattice reads as a PLAZA: eight buildings ring a center slot
+        // at (0,0), with the ring reaching x = +/-4 and y = +/-2. Build order fills the ring
+        // front-to-back (lowest screen-Y first), left-to-right within a row, and saves the
+        // CENTER for the finale — Fossil Fountain (index 8, price 600) rises in the middle
+        // of a completed plaza, which is also exactly the district center the Town root and
+        // TownArea.Center sit on.
+        //
+        //   index : local (x,y) : screen offset from center
+        //     0   :   (0, 0)    : ( 0.0, -2.0)   Pebble Playground   10
+        //     1   :   (0, 4)    : (-2.0, -1.0)   Boulder Brew        25
+        //     2   :   (4, 0)    : ( 2.0, -1.0)   Slate Library       50
+        //     3   :   (0, 8)    : (-4.0,  0.0)   Bedrock Bijou       90
+        //     4   :   (8, 0)    : ( 4.0,  0.0)   Bone-anza Bowling  150
+        //     5   :   (4, 8)    : (-2.0,  1.0)   Dino Daycare       240
+        //     6   :   (8, 4)    : ( 2.0,  1.0)   Tar-Pit Springs    380
+        //     7   :   (8, 8)    : ( 0.0,  2.0)   Gronk's Grocer     490
+        //     8   :   (4, 4)    : ( 0.0,  0.0)   Fossil Fountain    600  <- finale, center
         private static readonly Vector2Int[] PlotLocalCells =
         {
-            new Vector2Int(1, 0), // row 0 (front): cells (1..2, 0..1)
-            new Vector2Int(3, 0),
-            new Vector2Int(5, 0),
-            new Vector2Int(1, 2), // row 1 (middle)
-            new Vector2Int(3, 2),
-            new Vector2Int(5, 2),
-            new Vector2Int(1, 4), // row 2 (back)
-            new Vector2Int(3, 4),
-            new Vector2Int(5, 4),
+            new Vector2Int(0, 0), // front of the plaza
+            new Vector2Int(0, 4), // second row, screen-left
+            new Vector2Int(4, 0), // second row, screen-right
+            new Vector2Int(0, 8), // third row (level with the centre), screen far-left
+            new Vector2Int(8, 0), // third row (level with the centre), screen far-right
+            new Vector2Int(4, 8), // fourth row, screen-left
+            new Vector2Int(8, 4), // fourth row, screen-right
+            new Vector2Int(8, 8), // back of the plaza
+            new Vector2Int(4, 4), // CENTER: Fossil Fountain, the finale
         };
 
         /// <summary>Create the Dino Town district: a "Town" root at the district center
@@ -1467,16 +1492,14 @@ namespace DinoDigger.EditorTools
             Vector3 center = grid.GetCellCenterWorld(new Vector3Int(cx, cy, 0));
             go.transform.position = center;
 
-            // Building plots: the world center of each curated 2x2-block, in build order.
+            // Building plots: the world center of each curated anchor cell, in build order.
             var plotWorlds = new List<Vector3>(PlotLocalCells.Length);
             float reach = 0f;
             for (int i = 0; i < PlotLocalCells.Length; i++)
             {
                 Vector2Int p = PlotLocalCells[i];
-                var swCell = new Vector3Int(district.xMin + p.x, district.yMin + p.y, 0);
-                var neCell = new Vector3Int(swCell.x + 1, swCell.y + 1, 0);
-                Vector3 plot = (grid.GetCellCenterWorld(swCell) +
-                                grid.GetCellCenterWorld(neCell)) * 0.5f;
+                Vector3 plot = grid.GetCellCenterWorld(
+                    new Vector3Int(district.xMin + p.x, district.yMin + p.y, 0));
                 plotWorlds.Add(plot);
                 reach = Mathf.Max(reach, Vector3.Distance(center, plot));
             }
@@ -1487,6 +1510,8 @@ namespace DinoDigger.EditorTools
             area.Configure(map, center, plotWorlds, reach + 1f);
 
             var town = go.AddComponent<TownController>();
+            // Configure also ensures the sibling TownLifeController (DinoDigger-3pz) on this
+            // same root, so the built scene ships the ambient townsfolk service already wired.
             town.Configure(area, lib, config);
             return town;
         }

@@ -71,15 +71,38 @@ namespace DinoDigger.EditorTools
         private const float ToolHammerTargetH = 0.45f;
         private const float ConstructionSignTargetW = 0.8f;
 
-        // Pebble Playground (DinoDigger-5li.3) construction states, ASCENDING
-        // completeness: s0 (ground-breaking dirt) .. s3 (nearly done) then the finished
-        // building. Sliced by Tools/slice_sprites.py to Generated/town/.
-        private static readonly string[] PebblePlaygroundStates =
+        // Town building construction-state file suffixes, ASCENDING completeness: s0
+        // (ground-breaking dirt) .. s3 (nearly done) then the finished building. Matches
+        // BuildingController's state indices (0..3 building, 4 == finished). Sliced by
+        // Tools/slice_sprites.py to Generated/town/<slug>_<suffix>.png.
+        private static readonly string[] BuildingStateSuffix = { "s0", "s1", "s2", "s3", "done" };
+
+        // The nine curated town buildings in BUILD ORDER (== plot order == the order of
+        // GameConfig.TownBuildingPrices and PlaceholderLibrary.TownBuildings). Slugs are the
+        // generated-art folder names under Generated/town/.
+        //
+        // Art arrives in batches (DinoDigger-mnn), so this table is deliberately tolerant of
+        // gaps: a slug with no PNGs at all (fossil_fountain, whose batch stopped on the
+        // OpenRouter monthly cap) or only some states (gronks_grocer: done + s3) imports what
+        // exists, leaves the rest null, and the runtime falls back to the generic
+        // PlaceholderLibrary.BuildingStates placeholder for the states it is missing.
+        private static readonly string[] TownBuildingSlugs =
         {
-            "town/pebble_playground_s0", "town/pebble_playground_s1",
-            "town/pebble_playground_s2", "town/pebble_playground_s3",
-            "town/pebble_playground_done",
+            "pebble_playground", // 0  Pebble Playground    10
+            "boulder_brew",      // 1  Boulder Brew         25
+            "slate_library",     // 2  Slate Library        50
+            "bedrock_bijou",     // 3  Bedrock Bijou        90
+            "boneanza_bowling",  // 4  Bone-anza Bowling   150
+            "dino_daycare",      // 5  Dino Daycare        240
+            "tarpit_springs",    // 6  Tar-Pit Springs     380
+            "gronks_grocer",     // 7  Gronk's Grocer      490
+            "fossil_fountain",   // 8  Fossil Fountain     600 (finale)
         };
+
+        // The generic placeholder set (PlaceholderLibrary.BuildingStates) stays pointed at the
+        // FIRST building's art: it is the fallback every plot falls back to for any state whose
+        // per-building art is missing, so it must always be a complete five-state set.
+        private const int GenericBuildingStatesSlug = 0;
 
         // Construction-worker props (DinoDigger-771), transparent PNGs in Generated/town/.
         private const string HardHatRel = "town/prop_hardhat";
@@ -309,19 +332,24 @@ namespace DinoDigger.EditorTools
                 missing.Add(GenPath("digarm/digarm_bucket") + " (no readable source texture)");
             }
 
-            // Town buildings (DinoDigger-5li.3): PPU from WIDTH so each reads
-            // ~BuildingTargetW wide; bottom-center pivot so states share a ground line.
-            foreach (string rel in PebblePlaygroundStates)
+            // Town buildings (DinoDigger-5li.3 + DinoDigger-ggy): PPU from WIDTH so each reads
+            // ~BuildingTargetW wide; bottom-center pivot so states share a ground line. All
+            // nine curated buildings import the same way; a state whose PNG has not been
+            // generated yet is tracked and skipped (never an import error).
+            foreach (string slug in TownBuildingSlugs)
             {
-                string bp = GenPath(rel);
-                int bw = SourceWidth(bp);
-                if (bw > 0)
+                foreach (string rel in BuildingStatePaths(slug))
                 {
-                    ConfigureBuilding(bp, bw / BuildingTargetW, missing);
-                }
-                else
-                {
-                    missing.Add(bp + " (no readable source texture)");
+                    string bp = GenPath(rel);
+                    int bw = SourceWidth(bp);
+                    if (bw > 0)
+                    {
+                        ConfigureBuilding(bp, bw / BuildingTargetW, missing);
+                    }
+                    else
+                    {
+                        missing.Add(bp + " (no readable source texture)");
+                    }
                 }
             }
 
@@ -509,11 +537,52 @@ namespace DinoDigger.EditorTools
                     missing.Add(GenPath(digBgRel));
                 }
 
-                // Town building states (DinoDigger-5li.3) -> PlaceholderLibrary.BuildingStates
-                // (ordered s0..s3 then done: ground-break/foundation/frame/walls/finished).
-                lib.BuildingStates = LoadArray(PebblePlaygroundStates, missing);
-                wired.Add("Library: Pebble Playground states s0..s3+done " +
-                          $"(~{BuildingTargetW}u wide, bottom pivot)");
+                // Town building states (DinoDigger-5li.3 / -ggy). The generic BuildingStates
+                // keeps the first building's five states — it is the placeholder every plot
+                // falls back to — and each of the nine curated buildings gets its own set in
+                // PlaceholderLibrary.TownBuildings, indexed by BUILD ORDER. Direct typed
+                // assignment, no reflection; a building with no (or partial) art leaves those
+                // slots null and BuildingController falls back to the generic set state by state.
+                lib.BuildingStates = LoadArray(
+                    BuildingStatePaths(TownBuildingSlugs[GenericBuildingStatesSlug]), missing);
+                wired.Add($"Library: generic BuildingStates = {TownBuildingSlugs[GenericBuildingStatesSlug]} " +
+                          $"s0..s3+done (~{BuildingTargetW}u wide, bottom pivot)");
+
+                if (lib.TownBuildings == null || lib.TownBuildings.Length != TownBuildingSlugs.Length)
+                {
+                    // Older library asset (saved before the per-building table existed) or a
+                    // roster resize: rebuild the array so every curated building has a slot.
+                    lib.TownBuildings = new BuildingArt[TownBuildingSlugs.Length];
+                }
+
+                for (int b = 0; b < TownBuildingSlugs.Length; b++)
+                {
+                    if (lib.TownBuildings[b] == null)
+                    {
+                        lib.TownBuildings[b] = new BuildingArt();
+                    }
+
+                    // Load WITHOUT tracking: the missing state PNGs were already reported by the
+                    // importer pass above, and a not-yet-generated building is an expected gap
+                    // (same convention as the optional stage/stride sets).
+                    string[] rels = BuildingStatePaths(TownBuildingSlugs[b]);
+                    var states = new Sprite[rels.Length];
+                    int found = 0;
+                    for (int s = 0; s < rels.Length; s++)
+                    {
+                        states[s] = LoadSprite(GenPath(rels[s]));
+                        if (states[s] != null)
+                        {
+                            found++;
+                        }
+                    }
+
+                    lib.TownBuildings[b].States = states;
+                    wired.Add($"Library.TownBuildings[{b}] {TownBuildingSlugs[b]}: {found}/{rels.Length} states" +
+                              (found == rels.Length
+                                  ? ""
+                                  : " (missing states fall back to the generic placeholder)"));
+                }
 
                 // Construction-worker props (DinoDigger-771). Direct assignment (no
                 // reflection); each stays null when its PNG is absent so the builder
@@ -666,6 +735,17 @@ namespace DinoDigger.EditorTools
         // Import a town building state: plain Simple sprite at an explicit PPU, with a
         // BOTTOM-CENTER pivot so every construction state sits on the same ground line
         // and the taller finished silhouette grows upward from that base.
+        //
+        // ROBUSTNESS (DinoDigger-ggy): several freshly-dropped town PNGs arrive with
+        // spriteMode = Multiple plus a STALE auto-slice rect left over from the pre-crop
+        // canvas they were sliced out of — e.g. boulder_brew_s1 is 726x569 but its .meta
+        // still carries a 969x564 rect at (7,7), and every boneanza_bowling state carries a
+        // full 1024-wide rect. Unity validates those rects against the real texture and logs
+        // "rect lies (partially) outside of texture". Forcing SINGLE mode (below) both fixes
+        // the import mode we actually want and retires the stale sheet rects, so the warning
+        // clears WITHOUT re-slicing the art (Tools/ is owned elsewhere) and without touching
+        // the PNGs. The stale rect data stays inert in the .meta until the next re-slice
+        // rewrites it — harmless, because a Single-mode sprite never reads it.
         private static void ConfigureBuilding(string assetPath, float ppu, List<string> missing)
         {
             var importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
@@ -689,6 +769,10 @@ namespace DinoDigger.EditorTools
             var s = new TextureImporterSettings();
             importer.ReadTextureSettings(s);
             s.spriteAlignment = (int)SpriteAlignment.BottomCenter;
+            // Belt-and-braces against the stale-slice metas described above: write the mode
+            // through the settings block too, so the sheet rects can never be re-read even if
+            // a preset flipped the file to Multiple after the property assignment.
+            s.spriteMode = (int)SpriteImportMode.Single;
             importer.SetTextureSettings(s);
 
             importer.SaveAndReimport();
@@ -872,6 +956,19 @@ namespace DinoDigger.EditorTools
             }
 
             return Dir8Suffix[(int)d];
+        }
+
+        // The five generated-art relative paths for one town building slug, in construction
+        // order (s0..s3 then done) — the same order BuildingController indexes its states in.
+        private static string[] BuildingStatePaths(string slug)
+        {
+            var rels = new string[BuildingStateSuffix.Length];
+            for (int i = 0; i < rels.Length; i++)
+            {
+                rels[i] = $"town/{slug}_{BuildingStateSuffix[i]}";
+            }
+
+            return rels;
         }
 
         private static Sprite LoadSprite(string assetPath) => AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);

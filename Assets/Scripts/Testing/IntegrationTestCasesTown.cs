@@ -10,9 +10,11 @@ using DinoDigger.Overworld;
 namespace DinoDigger.Testing
 {
     /// <summary>
-    /// Dino Town (Phase 1) integration cases: the economy/build-queue and the builder
-    /// NPC loop + celebration, plus the HARD-RULE case that proves town construction
-    /// never commandeers the player backhoe or a walk buddy.
+    /// Dino Town integration cases: the economy/build-queue and the builder NPC loop +
+    /// celebration, plus the HARD-RULE case that proves town construction never
+    /// commandeers the player backhoe or a walk buddy. Phase 2 adds the nine-plot
+    /// curated price curve (<see cref="Case_PriceCurveOrdersBuilds"/>) and the
+    /// growth-stage build dividend (<see cref="Case_BigDinoBuildsFaster"/>).
     ///
     /// SceneBuilder ships a live, wired town (TownController + a 9-plot TownArea on the
     /// "Town" root, wired into GameManager._town) — <see cref="Case_TownWiredInScene"/>
@@ -42,8 +44,42 @@ namespace DinoDigger.Testing
             ctx.Assert(town.TestArea != null, "scene town has no TownArea wired");
             ctx.Assert(town.TestArea.PlotCount == 9,
                 $"scene town has {town.TestArea.PlotCount} plots (expected 9)");
-            ctx.Log("built scene ships a live TownController wired into GameManager._town " +
-                    "with a 9-plot TownArea");
+
+            // (DinoDigger-6or) The plaza layout, asserted structurally so a future re-layout
+            // can't quietly re-crowd the town: (1) the FINALE plot — Fossil Fountain, the last
+            // and dearest entry in the curated roster — crowns the district centre, the same
+            // point the Town root and TownArea.Center sit on; (2) every other plot rings it at
+            // a real distance; and (3) no two plots sit closer than a building is wide
+            // (~2.2 world units, PlaceholderLibrary BuildingTargetW), so each keeps room for
+            // its builder stand-points and a toddler-sized tap target.
+            TownArea area = town.TestArea;
+            int finale = area.PlotCount - 1;
+            ctx.Assert((area.PlotWorld(finale) - area.Center).sqrMagnitude < 0.01f,
+                $"the finale plot {finale} is not the district centre — Fossil Fountain must " +
+                "crown the plaza");
+
+            float closest = float.MaxValue;
+            for (int i = 0; i < area.PlotCount; i++)
+            {
+                if (i != finale)
+                {
+                    float toCenter = (area.PlotWorld(i) - area.Center).magnitude;
+                    ctx.Assert(toCenter > 1.5f,
+                        $"plot {i} sits {toCenter:0.##}u from the centre finale plot (too close)");
+                }
+
+                for (int j = i + 1; j < area.PlotCount; j++)
+                {
+                    closest = Mathf.Min(closest, (area.PlotWorld(i) - area.PlotWorld(j)).magnitude);
+                }
+            }
+
+            ctx.Assert(closest > 1.9f,
+                $"the two closest plots are only {closest:0.##}u apart — buildings import ~2.2u " +
+                "wide, so the town has no breathing room for stand-points or tap targets");
+
+            ctx.Log("built scene ships a live TownController wired into GameManager._town with a " +
+                    $"9-plot TownArea: eight plots ring the centre finale plot, closest pair {closest:0.##}u apart");
             yield break;
         }
 
@@ -861,6 +897,551 @@ namespace DinoDigger.Testing
             }
         }
 
+        // ================================= DinoDigger-3pz townsfolk interaction loops
+
+        // The representative buildings whose scenes this case drives end to end. Chosen for
+        // coverage rather than count: 1 Boulder Brew is the plain one-guest loop; 3 Bedrock
+        // Bijou is the RISKIEST one (its guests scale away at the door, so it proves an
+        // interrupted or finished scene always restores the puppet's pose); 5 Dino Daycare
+        // runs on its FALLBACK path here (every resident in this case is Big, so "any dino
+        // peeks"); 8 Fossil Fountain is the multi-guest finale with the longer loop.
+        private static readonly int[] InteractionBuildingsChecked = { 1, 3, 5, 8 };
+
+        // A finished building is ALIVE: residents stroll over and play its little scene, then
+        // wander home. Proves, for several representative buildings: (a) a forced visit really
+        // walks a NON-buddy resident to the building and puts it in the visiting puppet state;
+        // (b) the scene runs to completion and everyone exits cleanly with their pose restored
+        // (no shrunken cinema-goers, no squashed bathers); (c) the daycare's stage FALLBACK
+        // path is exercised when no baby is around; (d) a visitor DRAFTED to build abandons its
+        // visit instantly and the build proceeds to finish — town life can never deadlock
+        // construction; and (e) a walk BUDDY is never ambient life, refused both by the
+        // recruiter and by DinoController.GoVisit itself.
+        //
+        // Deterministic by construction: ambient visits are parked (interval 10000s) and every
+        // visit in the case is forced through the Test hook, beats are accelerated via config,
+        // and each wait is a state poll — no wall-clock races anywhere.
+        private IEnumerator Case_EachBuildingPlaysInteraction(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            MeadowArea meadow = gm.TestMeadow;
+            ctx.Assert(meadow != null, "no MeadowArea in the scene");
+
+            TownController town = EnsureTown(ctx);
+            TownLifeController life = town.TestLife;
+            ctx.Assert(life != null,
+                "the town has no TownLifeController — TownController.Configure must ensure the " +
+                "ambient-life service on the town root");
+
+            TownArea area = town.TestArea;
+            int plots = area != null ? area.PlotCount : 0;
+            ctx.Assert(plots >= 9,
+                $"need the full nine-plot roster for the interaction test (have {plots})");
+
+            GameConfig cfg = gm.TestConfig;
+            float savedInterval = cfg.TownVisitIntervalSeconds;
+            float savedBeat = cfg.TownVisitBeatSeconds;
+            int savedMaxVisits = cfg.TownMaxVisits;
+            float savedPerState = cfg.TownSecondsPerBuildState;
+            int savedNext = gm.Save.Data.TownNextIndex;
+            List<TownBuildingSave> savedList = gm.Save.Data.TownBuildings;
+            int savedWallet = gm.Save.Data.TreasureCount;
+            try
+            {
+                cfg.TownVisitIntervalSeconds = 10000f; // no ambient visits: the case forces each one
+                cfg.TownVisitBeatSeconds = 0.2f;       // a whole scene plays in about a second
+                cfg.TownMaxVisits = 3;
+                cfg.TownSecondsPerBuildState = 100f;   // part (d) decides when a build may finish
+
+                // Re-arm the ambient countdown AFTER raising the interval — otherwise the
+                // service is still holding the short countdown it captured on the reset above,
+                // and a stray ambient visit could gate-crash the forced ones we are measuring.
+                life.TestResetLife();
+
+                // ---- (a)(b)(c) the plaza is finished; each representative scene plays out ----
+                gm.Save.Data.TreasureCount = 0; // nothing can auto-start while we watch
+                gm.Save.Data.TownNextIndex = plots;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>();
+                for (int i = 0; i < plots; i++)
+                {
+                    gm.Save.Data.TownBuildings.Add(new TownBuildingSave
+                    {
+                        Finished = true,
+                        State = BuildingController.ConstructionStates,
+                    });
+                }
+
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(town.FinishedBuildingCount == plots,
+                    $"restored {town.FinishedBuildingCount} finished buildings (expected {plots})");
+
+                // Three Big residents — Big so nothing pulls them off to eat mid-scene, and Big
+                // is also what puts the daycare on its no-baby fallback path.
+                var residents = new List<DinoController>();
+                DinoType[] types = { DinoType.TRex, DinoType.Stegosaurus, DinoType.Triceratops };
+                for (int i = 0; i < types.Length; i++)
+                {
+                    DinoController d = gm.TestSpawnDino(types[i], GrowthStage.Big);
+                    gm.TestMakeResident(d, teleportIntoMeadow: true);
+                    residents.Add(d);
+                }
+
+                yield return ctx.WaitFrames(2);
+
+                for (int k = 0; k < InteractionBuildingsChecked.Length; k++)
+                {
+                    int index = InteractionBuildingsChecked[k];
+                    int arrivedBefore = life.TestVisitsArrived;
+                    int completedBefore = life.TestVisitsCompleted;
+                    int abortedBefore = life.TestVisitsAborted;
+
+                    // Poll the force hook until someone is actually free (the previous scene's
+                    // guests are still walking home) — a state poll, never a sleep.
+                    yield return ctx.WaitUntil(() => life.TestForceVisit(index));
+                    ctx.Assert(life.TestIsVisiting(index),
+                        $"forced visit on building {index} did not register as running");
+
+                    // (a) A guest walks over and clocks in AT the building. The distance is
+                    //     captured by the service at the moment of arrival, so a short scene
+                    //     that finishes quickly can't race this assertion.
+                    yield return ctx.WaitUntil(() => life.TestVisitsArrived > arrivedBefore);
+                    ctx.Assert(life.TestLastArrivalIndex == index,
+                        $"arrival recorded for building {life.TestLastArrivalIndex}, expected {index}");
+                    ctx.Assert(life.TestLastArrivalDistance >= 0f && life.TestLastArrivalDistance < 3f,
+                        $"visitor clocked in {life.TestLastArrivalDistance:0.##}u from building " +
+                        $"{index}'s plot — it never really walked there");
+
+                    // The interaction is live: at least one guest is in the visiting puppet
+                    // state, and not one of them is a buddy.
+                    List<DinoController> guests = life.TestVisitDinos(index);
+                    ctx.Assert(guests.Count > 0, $"building {index}'s visit has no guests");
+                    bool attending = false;
+                    for (int i = 0; i < guests.Count; i++)
+                    {
+                        ctx.Assert(guests[i] != null && !guests[i].IsBuddy,
+                            $"a walk BUDDY joined building {index}'s visit (forbidden)");
+                        attending |= guests[i].IsVisiting;
+                    }
+
+                    ctx.Assert(attending,
+                        $"nobody is attending building {index} although the visit reported an arrival");
+
+                    // (c) With only Big residents around, the daycare plays its fallback scene.
+                    if (index == 5)
+                    {
+                        ctx.Assert(life.TestVisitFallback(index),
+                            "the daycare did not fall back to 'any dino peeks' with no baby around");
+                    }
+
+                    // (b) The scene finishes on its own and is retired as COMPLETED (not aborted).
+                    yield return ctx.WaitUntil(() => !life.TestIsVisiting(index));
+                    ctx.Assert(life.TestVisitsCompleted == completedBefore + 1,
+                        $"building {index}'s scene did not complete cleanly " +
+                        $"(completed {life.TestVisitsCompleted - completedBefore}, " +
+                        $"aborted {life.TestVisitsAborted - abortedBefore})");
+                    ctx.Assert(life.TestVisitsAborted == abortedBefore,
+                        $"building {index}'s scene aborted instead of finishing");
+
+                    // ...and every guest is off the visit with its pose restored (the cinema
+                    // scales its guests away at the door — nobody may be left shrunk). Waited
+                    // out first so the little exit bounce has settled.
+                    yield return ctx.WaitSecondsScaled(0.5f);
+                    for (int i = 0; i < guests.Count; i++)
+                    {
+                        DinoController d = guests[i];
+                        ctx.Assert(d != null && !d.IsOnVisit && !d.IsVisiting,
+                            $"a guest is still flagged as visiting building {index} after the scene");
+                        float rest = cfg.StageScale(d.Stage);
+                        Vector3 s = d.transform.localScale;
+                        ctx.Assert(Mathf.Abs(s.x - rest) < 0.05f && Mathf.Abs(s.y - rest) < 0.05f,
+                            $"a guest left building {index} at scale {s.x:0.##}x{s.y:0.##} " +
+                            $"(expected {rest:0.##}) — the visit pose was not restored");
+                    }
+                }
+
+                // Part A's tally, kept for the log line (the reset below rewinds the counters).
+                int scenesPlayed = life.TestVisitsCompleted;
+
+                // ---- (d) a DRAFTED visitor abandons its visit, and the build still finishes ----
+                gm.TestReset();                        // clean world: no dinos, no sites
+                cfg.TownSecondsPerBuildState = 0.3f;   // the ex-visitor can now finish a build
+                cfg.TownVisitBeatSeconds = 2f;         // a long scene, so the draft lands mid-visit
+                gm.Save.Data.TreasureCount = 0;
+                gm.Save.Data.TownNextIndex = 1;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>
+                {
+                    new TownBuildingSave { Finished = true, State = BuildingController.ConstructionStates },
+                };
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+
+                // EXACTLY ONE resident, so the crew draft can only possibly reach the visitor.
+                DinoController lone = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
+                gm.TestMakeResident(lone, teleportIntoMeadow: true);
+                yield return ctx.WaitFrames(2);
+
+                yield return ctx.WaitUntil(() => life.TestForceVisit(0));
+                yield return ctx.WaitUntil(() => lone.IsVisiting);
+                ctx.Assert(life.TestIsVisiting(0), "the lone resident's visit is not running");
+                int abortedBeforeDraft = life.TestVisitsAborted;
+
+                // Fund the next building: the town drafts the only resident it can see.
+                gm.Save.Data.TreasureCount = cfg.TownBuildingPrice(1);
+                yield return ctx.WaitUntil(() => town.TestActiveSite != null);
+                BuildingController site = town.TestActiveSite;
+                yield return ctx.WaitUntil(() => town.TestBuilderCount > 0);
+                ctx.Assert(town.TestBuilders[0] == lone,
+                    "the town drafted somebody other than the lone resident (test setup broke)");
+
+                // The visit yielded the instant the draft landed — no grace period, no tug of war.
+                ctx.Assert(!lone.IsOnVisit && !lone.IsVisiting,
+                    "a drafted builder is still flagged as visiting (construction must always win)");
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(!life.TestIsVisiting(0), "the visit outlived its drafted guest");
+                ctx.Assert(life.TestVisitsAborted == abortedBeforeDraft + 1,
+                    "the abandoned visit was not retired");
+                ctx.Assert(life.TestVisitCount == 0, "a stale visit is still running after the draft");
+
+                // The abandoned scene left NO pose behind either: a beat tween killed mid-flight
+                // must still resolve to the builder's stage scale. (Checked here, while the
+                // ex-visitor is still commuting, so the on-site work bob can't colour the read.)
+                float loneRest = cfg.StageScale(lone.Stage);
+                Vector3 loneScale = lone.transform.localScale;
+                ctx.Assert(Mathf.Abs(loneScale.x - loneRest) < 0.05f &&
+                           Mathf.Abs(loneScale.y - loneRest) < 0.05f,
+                    $"the drafted ex-visitor is at scale {loneScale.x:0.##}x{loneScale.y:0.##} " +
+                    $"(expected {loneRest:0.##}) — an aborted scene stranded its pose");
+
+                // ...and construction is not deadlocked: the ex-visitor clocks in and finishes.
+                yield return ctx.WaitUntil(() => lone.IsWorking);
+                yield return ctx.WaitUntil(() => site != null && site.IsFinished);
+
+                // ---- (e) a walk buddy is never ambient town life ----
+                gm.TestReset();
+                cfg.TownSecondsPerBuildState = 100f;
+                gm.Save.Data.TreasureCount = 0;
+                gm.Save.Data.TownNextIndex = 1;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>
+                {
+                    new TownBuildingSave { Finished = true, State = BuildingController.ConstructionStates },
+                };
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+
+                DinoController buddy = gm.TestSpawnDino(DinoType.Brachiosaurus, GrowthStage.Big);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(buddy.IsBuddy, "the dino under test is not a walk buddy");
+
+                // The recruiter cannot see a buddy: with only a buddy alive, nothing starts.
+                ctx.Assert(!life.TestForceVisit(0),
+                    "a visit was recruited from a world containing only a walk buddy");
+                ctx.Assert(life.TestVisitCount == 0, "a visit started with nobody eligible");
+
+                // ...and the dino itself refuses, so no future caller can sneak one in.
+                ctx.Assert(!buddy.GoVisit(town.BuildingWorld(0), 1f),
+                    "DinoController.GoVisit accepted a walk buddy");
+                ctx.Assert(!buddy.IsOnVisit && buddy.IsBuddy,
+                    "the refused GoVisit still mutated the buddy's state");
+
+                // With a resident alongside it, the visit takes the resident — never the buddy.
+                DinoController res = gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Big);
+                gm.TestMakeResident(res, teleportIntoMeadow: true);
+                yield return ctx.WaitFrames(2);
+                yield return ctx.WaitUntil(() => life.TestForceVisit(0));
+                List<DinoController> picked = life.TestVisitDinos(0);
+                ctx.Assert(picked.Count > 0, "the visit recruited nobody though a resident was free");
+                for (int i = 0; i < picked.Count; i++)
+                {
+                    ctx.Assert(picked[i] != buddy && !picked[i].IsBuddy,
+                        "the buddy was recruited alongside the resident");
+                }
+
+                ctx.Assert(!buddy.IsOnVisit, "the buddy was pulled onto the visit");
+
+                ctx.Log($"town life: {scenesPlayed} building scenes played to completion " +
+                        $"(buildings {Join(new List<int>(InteractionBuildingsChecked))}), visitors arrived " +
+                        "at their plots and left with poses restored; the daycare fell back to 'any dino " +
+                        "peeks'; a drafted visitor abandoned its scene instantly and finished the build; " +
+                        "a walk buddy was refused by both the recruiter and GoVisit");
+            }
+            finally
+            {
+                cfg.TownVisitIntervalSeconds = savedInterval;
+                cfg.TownVisitBeatSeconds = savedBeat;
+                cfg.TownMaxVisits = savedMaxVisits;
+                cfg.TownSecondsPerBuildState = savedPerState;
+                gm.Save.Data.TownNextIndex = savedNext;
+                gm.Save.Data.TownBuildings = savedList ?? new List<TownBuildingSave>();
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
+        // ====================================== DinoDigger-6or price curve / build order
+
+        // How many buildings the price-curve case drives end to end. Three is enough to prove
+        // the queue walks the CURATED order (0 -> 1 -> 2, never skipping or repeating) while
+        // keeping the case's runtime sane — the remaining six plots are covered by the order
+        // + plot-distinctness assertions that run over the whole roster.
+        private const int PriceCurveBuildsChecked = 3;
+
+        // The curated roster builds strictly in price order, one plot at a time, and NOTHING
+        // breaks ground until the wallet clears the NEXT price exactly. Proves: (a) the town
+        // ships one plot per price (nine of each, no cap at four); (b) the curve ascends, so
+        // curated order == price order; (c) one coin short of price[i] leaves the site closed,
+        // however long the town polls; (d) the coin that clears it breaks ground on plot i —
+        // and only plot i — draining the wallet by exactly that price; and (e) after building
+        // i finishes, the queue advances one slot and then WAITS on price[i+1].
+        private IEnumerator Case_PriceCurveOrdersBuilds(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            TownController town = EnsureTown(ctx);
+            GameConfig cfg = gm.TestConfig;
+            ctx.Assert(town.TestArea != null && town.TestArea.PlotCount >= PriceCurveBuildsChecked,
+                $"need >={PriceCurveBuildsChecked} plots for the price-curve test " +
+                $"(have {(town.TestArea != null ? town.TestArea.PlotCount : 0)})");
+
+            float savedPerState = cfg.TownSecondsPerBuildState;
+            int savedWallet = gm.Save.Data.TreasureCount;
+
+            var started = new List<int>();
+            Action<int> onStart = idx => started.Add(idx);
+            var finished = new List<int>();
+            Action<int> onFin = idx => finished.Add(idx);
+            GameEvents.TownBuildStarted += onStart;
+            GameEvents.BuildingFinished += onFin;
+            try
+            {
+                cfg.TownSecondsPerBuildState = 0.15f; // accelerate worked-time per state
+                gm.Save.Data.TreasureCount = 0;       // start broke so nothing auto-starts early
+
+                // (a) One plot per curated price — the whole nine-entry curve is reachable.
+                int prices = cfg.TownBuildingPrices != null ? cfg.TownBuildingPrices.Length : 0;
+                ctx.Assert(prices == 9, $"curated price curve has {prices} entries (expected 9)");
+                ctx.Assert(town.TestArea.PlotCount >= prices,
+                    $"town has {town.TestArea.PlotCount} plots for {prices} prices — the tail of the " +
+                    "curated roster can never break ground");
+
+                // (b) Curated order IS price order, and every plot is a distinct spot on the map
+                //     (a duplicated plot would let two buildings stack invisibly).
+                for (int i = 1; i < prices; i++)
+                {
+                    ctx.Assert(cfg.TownBuildingPrice(i) > cfg.TownBuildingPrice(i - 1),
+                        $"price[{i}] ({cfg.TownBuildingPrice(i)}) does not exceed price[{i - 1}] " +
+                        $"({cfg.TownBuildingPrice(i - 1)}) — curated order is not price order");
+                }
+
+                for (int i = 0; i < town.TestArea.PlotCount; i++)
+                {
+                    for (int j = i + 1; j < town.TestArea.PlotCount; j++)
+                    {
+                        ctx.Assert((town.TestArea.PlotWorld(i) - town.TestArea.PlotWorld(j)).sqrMagnitude > 0.25f,
+                            $"plots {i} and {j} sit on top of each other");
+                    }
+                }
+
+                // A Big crew so each site finishes promptly and the queue keeps moving.
+                DinoController b1 = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
+                DinoController b2 = gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Big);
+                gm.TestMakeResident(b1, teleportIntoMeadow: true);
+                gm.TestMakeResident(b2, teleportIntoMeadow: true);
+                yield return ctx.WaitFrames(2);
+
+                for (int i = 0; i < PriceCurveBuildsChecked; i++)
+                {
+                    int price = cfg.TownBuildingPrice(i);
+                    ctx.Assert(town.TestNextIndex == i,
+                        $"queue index {town.TestNextIndex} != {i} before building {i}");
+                    ctx.Assert(town.TestActiveSite == null,
+                        $"a site was already active before building {i} was funded");
+
+                    // (c) One coin SHORT: the town polls every frame and still refuses to start.
+                    gm.Save.Data.TreasureCount = price - 1;
+                    yield return ctx.WaitFrames(20);
+                    ctx.Assert(town.TestActiveSite == null,
+                        $"building {i} broke ground with {price - 1} coins in hand (price {price})");
+                    ctx.Assert(gm.Save.Data.TreasureCount == price - 1,
+                        $"wallet moved ({gm.Save.Data.TreasureCount}) while under building {i}'s price");
+                    ctx.Assert(started.Count == i,
+                        $"{started.Count} builds had started before building {i} was affordable (expected {i})");
+
+                    // (d) The coin that clears the price breaks ground on plot i, and the wallet
+                    //     drains by exactly that price (we funded it to the coin, so it hits 0).
+                    gm.Save.Data.TreasureCount = price;
+                    yield return ctx.WaitUntil(() => town.TestActiveSite != null);
+                    ctx.Assert(gm.Save.Data.TreasureCount == 0,
+                        $"building {i} left {gm.Save.Data.TreasureCount} coins behind (price {price} " +
+                        "should have drained the wallet exactly)");
+                    ctx.Assert(started.Count == i + 1 && started[i] == i,
+                        $"TownBuildStarted fired for {Join(started)} (expected the curated order up to {i})");
+                    ctx.Assert((town.TestActiveSite.transform.position - town.TestArea.PlotWorld(i)).sqrMagnitude < 0.01f,
+                        $"building {i} broke ground away from plot {i}");
+
+                    // (e) The crew finishes it and the queue advances exactly one slot.
+                    yield return ctx.WaitUntil(() => town.TestNextIndex == i + 1);
+                    ctx.Assert(finished.Count == i + 1 && finished[i] == i,
+                        $"BuildingFinished fired for {Join(finished)} (expected the curated order up to {i})");
+                    ctx.Assert(town.TestActiveSite == null,
+                        $"a new site broke ground on an empty wallet right after building {i}");
+                    ctx.Assert(gm.Save.Data.TreasureCount == 0,
+                        $"wallet is {gm.Save.Data.TreasureCount} after building {i} (expected 0)");
+                }
+
+                // ...and with the wallet parked one coin under the NEXT price, the town holds.
+                int nextPrice = cfg.TownBuildingPrice(PriceCurveBuildsChecked);
+                gm.Save.Data.TreasureCount = nextPrice - 1;
+                yield return ctx.WaitFrames(20);
+                ctx.Assert(town.TestActiveSite == null && town.TestNextIndex == PriceCurveBuildsChecked,
+                    $"building {PriceCurveBuildsChecked} broke ground {nextPrice - 1} coins in " +
+                    $"(price {nextPrice})");
+
+                ctx.Log($"price curve ({string.Join("/", cfg.TownBuildingPrices)}) drove {PriceCurveBuildsChecked} " +
+                        $"builds in curated order {Join(finished)}: each waited one coin short, broke ground on " +
+                        "its own plot, drained the wallet exactly, then handed off to the next price");
+            }
+            finally
+            {
+                GameEvents.TownBuildStarted -= onStart;
+                GameEvents.BuildingFinished -= onFin;
+                cfg.TownSecondsPerBuildState = savedPerState;
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
+        // ==================================== DinoDigger-s90 growth-stage build speed
+
+        // Frames per measurement window. Long enough that the accrual delta dwarfs float
+        // noise, short enough that three windows cost well under a second.
+        private const int BuildRateWindowFrames = 40;
+
+        // Growth pays a build dividend: a builder contributes work scaled by its stage
+        // (Baby x1.0, Kid x1.6, Big x2.5), so a grown-up crew raises a building measurably
+        // faster than a baby crew. NO WALL-CLOCK RACE and no second build: the SAME crew on
+        // the SAME site is re-staged in place and its accrual measured as banked-work per
+        // ticked-second (TownController advances both counters inside one tick, so the ratio
+        // is exact). Per-state time is parked at 1000s so the site never advances during the
+        // measurement — nothing here depends on how fast frames happen to run.
+        private IEnumerator Case_BigDinoBuildsFaster(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            TownController town = EnsureTown(ctx);
+            GameConfig cfg = gm.TestConfig;
+
+            float savedPerState = cfg.TownSecondsPerBuildState;
+            int savedWallet = gm.Save.Data.TreasureCount;
+            try
+            {
+                // The design-doc curve itself, read through the sanitising accessor (so an old
+                // GameConfig asset that deserialized the fields to 0 fails HERE, loudly).
+                float mBaby = cfg.BuildSpeedFor(GrowthStage.Baby);
+                float mKid = cfg.BuildSpeedFor(GrowthStage.Kid);
+                float mBig = cfg.BuildSpeedFor(GrowthStage.Big);
+                ctx.Assert(Mathf.Abs(mBaby - 1.0f) < 0.001f, $"Baby build speed {mBaby} != 1.0");
+                ctx.Assert(Mathf.Abs(mKid - 1.6f) < 0.001f, $"Kid build speed {mKid} != 1.6");
+                ctx.Assert(Mathf.Abs(mBig - 2.5f) < 0.001f, $"Big build speed {mBig} != 2.5");
+
+                cfg.TownSecondsPerBuildState = 1000f; // the site cannot advance mid-measurement
+                gm.Save.Data.TreasureCount = 0;
+
+                // Two residents, spawned Big (a Big dino is never hungry, so nothing pulls it
+                // off site) and re-staged in place once they are working.
+                DinoController b1 = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
+                DinoController b2 = gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Big);
+                gm.TestMakeResident(b1, teleportIntoMeadow: true);
+                gm.TestMakeResident(b2, teleportIntoMeadow: true);
+                yield return ctx.WaitFrames(2);
+
+                gm.Save.Data.TreasureCount = cfg.TownBuildingPrice(0);
+                yield return ctx.WaitUntil(() => town.TestActiveSite != null);
+                BuildingController site = town.TestActiveSite;
+
+                // Wait for the WHOLE crew to clock in, so the crew size is stable across all
+                // three windows and the rates are directly comparable.
+                yield return ctx.WaitUntil(() => town.TestBuilderCount >= 2 && AllBuildersWorking(town));
+                int crew = town.TestBuilderCount;
+                ctx.Assert(crew == 2, $"crew is {crew} builders (expected 2 for the comparison)");
+
+                var rate = new float[1];
+
+                // --- adult crew ---
+                yield return MeasureBuildRate(ctx, town, rate);
+                float bigRate = rate[0];
+                ctx.Assert(Mathf.Abs(bigRate - crew * mBig) < 0.01f,
+                    $"adult crew banked {bigRate:0.###} work/s (expected {crew} x {mBig} = {crew * mBig:0.###})");
+
+                // --- same crew, re-staged to Kid ---
+                b1.ForceStage(GrowthStage.Kid);
+                b2.ForceStage(GrowthStage.Kid);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(AllBuildersWorking(town), "a builder left the site when it was re-staged to Kid");
+                yield return MeasureBuildRate(ctx, town, rate);
+                float kidRate = rate[0];
+                ctx.Assert(Mathf.Abs(kidRate - crew * mKid) < 0.01f,
+                    $"kid crew banked {kidRate:0.###} work/s (expected {crew} x {mKid} = {crew * mKid:0.###})");
+
+                // --- same crew, re-staged to Baby ---
+                b1.ForceStage(GrowthStage.Baby);
+                b2.ForceStage(GrowthStage.Baby);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(AllBuildersWorking(town), "a builder left the site when it was re-staged to Baby");
+                yield return MeasureBuildRate(ctx, town, rate);
+                float babyRate = rate[0];
+                ctx.Assert(Mathf.Abs(babyRate - crew * mBaby) < 0.01f,
+                    $"baby crew banked {babyRate:0.###} work/s (expected {crew} x {mBaby} = {crew * mBaby:0.###})");
+
+                // The payoff, stated the way a player feels it: strictly ordered, and an adult
+                // crew raises the SAME building in well under half a baby crew's time (time to
+                // finish = total work / rate, so the time ratio is the inverse of the rates).
+                ctx.Assert(bigRate > kidRate && kidRate > babyRate,
+                    $"build rates are not ordered by growth stage (baby {babyRate:0.###}, " +
+                    $"kid {kidRate:0.###}, big {bigRate:0.###})");
+                float timeRatio = bigRate > 0f ? babyRate / bigRate : 1f;
+                ctx.Assert(timeRatio < 0.45f,
+                    $"an adult crew only finishes {1f / Mathf.Max(0.0001f, timeRatio):0.##}x faster than a " +
+                    "baby crew (expected ~2.5x)");
+
+                // ...and the banked work really landed IN the building, not just in a counter:
+                // with no state boundary crossed, the site's partial IS the total banked work.
+                ctx.Assert(Mathf.Abs(site.WorkedPartial - town.TestWorkBanked) < 0.05f,
+                    $"site banked {site.WorkedPartial:0.###}s but the crew contributed " +
+                    $"{town.TestWorkBanked:0.###}s — the stage-scaled work is not reaching the building");
+                ctx.Assert(site.State == 0,
+                    $"site advanced to state {site.State} mid-measurement (per-state time was not parked)");
+
+                ctx.Log($"growth-stage build speed: the same {crew}-dino crew banked {babyRate:0.##} work/s as " +
+                        $"babies, {kidRate:0.##} as kids and {bigRate:0.##} as adults " +
+                        $"(x1.0 / x1.6 / x2.5) — an adult crew finishes the same building " +
+                        $"{1f / timeRatio:0.##}x faster");
+            }
+            finally
+            {
+                cfg.TownSecondsPerBuildState = savedPerState;
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
+        /// <summary>Measure the active site's build-work accrual as banked work-seconds per
+        /// TICKED second, over a fixed frame window. Both counters are advanced inside the same
+        /// <c>TickActiveSite</c> call, so the ratio is exact regardless of frame rate, editor
+        /// hitches or how the coroutine interleaves with Update — there is no wall clock in it.</summary>
+        private IEnumerator MeasureBuildRate(TestContext ctx, TownController town, float[] outRate)
+        {
+            float w0 = town.TestWorkBanked;
+            float e0 = town.TestWorkElapsed;
+            yield return ctx.WaitFrames(BuildRateWindowFrames);
+
+            float dw = town.TestWorkBanked - w0;
+            float de = town.TestWorkElapsed - e0;
+            ctx.Assert(de > 0.01f,
+                $"no crew time accrued over {BuildRateWindowFrames} frames (the site stalled)");
+            outRate[0] = dw / de;
+        }
+
         // ================================================================= HELPERS
 
         /// <summary>Return the scene's town (real or previously-injected), building a small
@@ -935,6 +1516,27 @@ namespace DinoDigger.Testing
             }
 
             return false;
+        }
+
+        /// <summary>True when the crew is non-empty and EVERY drafted builder has clocked in
+        /// (nobody still commuting) — the point at which the site's work rate is stable.</summary>
+        private bool AllBuildersWorking(TownController town)
+        {
+            IReadOnlyList<DinoController> crew = town.TestBuilders;
+            if (crew.Count == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < crew.Count; i++)
+            {
+                if (crew[i] == null || !crew[i].IsWorking)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private DinoController FirstWorkingBuilder(TownController town)

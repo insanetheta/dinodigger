@@ -166,8 +166,32 @@ namespace DinoDigger.Config
 
         [Tooltip("Seconds of builder WORK time to advance one construction state (0->1->2->3->finished). " +
                  "Timing is driven by the crew, not a clock: worked time only accrues while builders are " +
-                 "on site. A bigger crew banks it faster (dt * working-builder count).")]
+                 "on site. A bigger — or BIGGER-GROWN — crew banks it faster (dt * the crew's summed " +
+                 "BuildSpeed* growth-stage multipliers).")]
         public float TownSecondsPerBuildState = 8f;
+
+        // Growth-stage build speed (DinoDigger-s90). Design-doc rationale: feeding is the
+        // toddler's core verb, so the growth it buys must pay a VISIBLE dividend somewhere
+        // outside the meadow. A builder contributes work scaled by how grown it is, which
+        // makes "feed the dinos, the town rises faster" a loop a 3-year-old can feel without
+        // reading a number. The curve is deliberately super-linear (1 -> 1.6 -> 2.5) so the
+        // last step to Big is the most exciting one.
+        private const float DefaultBuildSpeedBaby = 1f;
+        private const float DefaultBuildSpeedKid = 1.6f;
+        private const float DefaultBuildSpeedBig = 2.5f;
+
+        [Tooltip("Build-speed multiplier for a BABY builder — the baseline (x1.0). Design doc: a baby " +
+                 "on site still helps, it just helps least, so an unfed town still finishes eventually.")]
+        public float BuildSpeedBaby = DefaultBuildSpeedBaby;
+
+        [Tooltip("Build-speed multiplier for a KID builder (x1.6). Design doc: the first feeding " +
+                 "milestone already reads as a noticeably busier site.")]
+        public float BuildSpeedKid = DefaultBuildSpeedKid;
+
+        [Tooltip("Build-speed multiplier for an ADULT/Big builder (x2.5). Design doc: a fully-grown " +
+                 "crew builds more than twice as fast as babies — the payoff that makes feeding feel " +
+                 "like it built the town.")]
+        public float BuildSpeedBig = DefaultBuildSpeedBig;
 
         [Tooltip("Seconds of build WORK a single fruit banks when fed to a builder on an active site " +
                  "(the builder-snack payoff). Defaults to TownSecondsPerBuildState, so ONE fruit == ONE " +
@@ -188,6 +212,22 @@ namespace DinoDigger.Config
         [Tooltip("Max NON-BUDDY residents recruited to one recess party (min 2 implicit — recruit " +
                  "up to this many, then party with whoever showed up, even 1).")]
         public int RecessMaxDinos = 4;
+
+        [Header("Dino Town life (townsfolk visits)")]
+        [Tooltip("Seconds between ambient visit attempts: every so often a free resident strolls " +
+                 "to a random FINISHED building and plays its little scene (slide, coffee sip, " +
+                 "spa soak...). The countdown only runs once at least one building is finished, " +
+                 "and a failed attempt (nobody free) just waits for the next one.")]
+        public float TownVisitIntervalSeconds = 18f;
+
+        [Tooltip("Max ambient building visits running at once (one per building either way). " +
+                 "Kept low so the plaza reads as gentle life, not a crowd.")]
+        public int TownMaxVisits = 2;
+
+        [Tooltip("Seconds per BEAT of a building's interaction loop (waddle up / whoosh down / " +
+                 "line up again). The whole scene is a handful of beats, so this sets how long " +
+                 "a visit lasts; the Fossil Fountain finale simply runs more beats.")]
+        public float TownVisitBeatSeconds = 0.9f;
 
         [Header("Rock Smash (Ankylosaurus)")]
         [Tooltip("A buddy Ankylosaurus must be at least this close to a tapped rock to " +
@@ -284,6 +324,23 @@ namespace DinoDigger.Config
 
             index = Mathf.Clamp(index, 0, TownBuildingPrices.Length - 1);
             return Mathf.Max(0, TownBuildingPrices[index]);
+        }
+
+        /// <summary>Build-work multiplier a builder at <paramref name="stage"/> contributes on a
+        /// town site (DinoDigger-s90): Baby x1.0, Kid x1.6, Big x2.5. A non-positive serialized
+        /// value (an asset saved before these fields existed, or a designer typo) falls back to the
+        /// design-doc default rather than stalling construction at zero work per second.</summary>
+        public float BuildSpeedFor(GrowthStage stage)
+        {
+            switch (stage)
+            {
+                case GrowthStage.Big:
+                    return BuildSpeedBig > 0f ? BuildSpeedBig : DefaultBuildSpeedBig;
+                case GrowthStage.Kid:
+                    return BuildSpeedKid > 0f ? BuildSpeedKid : DefaultBuildSpeedKid;
+                default:
+                    return BuildSpeedBaby > 0f ? BuildSpeedBaby : DefaultBuildSpeedBaby;
+            }
         }
 
         // ----- Dig themes -----

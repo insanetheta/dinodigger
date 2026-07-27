@@ -56,6 +56,11 @@ GENERATED_DIR = os.path.normpath(
 T_FLOOD = 95.0   # RGB distance from bg still "background" when border-connected
 T_STRICT = 45.0  # RGB distance below which a pixel is bg even if enclosed
 
+# Width in px of the frame-edge ring forced transparent before trimming a town
+# building (see slice_town) -- kills stray 1px edge scanlines the model sometimes
+# draws, which would otherwise defeat the trim.
+EDGE_RING = 2
+
 
 def detect_bg(rgb: np.ndarray) -> np.ndarray:
     """Median color of an image's outer border ring (the flat background)."""
@@ -128,6 +133,93 @@ def trim(img: Image.Image, pad: int, alpha_floor: int = 16) -> Image.Image:
     x0, y0 = max(0, xs.min() - pad), max(0, ys.min() - pad)
     x1, y1 = min(img.width, xs.max() + 1 + pad), min(img.height, ys.max() + 1 + pad)
     return img.crop((int(x0), int(y0), int(x1), int(y1)))
+
+
+def _label4(mask: np.ndarray):
+    """Two-pass 4-connectivity connected-component labelling (no scipy)."""
+    h, w = mask.shape
+    labels = np.zeros((h, w), dtype=np.int32)
+    parent = [0]
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    nxt = 1
+    for y in range(h):
+        row = mask[y]
+        prev = mask[y - 1] if y else None
+        for x in np.flatnonzero(row):
+            up = labels[y - 1, x] if y and prev[x] else 0
+            left = labels[y, x - 1] if x and row[x - 1] else 0
+            if up and left:
+                labels[y, x] = min(up, left)
+                ra, rb = find(up), find(left)
+                if ra != rb:
+                    parent[max(ra, rb)] = min(ra, rb)
+            elif up or left:
+                labels[y, x] = up or left
+            else:
+                labels[y, x] = nxt
+                parent.append(nxt)
+                nxt += 1
+    roots = np.array([find(i) for i in range(nxt)], dtype=np.int32)
+    return roots[labels], nxt
+
+
+def despeckle(img: Image.Image) -> Image.Image:
+    """Drop alpha islands that contain no solid pixel.
+
+    The chroma key can leave small faint (alpha ~85) blobs floating in the keyed
+    background where the model's flat colour drifted. They are invisible at a
+    glance but they pin the trim bounding box to the whole frame. Real art is
+    always anchored by opaque pixels, so keep only the components that contain at
+    least one, which preserves each sprite's semi-transparent 1px feather (it is
+    connected to the solid interior)."""
+    a = np.asarray(img).copy()
+    al = a[..., 3]
+    visible = al > 16
+    if not visible.any():
+        return img
+    lab, n = _label4(visible)
+    keep_id = np.zeros(n, dtype=bool)
+    keep_id[np.unique(lab[al > 200])] = True
+    keep_id[0] = False
+    a[..., 3][~keep_id[lab]] = 0
+    return Image.fromarray(a, mode="RGBA")
+
+
+def clear_magenta_pockets(img: Image.Image, min_area: int = 150) -> Image.Image:
+    """Remove sealed-off blobs of leftover background magenta (OPT-IN per state).
+
+    When a prop spans the frame it can wall off a pocket of background that the
+    border flood cannot reach and whose colour has drifted too far from the border
+    median for T_STRICT -- Boulder Brew's leaf awning sealed two pink blobs above
+    the brew pot that read as a pair of eyes.
+
+    This uses the wider magenta-family key from the prop_sign_construction fix
+    (r>90 & b>90 & g < 0.62*min(r,b)). That key CANNOT be applied blindly: it also
+    matches legitimate purple art -- on Gronk's Grocer it selects every bunch of
+    grapes and plums, and bg-distance does not separate the two cases (pockets and
+    grapes both sit ~50-100 units out). So callers opt in per state via the spec's
+    "pocket_states", and only components of at least `min_area` px are cleared,
+    which spares the thin magenta SPILL fringing rope and steam."""
+    a = np.asarray(img).astype(np.int32)
+    r, g, b, al = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    wide = (r > 90) & (b > 90) & (g < 0.62 * np.minimum(r, b)) & (al > 200)
+    if not wide.any():
+        return img
+    lab, n = _label4(wide)
+    counts = np.bincount(lab.ravel(), minlength=n)
+    big = np.flatnonzero(counts >= min_area)
+    big = big[big > 0]
+    if not len(big):
+        return img
+    out = np.asarray(img).copy()
+    out[..., 3][np.isin(lab, big)] = 0
+    return Image.fromarray(out, mode="RGBA")
 
 
 def alpha_bbox(img: Image.Image, floor: int = 16):
@@ -442,7 +534,15 @@ def slice_town(spec: dict, pad: int) -> list[str]:
     Each raw state (raw/<name>_{done,s3,s2,s1,s0}.png) is chroma-keyed + trimmed
     like one item cell and written to Generated/town/<name>_<state>.png. Trimming is
     per-state (the silhouette genuinely grows taller each stage); the importer gives
-    every state a bottom-center pivot so they share a ground line and grow upward."""
+    every state a bottom-center pivot so they share a ground line and grow upward.
+
+    EDGE RING: the model occasionally lays a stray 1px non-magenta scanline along a
+    frame edge (Bone-anza Bowling got a white line across row 0). The chroma key
+    keeps it -- it is not background-colored -- and that one row pins the alpha
+    bounding box to the full 1024px frame, so trim() does nothing and the state
+    ships as a mostly-empty canvas whose bottom-center pivot sits far below the
+    building. Town subjects are always centered well inside the frame, so the
+    outermost ring can never be real art: clear it before trimming."""
     name = spec["name"]
     outdir = os.path.join(GENERATED_DIR, spec["outdir"])
     os.makedirs(outdir, exist_ok=True)
@@ -452,7 +552,15 @@ def slice_town(spec: dict, pad: int) -> list[str]:
         if not os.path.exists(raw):
             print(f"       MISSING {raw}", file=sys.stderr)
             continue
-        keyed = trim(chroma_key(Image.open(raw)), pad)
+        a = np.asarray(chroma_key(Image.open(raw))).copy()
+        a[:EDGE_RING, :, 3] = 0
+        a[-EDGE_RING:, :, 3] = 0
+        a[:, :EDGE_RING, 3] = 0
+        a[:, -EDGE_RING:, 3] = 0
+        keyed = despeckle(Image.fromarray(a, mode="RGBA"))
+        if state in spec.get("pocket_states", ()):
+            keyed = clear_magenta_pockets(keyed)
+        keyed = trim(keyed, pad)
         out = os.path.join(outdir, f"{name}_{state}.png")
         keyed.save(out)
         written.append(out)

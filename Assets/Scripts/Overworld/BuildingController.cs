@@ -7,8 +7,11 @@ namespace DinoDigger.Overworld
     /// <summary>
     /// One town building under construction. A pure VIEW + progress state machine:
     /// it steps through construction states 0..3 (ground-break, foundation, frame,
-    /// walls) then FINISHED, swapping its sprite from
-    /// <see cref="PlaceholderLibrary.BuildingStates"/> at each step. It knows nothing
+    /// walls) then FINISHED, swapping its sprite at each step from its OWN per-building
+    /// art set (<see cref="BuildingArt"/>, handed over by <see cref="TownController"/>
+    /// from the plot's build-order index) and falling back state-by-state to the generic
+    /// <see cref="PlaceholderLibrary.BuildingStates"/> placeholder wherever that art has
+    /// not been generated yet (DinoDigger-ggy). It knows nothing
     /// about coins, builders, or events — <see cref="TownController"/> banks builder
     /// work into it via <see cref="AddWork"/> and translates state changes into
     /// <see cref="Core.GameEvents"/>. Fully null-tolerant so a scene missing building
@@ -35,6 +38,7 @@ namespace DinoDigger.Overworld
         private SpriteRenderer _renderer;
         private ParticleSystem _workFx;
         private PlaceholderLibrary _library;
+        private BuildingArt _art;   // this building's own states; null = generic placeholder only
         private GameObject _sign;
         private bool _signDismissed;
 
@@ -78,11 +82,16 @@ namespace DinoDigger.Overworld
         /// <paramref name="initialState"/> (0..3, or <see cref="ConstructionStates"/> for a
         /// finished building) and <paramref name="initialWorked"/> banked partial so it
         /// resumes in place. A restored FINISHED building shows its finished art with no
-        /// construction sign (nothing to dismiss, so no pop replay).</summary>
+        /// construction sign (nothing to dismiss, so no pop replay).
+        /// <paramref name="art"/> is this plot's OWN construction art (by build-order index);
+        /// pass null — or a set with holes — and the missing states fall back to the generic
+        /// <see cref="PlaceholderLibrary.BuildingStates"/> placeholder.</summary>
         public void Init(PlaceholderLibrary library, GameConfig config, SpriteRenderer renderer,
-            ParticleSystem workFx, int initialState = 0, float initialWorked = 0f)
+            ParticleSystem workFx, int initialState = 0, float initialWorked = 0f,
+            BuildingArt art = null)
         {
             _library = library;
+            _art = art;
             _renderer = renderer;
             _workFx = workFx;
             _perState = config != null ? Mathf.Max(0.05f, config.TownSecondsPerBuildState) : 8f;
@@ -209,20 +218,12 @@ namespace DinoDigger.Overworld
 
         private void ApplyVisual()
         {
-            if (_renderer == null || _library == null)
+            if (_renderer == null)
             {
                 return;
             }
 
-            Sprite[] set = _library.BuildingStates;
-            if (set == null || set.Length == 0)
-            {
-                return;
-            }
-
-            // States 0..3 index directly; FINISHED uses the last slot (index 4 == finished art).
-            int idx = Mathf.Clamp(_state, 0, set.Length - 1);
-            Sprite s = set[idx];
+            Sprite s = StateSprite(_state);
             if (s != null)
             {
                 _renderer.sprite = s;
@@ -237,6 +238,30 @@ namespace DinoDigger.Overworld
             {
                 ApplyFruitStandDressing();
             }
+        }
+
+        /// <summary>The sprite for construction <paramref name="state"/> (0..3, or
+        /// <see cref="ConstructionStates"/> for finished): this building's OWN art when that
+        /// state has been generated, else the generic placeholder set, else null. The fallback
+        /// is per STATE, not per building, so a half-generated building (e.g. Gronk's Grocer,
+        /// which only has s3 + done) shows its real art for the states it has and the
+        /// placeholder for the rest instead of blanking out.</summary>
+        private Sprite StateSprite(int state)
+        {
+            Sprite own = _art != null ? _art.State(state) : null;
+            if (own != null)
+            {
+                return own;
+            }
+
+            Sprite[] generic = _library != null ? _library.BuildingStates : null;
+            if (generic == null || generic.Length == 0)
+            {
+                return null; // no art at all (placeholder-only run): the state number still advances
+            }
+
+            // States 0..3 index directly; FINISHED uses the last slot (index 4 == finished art).
+            return generic[Mathf.Clamp(state, 0, generic.Length - 1)];
         }
 
         /// <summary>Dress the FINISHED stand: warm the building sprite and raise the bobbing

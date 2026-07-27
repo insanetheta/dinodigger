@@ -53,6 +53,19 @@ namespace DinoDigger.Overworld
         private const int MaxReplans = 5;
         private int _replans;
 
+        // Unstick recovery. A step can end up FULLY blocked (direct step + both axis
+        // slides all land in the same water/obstacle cell) when the follower has drifted
+        // into a corner of its own cell beside a bank — and re-planning from that pinned
+        // pose just rebuilds the same blocked route, so the whole replan budget burns out
+        // in a handful of consecutive frames and the drive honks in open country. Back out
+        // to the CENTER of the cell we are standing in first: a straight line from any
+        // point of a cell to that cell's own center never leaves the cell, so the escape
+        // always succeeds, and the re-plan that follows starts from a clean cell center
+        // where the fresh route's first leg is always drivable.
+        private bool _recentering;
+        private Vector3 _recenterTarget;
+        private const float RecenteredEpsSq = 0.0001f;
+
         // TEST HOOK: number of times a drive ended in a honk-give-up because the target
         // was unreachable (initial BFS failure, or replans exhausted). A robust route to
         // any reachable tap must keep this at zero.
@@ -161,6 +174,7 @@ namespace DinoDigger.Overworld
             _bestDist = float.MaxValue;
             _stallTimer = 0f;
             _replans = 0;
+            _recentering = false;
             Tween.PunchScale(transform, 0.12f, 0.2f);
             GameEvents.RaiseBackhoeMoved();
         }
@@ -176,6 +190,14 @@ namespace DinoDigger.Overworld
 
             // Advance the wheel-roll cycle while driving (inert without roll art).
             TickRoll();
+
+            // Backing out of a corner we pinned ourselves in: finish that first, then
+            // re-plan from the cell center (see TickRecenter).
+            if (_recentering)
+            {
+                TickRecenter(pos);
+                return;
+            }
 
             // Corner-cutting: as we move, skip ahead to the farthest waypoint we can
             // reach by a straight walkable line. Combined with the LOS smoothing in
@@ -199,7 +221,8 @@ namespace DinoDigger.Overworld
             float advanceMul = NextWaypointsInCorridor() ? 1f : 2f;
             float advanceDist = _config.BackhoeArriveDistance * advanceMul;
             if (_waypointIndex < _waypoints.Count - 1 &&
-                toWaypoint.sqrMagnitude <= advanceDist * advanceDist)
+                toWaypoint.sqrMagnitude <= advanceDist * advanceDist &&
+                CanShortcutToNextWaypoint(pos))
             {
                 _waypointIndex++;
                 _bestDist = float.MaxValue; // new segment — don't let the stall watchdog misfire
@@ -256,12 +279,92 @@ namespace DinoDigger.Overworld
             else
             {
                 // Fully wedged this frame (direct step + both axis slides blocked).
-                // Re-plan from here instead of quitting; only honk if no route remains.
-                if (!TryReplan())
+                // Back out to our own cell center first — a re-plan from a pinned pose
+                // rebuilds the same blocked route and would burn the whole replan budget
+                // in consecutive frames. Only when there is nothing to back out to do we
+                // re-plan right away; honk only if no route remains.
+                if (!BeginRecenter(moved) && !TryReplan())
                 {
                     GiveUp();
                 }
             }
+        }
+
+        /// <summary>
+        /// True when the follower may drop the current waypoint early — it is inside the
+        /// arrive slack — and steer straight at the NEXT one. That shortcut was never
+        /// string-pulled from HERE: standing off-center beside a stream bank, the line to
+        /// the next cell center can cross the flanking water, and the follower then pins
+        /// itself on the bank. Require a clear straight line before taking it; otherwise
+        /// keep threading the current waypoint's cell center (what a corridor does).
+        /// Center-line LOS, not the swept corridor test: the corridor test fails ON
+        /// PURPOSE across 1-cell bridges, which are exactly the waypoints we must keep.
+        /// </summary>
+        private bool CanShortcutToNextWaypoint(Vector3 pos)
+        {
+            return _map == null || _map.HasLineOfSight(pos, _waypoints[_waypointIndex + 1]);
+        }
+
+        /// <summary>Start the unstick recovery: back out to the center of the walkable
+        /// cell we are standing in. Returns false when there is nothing to back out to
+        /// (already centered, or no map) and the caller should re-plan instead.</summary>
+        private bool BeginRecenter(Vector3 pos)
+        {
+            if (_map == null)
+            {
+                return false;
+            }
+
+            Vector3Int cell = _map.WorldToCell(pos);
+            if (!_map.IsWalkableCell(cell))
+            {
+                return false;
+            }
+
+            Vector3 center = _map.CellCenter(cell);
+            center.z = pos.z;
+            if ((center - pos).sqrMagnitude < RecenteredEpsSq)
+            {
+                return false; // already centered: backing out cannot free us
+            }
+
+            _recentering = true;
+            _recenterTarget = center;
+            _bestDist = float.MaxValue;
+            _stallTimer = 0f;
+            return true;
+        }
+
+        /// <summary>Creep back to the cell center, then re-plan from there. The recovery
+        /// spends one replan from the journey budget, so a genuinely hopeless target still
+        /// honks in bounded time instead of shuffling forever.</summary>
+        private void TickRecenter(Vector3 pos)
+        {
+            Vector3 to = _recenterTarget - pos;
+            to.z = 0f;
+            float dist = to.magnitude;
+            float step = _config.BackhoeSpeed * Time.deltaTime;
+
+            if (dist <= step)
+            {
+                Vector3 landed = _recenterTarget;
+                landed.z = pos.z;
+                transform.position = landed;
+                _recentering = false;
+                if (!TryReplan())
+                {
+                    GiveUp();
+                }
+
+                return;
+            }
+
+            Vector3 dir = to / dist;
+            Vector3 moved = pos + dir * step;
+            moved.z = pos.z;
+            transform.position = moved;
+            _facing = _facingSmoother.Tick(new Vector2(dir.x, dir.y), Time.deltaTime);
+            ApplySprite();
         }
 
         /// <summary>Re-run the BFS from the current position toward the same goal and
@@ -344,6 +447,7 @@ namespace DinoDigger.Overworld
         private void GiveUp()
         {
             _moving = false;
+            _recentering = false;
             ResetRoll(); // settled: back to the static facing frame, never mid-roll
             if (_pendingMound != null && _pendingMound.IsActive &&
                 (_pendingMound.transform.position - transform.position).sqrMagnitude
@@ -386,6 +490,7 @@ namespace DinoDigger.Overworld
         private void Arrive()
         {
             _moving = false;
+            _recentering = false;
             ResetRoll(); // settled: back to the static facing frame, never mid-roll
             if (_pendingMound != null && _pendingMound.IsActive)
             {

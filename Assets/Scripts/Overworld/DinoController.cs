@@ -22,7 +22,7 @@ namespace DinoDigger.Overworld
     /// </summary>
     public class DinoController : MonoBehaviour, ITappable
     {
-        private enum Mode { Idle, Follow, Stroll, Travel, Eat, Dance, Nap, Parade, Work }
+        private enum Mode { Idle, Follow, Stroll, Travel, Eat, Dance, Nap, Parade, Work, Visit }
 
         private const float ArriveEps = 0.09f;       // world units: snap + stop here
         private const float WaypointEps = 0.18f;     // advance to next route point
@@ -110,6 +110,13 @@ namespace DinoDigger.Overworld
         private GameObject _mallet;
         private SpriteRenderer _malletRenderer;
 
+        // Town life (DinoDigger-3pz): an ambient VISIT to a finished town building. True from
+        // the moment the visitor is dispatched until the visit ends by ANY route — it arrives
+        // and finishes its little scene, or something else claims the dino (drafted to build,
+        // tapped into a buddy swap, sent to eat, paraded...). Like Work, the Visit mode itself
+        // writes NO positions, so TownLifeController owns the body with tweens while it lasts.
+        private bool _onVisit;
+
         // Parade.
         private Vector3 _paradeCenter;
         private float _paradePhase;
@@ -131,10 +138,46 @@ namespace DinoDigger.Overworld
         /// <summary>Busy with a directed activity — the superpower scans skip these.</summary>
         public bool IsBusy => _mode == Mode.Eat || _mode == Mode.Dance ||
                               _mode == Mode.Travel || _mode == Mode.Parade ||
-                              _mode == Mode.Work || _carried != null;
+                              _mode == Mode.Work || _mode == Mode.Visit || _carried != null;
 
         /// <summary>Working a town construction site (a NON-buddy resident builder).</summary>
         public bool IsWorking => _mode == Mode.Work;
+
+        /// <summary>Standing at a finished town building playing its little scene
+        /// (DinoDigger-3pz). Deliberately NOT <see cref="IsWorking"/> — a visitor is ambient
+        /// life, contributes no build work, and is freely draftable by construction.</summary>
+        public bool IsVisiting => _mode == Mode.Visit;
+
+        /// <summary>On an ambient town visit: strolling to the building OR attending it. Goes
+        /// false the instant anything else claims the dino, which is how TownLifeController
+        /// notices an aborted visit.</summary>
+        public bool IsOnVisit => _onVisit;
+
+        /// <summary>The scale this dino RESTS at — purely a function of its growth stage, never
+        /// a sampled transform value.
+        ///
+        /// Anything that poses the body temporarily (a town-life squash, the cinema's hide at
+        /// the door, a bounce) must resolve back to THIS. Sampling <c>localScale</c> for a
+        /// "restore to" value is the bug class this project has already been bitten by twice:
+        /// the sample can catch another tween mid-flight — the 0.4s spawn pop in
+        /// <c>GameManager.SpawnDino</c>, a feed punch, a work bob — and bake the inflated size
+        /// in permanently, because the posing tween is usually the LAST writer.</summary>
+        public Vector3 RestingScale =>
+            Vector3.one * (_config != null ? _config.StageScale(Stage) : 1f);
+
+        /// <summary>Drop any temporary pose: back to <see cref="RestingScale"/> and upright (a
+        /// napping dino keeps its lie-down lean). Idempotent and safe to call at any moment —
+        /// the town-life service calls it right after STOPPING a scene tween, so a tween killed
+        /// mid-flight can never strand a dino at the wrong size.</summary>
+        public void RestoreRestingPose()
+        {
+            if (!_napping)
+            {
+                transform.localRotation = Quaternion.identity;
+            }
+
+            transform.localScale = RestingScale;
+        }
 
         /// <summary>Currently hauling a pickup on its head (Trike courier run).</summary>
         public bool IsCarrying => _carried != null;
@@ -158,6 +201,7 @@ namespace DinoDigger.Overworld
         internal bool TestHasStrides => _strideA != null || _strideB != null;
         internal int TestWalkFrame => _walkFrame;
         internal bool TestWorking => _mode == Mode.Work;
+        internal bool TestVisiting => _mode == Mode.Visit;
         internal bool TestHatActive => _hat != null && _hat.activeSelf;
         internal bool TestMalletActive => _mallet != null && _mallet.activeSelf;
 
@@ -223,6 +267,7 @@ namespace DinoDigger.Overworld
             CancelNap();
             _onTravelArrived = null;
             _headingToWork = false; // dropped from any pending build commute
+            EndVisitState();        // and off any town visit (a buddy is never ambient life)
             if (_mode != Mode.Eat && _mode != Mode.Dance)
             {
                 _mode = Mode.Idle; // the follow check re-engages on its own next frame
@@ -240,6 +285,7 @@ namespace DinoDigger.Overworld
         {
             IsBuddy = false;
             CancelNap();
+            EndVisitState(); // a role change ends any visit in flight (walking there included)
             if (!delayHomeWalk && _meadow != null && !_meadow.ContainsInterior(transform.position))
             {
                 WalkTo(_meadow.RandomInteriorPoint(), 1f, null);
@@ -271,6 +317,18 @@ namespace DinoDigger.Overworld
                 return;
             }
 
+            // Town-life exit audit (DinoDigger-3pz), derived from state exactly like the
+            // builder gear's visibility: a visit is over the moment the dino is in any mode
+            // other than "walking there" (Travel) or "attending" (Visit) — a tap-dance, a
+            // buddy promotion, a meal, a nap, a parade, a build draft. Deriving it here means
+            // EVERY existing exit path cancels a visit for free (no per-path bookkeeping to
+            // forget), the visit pose is always restored, and TownLifeController sees
+            // IsOnVisit go false on its next tick and cleans up its beats.
+            if (_onVisit && _mode != Mode.Travel && _mode != Mode.Visit)
+            {
+                EndVisitState();
+            }
+
             switch (_mode)
             {
                 case Mode.Idle:
@@ -297,6 +355,8 @@ namespace DinoDigger.Overworld
                 case Mode.Work:
                     TickWork();
                     break;
+                case Mode.Visit:
+                    break; // holds position; TownLifeController drives the scene with tweens
                 case Mode.Dance:
                     break; // driven by tweens
             }
@@ -534,8 +594,7 @@ namespace DinoDigger.Overworld
 
         private void ApplyScale(bool animated)
         {
-            float s = _config != null ? _config.StageScale(Stage) : 1f;
-            Vector3 target = Vector3.one * s;
+            Vector3 target = RestingScale;
             if (animated)
             {
                 Tween.ScaleTo(transform, target, 0.4f);
@@ -646,6 +705,12 @@ namespace DinoDigger.Overworld
         public void GoWork(Vector3 site, Vector3 buildingCenter, float speedMul, Action onWorking,
             PlaceholderLibrary library)
         {
+            // CONSTRUCTION ALWAYS WINS over ambient town life: a drafted visitor drops its
+            // visit here and now. Cleared explicitly (not by the derived Update check) because
+            // the commute below puts the dino in Travel — the one mode a visit is allowed to
+            // sit in — so the derivation alone could not tell the two walks apart.
+            EndVisitState();
+
             _library = library;
             _headingToWork = true;
             EquipBuilderGear();            // "puts on" the hard hat for the commute + shift
@@ -847,6 +912,66 @@ namespace DinoDigger.Overworld
                 // straight home (ResumeRole overrides the pending commute + arrival callback).
                 ResumeRole();
             }
+        }
+
+        // ------------------------------------------------------------- town life
+
+        /// <summary>Stroll to a FINISHED town building and attend it as an ambient visitor
+        /// (DinoDigger-3pz): the dino walks to <paramref name="point"/> using the same BFS
+        /// travel as a builder commute, then enters <see cref="Mode.Visit"/> — a stay-put
+        /// puppet state that writes no positions of its own, so <c>TownLifeController</c> can
+        /// play the building's little scene with tweens. Returns false (and changes NOTHING)
+        /// when the dino may not visit: a walk BUDDY is never ambient town life, and a dino
+        /// already on a build assignment keeps building. Visiting is otherwise cancellable by
+        /// literally anything else that claims the dino — see the derived exit in Update.</summary>
+        public bool GoVisit(Vector3 point, float speedMul)
+        {
+            if (IsBuddy || _headingToWork || _mode == Mode.Work)
+            {
+                return false;
+            }
+
+            _onVisit = true;
+            WalkTo(point, speedMul, EnterVisit);
+            return true;
+        }
+
+        private void EnterVisit()
+        {
+            CancelNap();
+            _onReachedFood = null;
+            _onTravelArrived = null;
+            _mode = Mode.Visit;
+            ResetWalkAnim();
+        }
+
+        /// <summary>End a visit deliberately (the scene finished, or the town-life service is
+        /// resetting): restore the pose the scene's tweens left behind and resume the resident
+        /// role, which trots the dino home to the meadow. A no-op when not visiting.</summary>
+        public void StopVisit()
+        {
+            if (!_onVisit)
+            {
+                return;
+            }
+
+            EndVisitState();
+            ResumeRole();
+        }
+
+        /// <summary>Drop the visit flag and undo anything the scene's tweens posed (a squash, a
+        /// scaled-out "inside the cinema" guest, a tilted reader). Called from EVERY route out
+        /// of a visit — the deliberate one, the derived one in Update, and the role changes —
+        /// so a visitor can never be stranded shrunk, squashed or lying sideways.</summary>
+        private void EndVisitState()
+        {
+            if (!_onVisit)
+            {
+                return;
+            }
+
+            _onVisit = false;
+            RestoreRestingPose(); // back to the growth-stage scale + upright, instantly
         }
 
         // ----------------------------------------------------------------- carry

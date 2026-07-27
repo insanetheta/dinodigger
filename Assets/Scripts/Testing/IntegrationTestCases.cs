@@ -67,9 +67,12 @@ namespace DinoDigger.Testing
                 new TestCase("BuilderCommutesFromMeadow",    45f, Case_BuilderCommutesFromMeadow),
                 new TestCase("BuildingFinishesAndCelebrates", 50f, Case_BuildingFinishesAndCelebrates),
                 new TestCase("PlayerControlUnaffectedByBuild", 45f, Case_PlayerControlUnaffectedByBuild),
+                new TestCase("PriceCurveOrdersBuilds", 90f, Case_PriceCurveOrdersBuilds),
+                new TestCase("BigDinoBuildsFaster",    45f, Case_BigDinoBuildsFaster),
                 new TestCase("FruitStandSellsSurplus", 40f, Case_FruitStandSellsSurplus),
                 new TestCase("SnackBuilders",         45f, Case_SnackBuilders),
                 new TestCase("RecessTime",            45f, Case_RecessTime),
+                new TestCase("EachBuildingPlaysInteraction", 150f, Case_EachBuildingPlaysInteraction),
                 new TestCase("BerryPatch",            40f, Case_BerryPatch),
                 // Runs late (after the count-exact TreasureCounter and the town cases): a
                 // buddy dig can finish a round and bank a random amount of treasure, which
@@ -723,6 +726,14 @@ namespace DinoDigger.Testing
 
             DirtTile tile = FindPlainTile(dm);
             ctx.Assert(tile != null, "no plain (unburied) dirt tile found");
+
+            // Pin the tile at the canonical 3 taps — one crack state per non-final hit.
+            // Per-theme hardness rolls up to 4 taps (Sparkle is a 3-4 theme) and the crack
+            // art has only 3 states, so on a 4-tap tile damage 1 still maps to state 0 and
+            // the sprite legitimately does NOT change on hit 1. That proportional mapping
+            // is TileHardness's business; this case is about the crack/crumb/destroy
+            // progression, so it must not ride on a random hardness roll.
+            tile.TestSetMaxHealth(3);
 
             int max = tile.TestMaxHealth;
             Sprite prev = tile.TestDirtSprite;
