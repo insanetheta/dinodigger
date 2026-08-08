@@ -32,11 +32,18 @@ namespace DinoDigger.Managers
         private Transform _backhoe;
         private MeadowArea _meadow;
         private GardenArea _garden;
+        private TownController _town;
         private readonly List<Pending> _pending = new List<Pending>();
 
         // Keep respawns this many cells clear of the garden rect too, so a mound never
         // crowds a sprout's tap collider (isometric diagonal neighbours pack close).
         private const int GardenClearCells = 2;
+
+        // Clearance (world units) around a plot that already carries a building. The
+        // district rect guard below is measured in CELLS, but a building imports ~2.2
+        // units wide, so a mound just outside the district could still overlap one and
+        // make a tap in the overlap ambiguous (DinoDigger-lie).
+        private const float BuiltPlotClear = 1.2f;
 
         public void Init(GameConfig config, OverworldMap map, List<DigMound> mounds, Transform backhoe)
         {
@@ -57,6 +64,12 @@ namespace DinoDigger.Managers
         public void SetGarden(GardenArea garden)
         {
             _garden = garden;
+        }
+
+        /// <summary>Optional: mounds never respawn on a built town plot's footprint.</summary>
+        public void SetTown(TownController town)
+        {
+            _town = town;
         }
 
         public void ScheduleRespawn(DigMound mound)
@@ -105,8 +118,7 @@ namespace DinoDigger.Managers
                 }
 
                 Vector3 world = _map.CellCenter(cell);
-                if (!IsOccupied(world, mound) && !TooCloseToBackhoe(world) &&
-                    !InMeadow(world) && !InTownDistrict(world) && !InGarden(world))
+                if (CanPlace(world, mound))
                 {
                     mound.Respawn(world);
                     return;
@@ -115,6 +127,24 @@ namespace DinoDigger.Managers
 
             // Fallback: just respawn in place.
             mound.Respawn(mound.transform.position);
+        }
+
+        /// <summary>Every placement rule a respawn candidate must satisfy: clear of other
+        /// mounds, of the player, of the meadow, of the town district AND of any built town
+        /// plot, and of the berry garden.</summary>
+        private bool CanPlace(Vector3 world, DigMound self)
+        {
+            return !IsOccupied(world, self) && !TooCloseToBackhoe(world) &&
+                   !InMeadow(world) && !InTownDistrict(world) && !OnBuiltPlot(world) &&
+                   !InGarden(world);
+        }
+
+        /// <summary>TEST HOOK. Run the placement filter on a candidate point, so a case can
+        /// assert an exclusion DETERMINISTICALLY instead of hoping a random respawn happens
+        /// to pick the forbidden spot.</summary>
+        internal bool TestCanPlace(Vector3 world, DigMound self)
+        {
+            return CanPlace(world, self);
         }
 
         private bool InMeadow(Vector3 world)
@@ -132,6 +162,14 @@ namespace DinoDigger.Managers
         private bool InTownDistrict(Vector3 world)
         {
             return _map != null && _map.InTownDistrict(world);
+        }
+
+        // ...nor on the footprint of a plot that already carries a building, which the
+        // cell-measured district rect does not fully cover for a ~2.2-unit-wide building
+        // sitting on its rim (DinoDigger-lie: an overlapping mound made a tap ambiguous).
+        private bool OnBuiltPlot(Vector3 world)
+        {
+            return _town != null && _town.NearBuiltPlot(world, BuiltPlotClear);
         }
 
         private bool TooCloseToBackhoe(Vector3 world)

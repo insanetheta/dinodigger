@@ -14,6 +14,17 @@ namespace DinoDigger.EditorTools
     /// its own decompressor and works on any static host, including mobile Safari
     /// and Chrome for Android.
     ///
+    /// The build uses the project WebGL template at
+    /// <c>Assets/WebGLTemplates/DinoDigger</c> (Player Settings →
+    /// webGLTemplate: PROJECT:DinoDigger). That template is the stock Unity
+    /// "Default" template with the mobile viewport fix baked in (static
+    /// viewport meta + the (max-width:900px)/(pointer:coarse) CSS that fills
+    /// the screen and hides the Unity footer), so <c>docs/index.html</c> is
+    /// emitted mobile-ready by every build. The old deploy step of hand-editing
+    /// docs/index.html after a build is now redundant — keep it only as a
+    /// one-time verification for the first deploy after DinoDigger-vi2, then
+    /// drop it.
+    ///
     /// Menu: DinoDigger/Build WebGL (docs).
     /// </summary>
     public static class WebGLBuilder

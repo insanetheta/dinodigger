@@ -134,6 +134,7 @@ namespace DinoDigger.Core
             Spawn.Init(_config, _map, _mounds, _backhoe != null ? _backhoe.transform : null);
             Spawn.SetMeadow(_meadow);
             Spawn.SetGarden(_garden);
+            Spawn.SetTown(_town);
 
             if (_cameraFollow != null)
             {
@@ -421,9 +422,22 @@ namespace DinoDigger.Core
             return false;
         }
 
+        /// <summary>
+        /// The tappable under a world point, resolved DETERMINISTICALLY (DinoDigger-lie).
+        /// Physics2D.OverlapPointAll returns overlapping colliders in no defined order, so
+        /// two tappables sharing a point (a respawned mound clipping a finished building's
+        /// footprint) used to answer a tap differently from one frame to the next. Now the
+        /// hit with the lowest <see cref="TappableRank"/> wins, and within one rank the
+        /// collider whose center is NEAREST the tap point does — so the same tap always
+        /// does the same thing.
+        /// </summary>
         private ITappable FindTappable(Vector3 world)
         {
             Collider2D[] hits = Physics2D.OverlapPointAll(world);
+            ITappable best = null;
+            int bestRank = int.MaxValue;
+            float bestDistSq = float.MaxValue;
+
             for (int i = 0; i < hits.Length; i++)
             {
                 if (hits[i] == null)
@@ -432,13 +446,57 @@ namespace DinoDigger.Core
                 }
 
                 var t = hits[i].GetComponent<ITappable>() ?? hits[i].GetComponentInParent<ITappable>();
-                if (t != null)
+                if (t == null)
                 {
-                    return t;
+                    continue;
+                }
+
+                int rank = TappableRank(t);
+                Vector3 center = hits[i].bounds.center;
+                center.z = world.z;
+                float distSq = (center - world).sqrMagnitude;
+                if (rank < bestRank || (rank == bestRank && distSq < bestDistSq))
+                {
+                    best = t;
+                    bestRank = rank;
+                    bestDistSq = distSq;
                 }
             }
 
-            return null;
+            return best;
+        }
+
+        /// <summary>
+        /// Tap priority, lowest wins. The order is "the most specific, most alive thing the
+        /// toddler could have meant", never "whatever physics listed first":
+        ///
+        ///   0 dirt tile   — the dig pit is modal; while a site is open its tiles own the taps.
+        ///   1 duck        — a fleeting critter that wanders over anything; catching it wins.
+        ///   2 dino        — a living buddy/resident.
+        ///   3 pickup      — fruit/egg lying around, the feed-and-hatch loop.
+        ///   4 berry sprout— an interactive plant (harvest).
+        ///   5 dig mound   — a ground prop, and the TRANSIENT one: it vanishes once dug.
+        ///   6 building    — the permanent town prop underneath everything else.
+        ///
+        /// Mound above building is deliberate: the mound is the smaller, temporary object a
+        /// toddler is aiming AT when the two overlap. That overlap should not happen at all
+        /// any more — SpawnManager keeps respawns off built plots — so this ordering only
+        /// decides the leftover degenerate case, and decides it the same way every time.
+        /// Unknown implementors fall to the bottom, which is the old first-hit behaviour.
+        /// </summary>
+        private static int TappableRank(ITappable t)
+        {
+            switch (t)
+            {
+                case DirtTile _: return 0;
+                case Duck _: return 1;
+                case DinoController _: return 2;
+                case ItemPickup _: return 3;
+                case BerrySprout _: return 4;
+                case DigMound _: return 5;
+                case BuildingController _: return 6;
+                default: return 7;
+            }
         }
 
         // ------------------------------------------------------------- dig flow
@@ -2686,6 +2744,18 @@ namespace DinoDigger.Core
             {
                 _town = town;
             }
+
+            // Keep mound respawns off this town's built plots too (DinoDigger-lie): an
+            // injected town is the only one a fresh scene has.
+            Spawn?.SetTown(_town);
+        }
+
+        /// <summary>TEST HOOK. The tappable a tap at this world point resolves to, as a
+        /// Component (null = nothing tappable there). Lets a case assert the RESOLUTION of an
+        /// overlap directly (DinoDigger-lie) instead of inferring it from a side effect.</summary>
+        internal Component TestFindTappable(Vector3 world)
+        {
+            return FindTappable(world) as Component;
         }
 
         /// <summary>TEST HOOK. Route a world-space tap exactly like OnTap does

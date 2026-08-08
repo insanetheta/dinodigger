@@ -131,9 +131,33 @@ namespace DinoDigger.Dig
         private bool _surpriseFired;
         private int _surpriseFireCount; // test-observable: must stay 1 across every clear path
 
+        // Bumped every time a site is built or closed. The STAGGERED helper cascades (the
+        // Trike column, the geode ring) address tiles by GRID COORDINATE through a delayed
+        // callback, so they must prove the site they were fired for is still the one on
+        // screen: `_open`/`_finished` alone do NOT, because a site can close and a NEW one
+        // open inside the cascade's own stagger window (0.42s of scaled time for the geode).
+        // A callback that outlives its site would then crumble whatever now sits at that
+        // row/col in the NEXT site — including its untouched surprise pocket, which is
+        // exactly the "surprise fired even though it was never cracked" flake (DinoDigger-38r).
+        private int _siteGeneration;
+
+        // TEST BREADCRUMB (DinoDigger-38r). Which path cracked the pocket, on which tile and
+        // frame. Purely diagnostic and set nowhere else: the case that asserts the pocket was
+        // never cracked prints it, so any future spurious fire names its own trigger instead
+        // of leaving the next gate run to guess.
+        private string _surpriseFiredBy = "";
+        private string _clearCause = "player bite";
+
         // TEST HOOK. Force the next site's surprise kind (>= 0 selects a SurpriseKind and
         // updates the last-seen index; -1 = roll normally). Reset by the test after use.
         internal static int TestForceSurpriseKind = -1;
+
+        // TEST HOOK. Staff NO helper crew at the next site, whatever buddies came along.
+        // Every non-tap clear path (the Big T-Rex adjacent clear, the Trike headbutt column,
+        // the geode chain) is a crew superpower, so a case that must prove "the pocket was
+        // never cracked" pins this true and any spurious fire is then a real bug rather than
+        // a buddy the previous case left behind. Default false = normal play.
+        internal static bool TestSuppressCrew;
 
         // ---- Excavator rig geometry + timing --------------------------------
         // DIG-VIEW STAGING (close-up cutaway): the body renders BIG (2.4 units
@@ -259,6 +283,10 @@ namespace DinoDigger.Dig
         internal int TestSurpriseFireCount => _surpriseFireCount;
         internal static int TestLastSurprise => _lastSurprise;
 
+        /// <summary>TEST BREADCRUMB. Empty until the pocket fires; then the path that cracked
+        /// it, the tile, and the frame — so a spurious fire reports its own cause.</summary>
+        internal string TestSurpriseFiredBy => _surpriseFiredBy;
+
         /// <summary>TEST HOOK. Fully clear the surprise tile through the SAME crew-clear
         /// chokepoint the Trike headbutt / geode chain use (ClearTileFully -> CollectIfBuried),
         /// so a test can prove the pocket fires on a non-tap path and never fires twice.</summary>
@@ -266,7 +294,7 @@ namespace DinoDigger.Dig
         {
             if (_surpriseTile != null)
             {
-                ClearTileFully(_surpriseTile);
+                ClearTileFully(_surpriseTile, "test crew-clear hook");
             }
         }
 
@@ -373,6 +401,7 @@ namespace DinoDigger.Dig
             _digQueue.Clear();
             _activeTile = null;
             _arm = ArmState.Idle;
+            _siteGeneration++; // retire this site's in-flight cascades (see _siteGeneration)
             ClearGrid();
             _crew.Clear();
             _crewBuddies = null;
@@ -392,6 +421,7 @@ namespace DinoDigger.Dig
         private void BuildGrid()
         {
             ClearGrid();
+            _siteGeneration++; // any cascade still in flight from the last site is now stale
 
             _rows = _config != null ? Mathf.Clamp(_config.DigRows, 4, 6) : 5;
             _cols = _config != null ? Mathf.Max(3, _config.DigColumns) : 7;
@@ -608,7 +638,7 @@ namespace DinoDigger.Dig
                 _helperDino2.enabled = false;
             }
 
-            if (_crewBuddies == null)
+            if (_crewBuddies == null || TestSuppressCrew)
             {
                 return;
             }
@@ -772,26 +802,29 @@ namespace DinoDigger.Dig
             _headbuttColumn = col;
             Cheer(c);
 
+            int gen = _siteGeneration; // this cascade belongs to THIS site only
             for (int r = 0; r < _rows; r++)
             {
                 int row = r;
                 Tween.After(row * HeadbuttStagger, () =>
                 {
-                    if (!_open || _finished || _grid == null || row >= _rows || col >= _cols)
+                    if (!_open || _finished || _grid == null || gen != _siteGeneration ||
+                        row >= _rows || col >= _cols)
                     {
                         return;
                     }
 
                     DirtTile t = _grid[row, col];
-                    ClearTileFully(t);
+                    ClearTileFully(t, "Trike column");
                 });
             }
         }
 
         /// <summary>Damage a tile until it crumbles, then collect anything it hid. Used by
         /// the Triceratops column cascade (these are helper hits, NOT player bites, so they
-        /// never advance the power cadence).</summary>
-        private void ClearTileFully(DirtTile t)
+        /// never advance the power cadence). <paramref name="cause"/> is the diagnostic
+        /// breadcrumb recorded if this clear happens to crack the surprise pocket.</summary>
+        private void ClearTileFully(DirtTile t, string cause)
         {
             if (t == null || t.IsDestroyed)
             {
@@ -806,6 +839,7 @@ namespace DinoDigger.Dig
 
             if (t.IsDestroyed)
             {
+                _clearCause = cause;
                 CollectIfBuried(t);
             }
         }
@@ -1172,6 +1206,8 @@ namespace DinoDigger.Dig
             _surpriseTile = null;
             _surpriseFired = false;
             _surpriseFireCount = 0;
+            _surpriseFiredBy = "";
+            _clearCause = "player bite";
 
             if (!SurprisePocketEnabled || _tiles.Count == 0)
             {
@@ -1349,16 +1385,20 @@ namespace DinoDigger.Dig
             GameManager.Instance?.Audio?.Chime();
             SpawnPitBurst(center.transform.position, new Color(0.6f, 0.9f, 1f), 22);
 
-            // 8-neighbour ring, staggered so it reads as a tumble outward.
+            // 8-neighbour ring, staggered so it reads as a tumble outward. The ring is
+            // addressed by ROW/COL, so each delayed step must also prove the site it was
+            // fired for is still open (see _siteGeneration): a step landing after a NEW site
+            // was built would crumble that site's tile at the same coordinates.
             int[] dr = { -1, 1, 0, 0, -1, -1, 1, 1 };
             int[] dc = { 0, 0, -1, 1, -1, 1, -1, 1 };
+            int gen = _siteGeneration;
             for (int i = 0; i < 8; i++)
             {
                 int r = center.Row + dr[i];
                 int c = center.Col + dc[i];
                 Tween.After(i * GeodeStagger, () =>
                 {
-                    if (!_open || _finished || _grid == null)
+                    if (!_open || _finished || _grid == null || gen != _siteGeneration)
                     {
                         return;
                     }
@@ -1370,7 +1410,7 @@ namespace DinoDigger.Dig
                     }
 
                     SpawnPitBurst(t.transform.position, new Color(0.7f, 0.95f, 1f), 8);
-                    ClearTileFully(t);
+                    ClearTileFully(t, "geode chain");
                 });
             }
         }
@@ -1499,6 +1539,7 @@ namespace DinoDigger.Dig
                     bool adjDestroyed = adjacent.Damage();
                     if (adjDestroyed)
                     {
+                        _clearCause = "T-Rex adjacent clear";
                         CollectIfBuried(adjacent);
                     }
                 }
@@ -1506,6 +1547,7 @@ namespace DinoDigger.Dig
 
             if (destroyed)
             {
+                _clearCause = "player bite";
                 CollectIfBuried(tile);
             }
 
@@ -1533,6 +1575,8 @@ namespace DinoDigger.Dig
             if (tile == _surpriseTile && !_surpriseFired)
             {
                 _surpriseFired = true;
+                _surpriseFiredBy = $"{_clearCause} on r{tile.Row}c{tile.Col} " +
+                                   $"(frame {Time.frameCount}, site gen {_siteGeneration})";
                 FireSurprise(tile);
             }
 

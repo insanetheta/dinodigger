@@ -95,6 +95,38 @@ namespace DinoDigger.Overworld
         public Vector3 BuildingWorld(int index) =>
             _area != null ? _area.PlotWorld(index) : transform.position;
 
+        /// <summary>True when a world point sits on — or within <paramref name="clearance"/>
+        /// world units of — a plot that already carries a building (finished, or the site
+        /// currently under construction). Mound respawns steer clear of these (DinoDigger-lie):
+        /// buildings import ~2.2 units wide while the cleared district is measured in CELLS,
+        /// so a mound one cell outside the district could still clip a building's tap collider
+        /// and make a tap in the overlap ambiguous. Null-tolerant (no area = nothing built).</summary>
+        public bool NearBuiltPlot(Vector3 world, float clearance)
+        {
+            if (_area == null)
+            {
+                return false;
+            }
+
+            float clearSq = clearance * clearance;
+            for (int i = 0; i < _area.PlotCount; i++)
+            {
+                if (i >= _nextIndex && i != _activeIndex)
+                {
+                    continue; // empty lot: nothing to clip
+                }
+
+                Vector3 plot = _area.PlotWorld(i);
+                plot.z = world.z;
+                if ((plot - world).sqrMagnitude < clearSq)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         // ------------------------------------------------------------ builder snack
         // Snack-powered building (DinoDigger-4yu): feeding a fruit to a builder standing on an
         // active site banks a chunk of build work so the building visibly jumps ahead. The feed
@@ -175,6 +207,14 @@ namespace DinoDigger.Overworld
         }
 
         // TEST HOOKS (integration runner; no reflection).
+
+        /// <summary>TEST HOOK. While true the queue never breaks ground, so the wallet is
+        /// FROZEN for the caller. Count-exact treasure cases pin this: the builder spends the
+        /// instant it can afford the next plot — inside the very frame a coin banks — which
+        /// makes an "exact wallet value" wait miss its target and hang. Default false = the
+        /// always-on builder of normal play. Always restore it in a finally.</summary>
+        internal static bool TestSuspendBuilds;
+
         internal TownArea TestArea => _area;
         internal BuildingController TestActiveSite => _activeSite;
         internal int TestNextIndex => _nextIndex;
@@ -295,7 +335,7 @@ namespace DinoDigger.Overworld
 
         private void TryStartBuild()
         {
-            if (_activeSite != null || _area == null || _config == null)
+            if (_activeSite != null || _area == null || _config == null || TestSuspendBuilds)
             {
                 return;
             }

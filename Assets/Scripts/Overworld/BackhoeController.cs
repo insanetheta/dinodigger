@@ -88,6 +88,27 @@ namespace DinoDigger.Overworld
         internal bool TestHasRoll => HasAny(_rollA) || HasAny(_rollB);
         internal int TestRollFrame => _rollFrame;
 
+        /// <summary>TEST HOOK. Teleport to a world point and RESET the facing smoother to a
+        /// known facing — the "reset it when teleporting" contract FacingSmoother documents.
+        /// Only tests teleport (real play always drives), and a test that snaps the backhoe
+        /// between vetted legs must not carry the previous leg's smoothed heading across the
+        /// jump: the smoother would then hold that stale neighbouring sector for part of the
+        /// next leg, which is exactly what made the facing sweep flaky (DinoDigger-9w5).</summary>
+        internal void TestTeleport(Vector3 world, Dir8 facing)
+        {
+            _moving = false;
+            _recentering = false;
+            _pendingMound = null;
+            _waypoints.Clear();
+            _waypointIndex = 0;
+            transform.position = world;
+            _target = world;
+            _facing = facing;
+            _facingSmoother.Reset(facing);
+            ApplySprite();
+            Physics2D.SyncTransforms();
+        }
+
         private void Awake()
         {
             if (_renderer == null)

@@ -15,19 +15,29 @@ namespace DinoDigger.Testing
     /// <summary>The concrete play-through test cases. See IntegrationTestRunner.cs for the driver.</summary>
     public partial class IntegrationTestRunner
     {
+        /// <summary>Island size in cells, matching SceneBuilder's N — the bound for the
+        /// whole-map scans below (walkable sweep, water flood-fill).</summary>
+        private const int MapCells = 48;
+
         private List<TestCase> BuildCases()
         {
             return new List<TestCase>
             {
-                new TestCase("RoamTapToMove",        20f, Case_RoamTapToMove),
+                // Realtime budgets. Two rules of thumb, both learned the hard way: size a
+                // budget from the WORK a case does (legs driven, tiles dug) rather than a
+                // round number, and leave enough slack that a load hitch on a machine running
+                // two editors can never fail a case that is making progress. A case that
+                // needs its full budget is broken, not slow.
+                new TestCase("RoamTapToMove",        40f, Case_RoamTapToMove),
                 new TestCase("PathfindingAnywhere", 200f, Case_PathfindingAnywhere),
                 new TestCase("EightDirFacing",       25f, Case_EightDirFacing),
-                new TestCase("FacingCorrectness",    30f, Case_FacingCorrectness),
+                // 8 legs x up to 3 re-drives, each with its own distance-proportional budget.
+                new TestCase("FacingCorrectness",    90f, Case_FacingCorrectness),
                 new TestCase("FacingStability",      30f, Case_FacingStability),
                 new TestCase("MoundToDig",           20f, Case_MoundToDig),
                 new TestCase("DirtTileDamage",       20f, Case_DirtTileDamage),
                 new TestCase("PeekVisible",          20f, Case_PeekVisible),
-                new TestCase("MultiItemCollection",  30f, Case_MultiItemCollection),
+                new TestCase("MultiItemCollection",  60f, Case_MultiItemCollection),
                 new TestCase("DigThemes",            25f, Case_DigThemes),
                 new TestCase("TileHardness",         25f, Case_TileHardness),
                 new TestCase("EggHatch",             20f, Case_EggHatch),
@@ -40,7 +50,7 @@ namespace DinoDigger.Testing
                 new TestCase("GrowthStageArt",       15f, Case_GrowthStageArt),
                 new TestCase("DinoDance",            15f, Case_DinoDance),
                 new TestCase("BigDinoHelps",         20f, Case_BigDinoHelps),
-                new TestCase("TreasureCounter",      15f, Case_TreasureCounter),
+                new TestCase("TreasureCounter",      30f, Case_TreasureCounter),
                 new TestCase("MoundRespawn",         20f, Case_MoundRespawn),
                 new TestCase("IdleAttract",          10f, Case_IdleAttract),
                 new TestCase("SaveRoundtrip",        10f, Case_SaveRoundtrip),
@@ -58,7 +68,7 @@ namespace DinoDigger.Testing
                 new TestCase("TrikeCarry",           35f, Case_TrikeCarry),
                 new TestCase("ParadeOnce",           30f, Case_ParadeOnce),
                 new TestCase("StreamsConnectivity",  15f, Case_StreamsConnectivity),
-                new TestCase("DuckCatch",            20f, Case_DuckCatch),
+                new TestCase("DuckCatch",            40f, Case_DuckCatch),
                 new TestCase("TownAvoidsMoundAndStream", 25f, Case_TownAvoidsMoundAndStream),
                 new TestCase("TownWiredInScene",         10f, Case_TownWiredInScene),
                 new TestCase("TownStatePersists",        15f, Case_TownStatePersists),
@@ -66,7 +76,9 @@ namespace DinoDigger.Testing
                 new TestCase("BuildAdvancesThroughStates",   45f, Case_BuildAdvancesThroughStates),
                 new TestCase("BuilderCommutesFromMeadow",    45f, Case_BuilderCommutesFromMeadow),
                 new TestCase("BuildingFinishesAndCelebrates", 50f, Case_BuildingFinishesAndCelebrates),
-                new TestCase("PlayerControlUnaffectedByBuild", 45f, Case_PlayerControlUnaffectedByBuild),
+                // Includes a cross-island builder commute (40s of its own budget).
+                new TestCase("PlayerControlUnaffectedByBuild", 100f, Case_PlayerControlUnaffectedByBuild),
+                new TestCase("TapPriorityOverlap",    40f, Case_TapPriorityOverlap),
                 new TestCase("PriceCurveOrdersBuilds", 90f, Case_PriceCurveOrdersBuilds),
                 new TestCase("BigDinoBuildsFaster",    45f, Case_BigDinoBuildsFaster),
                 new TestCase("FruitStandSellsSurplus", 40f, Case_FruitStandSellsSurplus),
@@ -100,23 +112,38 @@ namespace DinoDigger.Testing
             ctx.Assert((target - start).sqrMagnitude > 0.25f, "no distinct walkable target found");
 
             ctx.TapWorld(target);
-            yield return ctx.WaitUntil(() => !bh.IsMoving);
+            yield return ctx.WaitUntil(() => !bh.IsMoving, LegBudget(start, target),
+                "backhoe never arrived at the tapped walkable cell");
 
             Vector3 arrived = bh.transform.position;
             ctx.Assert(map.IsWalkableWorld(arrived), "backhoe ended on a non-walkable cell");
             ctx.Assert((arrived - start).sqrMagnitude > 0.25f, "backhoe did not move on a walkable tap");
 
-            // Pond water: tap into the pond; the target must be clamped to land.
+            // Pond water: tap into the pond; the target must be clamped to land. The pond cell
+            // is found from the map (DinoDigger-8e1) and is normally well off screen, so route
+            // the tap through the same OnTap path without the world->screen conversion that
+            // would silently DROP it — a dropped tap makes "the backhoe never reached the
+            // water" true for the wrong reason, which is how this stopped testing the pond.
             ctx.Assert(FindBlockedPondCell(map, out Vector3Int waterCell), "could not locate a pond/water cell");
             Vector3 waterWorld = map.CellCenter(waterCell);
-            ctx.TapWorld(waterWorld);
-            yield return ctx.WaitUntil(() => !bh.IsMoving);
+            float distBefore = (arrived - waterWorld).magnitude;
+            gm.TestTapWorldRouted(waterWorld);
+            yield return ctx.WaitUntil(() => !bh.IsMoving, LegBudget(arrived, waterWorld),
+                "backhoe never settled after the water tap");
 
             Vector3 after = bh.transform.position;
             ctx.Assert(map.IsWalkableWorld(after), "backhoe entered a water cell");
             ctx.Assert(map.WorldToCell(after) != waterCell, "backhoe reached the water cell (not clamped)");
+            if (distBefore > 2f)
+            {
+                // Only meaningful from a distance: parked on the shore already, the clamp
+                // target IS where it stands and holding still is the correct outcome.
+                ctx.Assert((after - waterWorld).magnitude < distBefore - 0.25f,
+                    "water tap did not drive the backhoe to the near shore (silently ignored?)");
+            }
 
-            ctx.Log($"moved {map.WorldToCell(start)}->{map.WorldToCell(arrived)}; water tap {waterCell} rejected");
+            ctx.Log($"moved {map.WorldToCell(start)}->{map.WorldToCell(arrived)}; pond tap {waterCell} " +
+                    $"clamped to shore {map.WorldToCell(after)}");
         }
 
         // Robustness guarantee (DinoDigger-e47): ONE tap = ONE guaranteed arrival.
@@ -278,73 +305,15 @@ namespace DinoDigger.Testing
             return Mathf.Max(Mathf.Abs(a.x - b.x), Mathf.Abs(a.y - b.y));
         }
 
-        /// <summary>An interior pond cell whose 4 neighbours are all non-walkable
-        /// (deep water); falls back to any pond-border water cell for a small pond.</summary>
+        /// <summary>An INTERIOR pond cell — island water (ground painted, then flooded, so
+        /// never open ocean) with water on all four sides, which is what forces the
+        /// clamp-to-near-shore fallback rather than a one-ring NearestWalkable hop. Falls
+        /// back to a pond shore cell on a pond too small to have an interior. Located from
+        /// the map data, not a hardcoded rect — the pond has moved before (DinoDigger-8e1).</summary>
         private bool FindDeepWaterCell(OverworldMap map, out Vector3Int cell)
         {
-            int[] dx = { -1, 1, 0, 0 };
-            int[] dy = { 0, 0, -1, 1 };
-            Vector3Int fallback = Vector3Int.zero;
-            bool haveFallback = false;
-
-            for (int x = 3; x <= 12; x++)
-            {
-                for (int y = 12; y <= 20; y++)
-                {
-                    var c = new Vector3Int(x, y, 0);
-                    if (map.IsWalkableCell(c))
-                    {
-                        continue;
-                    }
-
-                    // Must be genuine water (ground painted but flooded), not empty space:
-                    // a cell that borders at least one walkable land cell is on/near the pond.
-                    bool bordersLand = false;
-                    bool allWaterAround = true;
-                    for (int i = 0; i < 4; i++)
-                    {
-                        var nb = new Vector3Int(x + dx[i], y + dy[i], 0);
-                        if (map.IsWalkableCell(nb))
-                        {
-                            bordersLand = true;
-                            allWaterAround = false;
-                        }
-                    }
-
-                    if (bordersLand && !haveFallback)
-                    {
-                        fallback = c;
-                        haveFallback = true;
-                    }
-
-                    if (allWaterAround)
-                    {
-                        // Deep only counts if it's part of the pond (reachable water region);
-                        // require a walkable land cell within 2 rings so we skip void cells.
-                        bool nearLand = false;
-                        for (int rx = -2; rx <= 2 && !nearLand; rx++)
-                        {
-                            for (int ry = -2; ry <= 2; ry++)
-                            {
-                                if (map.IsWalkableCell(new Vector3Int(x + rx, y + ry, 0)))
-                                {
-                                    nearLand = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (nearLand)
-                        {
-                            cell = c;
-                            return true;
-                        }
-                    }
-                }
-            }
-
-            cell = fallback;
-            return haveFallback;
+            return FindIslandWaterCell(map, minWaterNeighbors: 4, requireLandNeighbor: false, out cell) ||
+                   FindIslandWaterCell(map, minWaterNeighbors: 0, requireLandNeighbor: true, out cell);
         }
 
         private IEnumerator Case_EightDirFacing(TestContext ctx)
@@ -431,46 +400,68 @@ namespace DinoDigger.Testing
             int tested = 0, diagTested = 0;
             bool xAxisTested = false, yAxisTested = false;
             bool eastDiag = false, westDiag = false;
+            int giveUpsBefore = bh.TestGiveUpCount;
             for (int i = 0; i < dirs.Length; i++)
             {
-                // Each driven leg moves the backhoe off the vetted open cell, which
-                // invalidates the remaining directions' clearances — snap back first.
-                bh.transform.position = anchor;
                 if (!FindClearStraightTarget(map, gm, anchor, dirs[i], out Vector3 target))
                 {
                     continue; // no corridor-straight target this way from here
                 }
 
                 Dir8 expected = Direction8.FromVector(dirs[i]);
-                bh.MoveTo(target);
+                Vector2 leg = new Vector2(target.x - anchor.x, target.y - anchor.y);
 
-                // Drive long enough for the smoothed facing to settle (>=0.4s of motion).
-                float t = 0f;
-                while (bh.IsMoving && t < 2.0f)
+                // Start every leg from the SAME known, non-adjacent facing (two sectors
+                // clockwise of the expected one). The smoother is velocity-smoothed with
+                // hysteresis, so without this the leg inherits the PREVIOUS leg's heading
+                // across the teleport and a neighbouring sector can legitimately be held
+                // part-way through the drive — the "drove (0,1) but faced NE" flake. Two
+                // sectors away also keeps the test honest: the leg must genuinely rotate
+                // the smoother, and it never starts antiparallel (no zero-crossing hold).
+                Dir8 start = (Dir8)(((int)expected + 2) % 8);
+
+                // Convergence is driven by MOTION, never by wall clock — the smoother's
+                // deadband freezes the facing while the backhoe is parked, so topping a
+                // short leg up with a stationary wait (what this used to do) could never
+                // finish a convergence that a load hitch cut short. Under load
+                // Time.deltaTime is clamped to maximumDeltaTime and then scaled x3, so one
+                // hitchy frame can step a whole leg at once and a collision slide on that
+                // giant step feeds the EMA an off-axis delta. So: drive the leg again from
+                // the anchor (more motion) instead of waiting longer, up to 3 times.
+                Dir8 got = expected;
+                for (int attempt = 0; attempt < 3; attempt++)
                 {
-                    t += Time.deltaTime;
-                    yield return null;
+                    // Each driven leg leaves the backhoe off the vetted open cell, which
+                    // invalidates the remaining directions' clearances — snap back (and
+                    // re-seat the smoother) before every drive.
+                    bh.TestTeleport(anchor, start);
+                    bh.MoveTo(target);
+                    yield return ctx.WaitUntil(() => !bh.IsMoving, LegBudget(anchor, target),
+                        $"leg {dirs[i]} (attempt {attempt + 1}) never arrived");
+                    got = bh.Facing;
+                    if (FacingAcceptable(got, expected, leg))
+                    {
+                        break;
+                    }
                 }
 
-                if (t < 0.4f)
-                {
-                    yield return ctx.WaitSecondsScaled(0.4f - t);
-                }
-
-                ctx.Assert(bh.Facing == expected,
-                    $"drove {dirs[i]} but faced {bh.Facing} (expected {expected}) — compass flip?");
+                ctx.Assert(bh.TestGiveUpCount == giveUpsBefore,
+                    $"leg {dirs[i]} honked instead of driving — the vetted leg was not drivable, " +
+                    "so the facing below never got its motion");
+                ctx.Assert(FacingAcceptable(got, expected, leg),
+                    $"drove {dirs[i]} but faced {got} (expected {expected}) — compass flip?");
 
                 // The wheel-roll cycler (DinoDigger-682) may still have a ROLL frame up
                 // if the backhoe is sampled while it is mid-drive; accept the idle frame
-                // OR either roll phase for the expected facing (mirrors GrowthStageArt's
+                // OR either roll phase for the settled facing (mirrors GrowthStageArt's
                 // stride tolerance). All three are direction-indexed, so a compass flip
                 // still fails loudly.
                 Sprite rendered = bh.TestSprite;
-                bool spriteForFacing = rendered == bh.TestDirSprite(expected) ||
-                    rendered == bh.TestRollDirSprite(0, expected) ||
-                    rendered == bh.TestRollDirSprite(1, expected);
+                bool spriteForFacing = rendered == bh.TestDirSprite(got) ||
+                    rendered == bh.TestRollDirSprite(0, got) ||
+                    rendered == bh.TestRollDirSprite(1, got);
                 ctx.Assert(spriteForFacing,
-                    $"rendered sprite != wired array[{(int)expected}] ({expected}) after driving {dirs[i]}");
+                    $"rendered sprite != wired array[{(int)got}] ({got}) after driving {dirs[i]}");
                 tested++;
                 bool diag = Mathf.Abs(dirs[i].x) > 0.5f && Mathf.Abs(dirs[i].y) > 0.5f;
                 if (diag)
@@ -497,6 +488,37 @@ namespace DinoDigger.Testing
             yield return DinoDiagonalSpotCheck(ctx, gm, map, bh, anchor, dirs);
 
             gm.TestReset();
+        }
+
+        /// <summary>True when <paramref name="got"/> is a legitimate settled facing for a leg
+        /// driven along <paramref name="legDir"/> whose ideal heading is <paramref name="expected"/>.
+        ///
+        /// An exact match always passes. An ADJACENT sector passes only while the leg's ACTUAL
+        /// heading still sits inside that neighbour's hysteresis band: FacingSmoother holds the
+        /// current facing until the smoothed heading swings more than 22.5+11 degrees off that
+        /// sector's centre, so for a leg that close to the boundary EITHER sector is a correct
+        /// answer and asserting one of them is asserting a coin flip. (Today's vetting keeps
+        /// targets within ~10 degrees of the ideal axis, so this band is a guard rather than a
+        /// routine pass; the re-drive loop above is what actually settles the facing.) Anything
+        /// two or more sectors out is a genuine compass flip and still fails loudly — never
+        /// widen this past adjacent.</summary>
+        private static bool FacingAcceptable(Dir8 got, Dir8 expected, Vector2 legDir)
+        {
+            if (got == expected)
+            {
+                return true;
+            }
+
+            int delta = ((((int)got - (int)expected) % 8) + 8) % 8;
+            if ((delta != 1 && delta != 7) || legDir.sqrMagnitude < 0.0001f)
+            {
+                return false;
+            }
+
+            float legDeg = Mathf.Atan2(legDir.x, legDir.y) * Mathf.Rad2Deg;
+            float gotDeg = (int)got * 45f;
+            return Mathf.Abs(Mathf.DeltaAngle(legDeg, gotDeg)) <=
+                   22.5f + FacingSmoother.DefaultHysteresisDeg;
         }
 
         // DinoDigger-bw4: spawn a dino, drive the backhoe along one corridor-straight
@@ -826,35 +848,65 @@ namespace DinoDigger.Testing
             int treasureBefore = gm.Save.Data.TreasureCount;
             int expectedPickups = eggs + fruit;
 
-            // Dig every buried tile. State must remain Dig until the last is uncovered.
-            int guard = 0;
-            while (gm.State.Is(GameState.Dig) && dm.TestBuriedCount > 0 && guard++ < 60)
+            // The town builder must not spend out of the wallet this case counts to the coin
+            // (see Case_TreasureCounter for the full story) — freeze the queue while we dig.
+            TownController.TestSuspendBuilds = true;
+            try
             {
-                List<DirtTile> remaining = dm.TestBuriedTiles();
-                if (remaining.Count == 0)
+                // Dig every buried tile. State must remain Dig until the last is uncovered.
+                int guard = 0;
+                while (gm.State.Is(GameState.Dig) && dm.TestBuriedCount > 0 && guard++ < 60)
                 {
-                    break;
+                    List<DirtTile> remaining = dm.TestBuriedTiles();
+                    if (remaining.Count == 0)
+                    {
+                        break;
+                    }
+
+                    if (dm.TestBuriedCount > 1)
+                    {
+                        ctx.Assert(gm.State.Is(GameState.Dig), "left dig before all items were uncovered");
+                    }
+
+                    yield return TapTileUntilDestroyed(ctx, dm, remaining[0]);
                 }
 
-                if (dm.TestBuriedCount > 1)
-                {
-                    ctx.Assert(gm.State.Is(GameState.Dig), "left dig before all items were uncovered");
-                }
+                ctx.Assert(!gm.State.Is(GameState.Dig), "still in dig after clearing every item");
+                yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam), 20f,
+                    "never returned to roam after the last item was uncovered");
 
-                yield return TapTileUntilDestroyed(ctx, dm, remaining[0]);
+                // Non-treasure items become pickups; treasure auto-flies to the counter and
+                // banks its per-variant denomination (coin=1, gem=3, boot=1, bone=2).
+                //
+                // DEFLAKE (DinoDigger-dzs): the alive-pickup count is only equal to the
+                // expected total inside a WINDOW — after every item lands, before the first
+                // egg wobbles open (~1.2s of scaled time). Under editor load one frame can
+                // carry a full second of scaled time, so a poll for an exact instantaneous
+                // count could step straight over that window and then wait forever. Track the
+                // PEAK instead: it is reached as soon as the last item lands and it never
+                // decays, so no amount of frame-hitching can hide it. The wallet side waits
+                // on >= (monotone) and is asserted exact afterwards, same as TreasureCounter.
+                int peakPickups = 0;
+                yield return ctx.WaitUntil(() =>
+                {
+                    peakPickups = Mathf.Max(peakPickups, CountOverworldPickups(gm, true));
+                    return peakPickups >= expectedPickups &&
+                           gm.Save.Data.TreasureCount >= treasureBefore + expectedTreasureGain;
+                }, 25f, () => $"dug batch never fully surfaced (pickups peaked at {peakPickups}/{expectedPickups}, " +
+                              $"treasure +{gm.Save.Data.TreasureCount - treasureBefore}/{expectedTreasureGain})");
+
+                ctx.Assert(peakPickups == expectedPickups,
+                    $"{peakPickups} pickups spawned (expected {expectedPickups})");
+                ctx.Assert(gm.Save.Data.TreasureCount == treasureBefore + expectedTreasureGain,
+                    $"treasure +{gm.Save.Data.TreasureCount - treasureBefore} (expected +{expectedTreasureGain})");
+
+                ctx.Log($"eggs={eggs} fruit={fruit} treasure={treasure}: {expectedPickups} pickups spawned, treasure+={expectedTreasureGain}");
+            }
+            finally
+            {
+                TownController.TestSuspendBuilds = false;
             }
 
-            ctx.Assert(!gm.State.Is(GameState.Dig), "still in dig after clearing every item");
-            yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam));
-
-            // Non-treasure items become pickups; treasure auto-flies to the counter and
-            // banks its per-variant denomination (coin=1, gem=3, boot=1, bone=2). This
-            // window is after items spawn + treasures fly, but before eggs hatch.
-            yield return ctx.WaitUntil(() =>
-                CountOverworldPickups(gm, true) == expectedPickups &&
-                gm.Save.Data.TreasureCount == treasureBefore + expectedTreasureGain);
-
-            ctx.Log($"eggs={eggs} fruit={fruit} treasure={treasure}: {expectedPickups} pickups spawned, treasure+={expectedTreasureGain}");
             gm.TestReset();
         }
 
@@ -1866,6 +1918,20 @@ namespace DinoDigger.Testing
 
             try
             {
+                // DEFLAKE (DinoDigger-38r). The real cause was NOT a crew superpower: the
+                // GEODE this case fires in section 3 crumbles its 8-neighbour ring through
+                // DELAYED callbacks addressed by ROW/COL (0.42s of scaled stagger), and this
+                // case re-enters a dig almost instantly afterwards — TestForceRoam leaves the
+                // backhoe parked on the very mound it just dug, so the next EnterDig opens a
+                // brand-new grid within a frame or two. The tail of the old ring then landed
+                // on the NEW site and crumbled whatever sat at those coordinates, sometimes
+                // its untouched pocket. Fixed site-side with a site-generation guard on both
+                // staggered cascades. The crew pin below stays as belt-and-braces (it removes
+                // the OTHER non-tap paths — T-Rex adjacent clear, Trike column — from this
+                // case entirely; BuddyDigCrew still covers them), and the case now prints
+                // DigModeController's firing breadcrumb if the pocket ever fires anyway.
+                DigModeController.TestSuppressCrew = true;
+
                 // ---- Placement: exactly one surprise tile, on a non-item tile, no peek ----
                 gm.TestReset();
                 DigModeController.TestForceSurpriseKind = -1;
@@ -1928,7 +1994,14 @@ namespace DinoDigger.Testing
                     ctx.Assert(dm.TestSurpriseFireCount == 1,
                         $"Giggle fired {dm.TestSurpriseFireCount}x on one crack");
 
-                    yield return ctx.WaitUntil(() => bankEvents >= 3);
+                    // The firing breadcrumb must actually be recorded and name the tap path —
+                    // otherwise the "never cracked" check further down would report an empty
+                    // string on the day it matters.
+                    ctx.Assert(dm.TestSurpriseFiredBy.Contains("player bite"),
+                        $"tap-cracked pocket recorded cause '{dm.TestSurpriseFiredBy}' (expected a player bite)");
+
+                    yield return ctx.WaitUntil(() => bankEvents >= 3, 25f,
+                        () => $"Giggle banked only {bankEvents}/3 coins");
                     yield return ctx.WaitSecondsScaled(0.4f); // let any stray extra bank surface
                     ctx.Assert(bankEvents == 3, $"Giggle banked {bankEvents} coins (expected 3)");
                     ctx.Assert(!gm.State.Is(GameState.Roam), "cracking the pocket wrongly ended the round");
@@ -1965,6 +2038,9 @@ namespace DinoDigger.Testing
                 yield return EnterDig(ctx);
                 dm = gm.TestDigMode;
                 ctx.Assert(dm.TestSurpriseTile != null, "no surprise tile for the finish check");
+                ctx.Assert(dm.TestCrewCount == 0,
+                    $"{dm.TestCrewCount} helper(s) staffed despite the crew pin — a superpower " +
+                    "could crack the pocket without a tap");
 
                 int guard = 0;
                 while (gm.State.Is(GameState.Dig) && dm.TestBuriedCount > 0 && guard++ < 60)
@@ -1978,8 +2054,11 @@ namespace DinoDigger.Testing
                     yield return TapTileUntilDestroyed(ctx, dm, remaining[0]);
                 }
 
-                yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam));
-                ctx.Assert(!dm.TestSurpriseFired, "surprise fired even though it was never cracked");
+                yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam), 25f,
+                    "round never returned to roam after every buried item was uncovered");
+                ctx.Assert(!dm.TestSurpriseFired,
+                    "surprise fired even though it was never cracked — fired by: " +
+                    (string.IsNullOrEmpty(dm.TestSurpriseFiredBy) ? "(no breadcrumb)" : dm.TestSurpriseFiredBy));
 
                 ctx.Log("1 wiggling non-item pocket/site (no peek); Giggle banks 3 coins; fires exactly once " +
                         "across crew-clear + tap; round finishes with an uncracked pocket; pool rotates");
@@ -1987,6 +2066,7 @@ namespace DinoDigger.Testing
             finally
             {
                 DigModeController.TestForceSurpriseKind = -1;
+                DigModeController.TestSuppressCrew = false;
             }
         }
 
@@ -1997,31 +2077,55 @@ namespace DinoDigger.Testing
             GameManager gm = ctx.GM;
             gm.TestReset();
 
-            int before = gm.Save.Data.TreasureCount;
-            Vector3 pos = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position + new Vector3(0.6f, 0.6f, 0f));
+            // ROOT CAUSE of this case's timeouts (DinoDigger-9w5): the always-on town
+            // builder spends the wallet the instant it can afford the next plot — inside the
+            // very frame a coin banks, before this coroutine polls again. Every wait below is
+            // an EXACT wallet value, so once the wallet was fat enough to break ground the
+            // target number was gone before it could be observed and the case sat out its
+            // whole budget waiting for it (nothing was slow; the wait was unsatisfiable).
+            // Whether that happened depended on the wallet the run inherited, which is why it
+            // read as load-flakiness. Freeze the queue: for this case the wallet is ours.
+            TownController.TestSuspendBuilds = true;
+            try
+            {
+                int before = gm.Save.Data.TreasureCount;
+                Vector3 pos = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position + new Vector3(0.6f, 0.6f, 0f));
 
-            // A coin (variant 0) banks its face value of 1.
-            int coinValue = gm.TestConfig.TreasureValue(0);
-            gm.TestSpawnItem(ItemType.Treasure, DinoType.TRex, 0, pos);
-            yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount == before + coinValue);
+                // A coin (variant 0) banks its face value of 1. Wait on >= (monotone with the
+                // queue frozen) and assert the exact value after: a poll that can only ever be
+                // true on one specific frame is a race, a threshold is not.
+                int coinValue = gm.TestConfig.TreasureValue(0);
+                gm.TestSpawnItem(ItemType.Treasure, DinoType.TRex, 0, pos);
+                yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount >= before + coinValue,
+                    20f, "spawned coin never banked (arc -> counter flight -> wallet)");
+                ctx.Assert(gm.Save.Data.TreasureCount == before + coinValue,
+                    $"coin banked {gm.Save.Data.TreasureCount - before} (expected {coinValue})");
 
-            var counter = gm.TestTreasureCounter;
-            ctx.Assert(counter != null, "no treasure counter");
-            ctx.Assert(counter.TestCount == gm.Save.Data.TreasureCount,
-                $"counter {counter.TestCount} != save {gm.Save.Data.TreasureCount}");
-            ctx.Assert(counter.TestCountText == gm.Save.Data.TreasureCount.ToString(),
-                $"counter text '{counter.TestCountText}' != {gm.Save.Data.TreasureCount}");
+                var counter = gm.TestTreasureCounter;
+                ctx.Assert(counter != null, "no treasure counter");
+                ctx.Assert(counter.TestCount == gm.Save.Data.TreasureCount,
+                    $"counter {counter.TestCount} != save {gm.Save.Data.TreasureCount}");
+                ctx.Assert(counter.TestCountText == gm.Save.Data.TreasureCount.ToString(),
+                    $"counter text '{counter.TestCountText}' != {gm.Save.Data.TreasureCount}");
 
-            // Denominations: a gem (variant 1) banks its higher value in one collect.
-            int afterCoin = gm.Save.Data.TreasureCount;
-            int gemValue = gm.TestConfig.TreasureValue(1);
-            Vector3 pos2 = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position + new Vector3(-0.6f, 0.6f, 0f));
-            gm.TestSpawnItem(ItemType.Treasure, DinoType.TRex, 1, pos2);
-            yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount == afterCoin + gemValue);
-            ctx.Assert(counter.TestCount == gm.Save.Data.TreasureCount,
-                $"counter {counter.TestCount} != save {gm.Save.Data.TreasureCount} after gem");
+                // Denominations: a gem (variant 1) banks its higher value in one collect.
+                int afterCoin = gm.Save.Data.TreasureCount;
+                int gemValue = gm.TestConfig.TreasureValue(1);
+                Vector3 pos2 = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position + new Vector3(-0.6f, 0.6f, 0f));
+                gm.TestSpawnItem(ItemType.Treasure, DinoType.TRex, 1, pos2);
+                yield return ctx.WaitUntil(() => gm.Save.Data.TreasureCount >= afterCoin + gemValue,
+                    20f, "spawned gem never banked");
+                ctx.Assert(gm.Save.Data.TreasureCount == afterCoin + gemValue,
+                    $"gem banked {gm.Save.Data.TreasureCount - afterCoin} (expected {gemValue})");
+                ctx.Assert(counter.TestCount == gm.Save.Data.TreasureCount,
+                    $"counter {counter.TestCount} != save {gm.Save.Data.TreasureCount} after gem");
 
-            ctx.Log($"treasure {before}->{gm.Save.Data.TreasureCount} (coin+{coinValue}, gem+{gemValue}), UI text '{counter.TestCountText}'");
+                ctx.Log($"treasure {before}->{gm.Save.Data.TreasureCount} (coin+{coinValue}, gem+{gemValue}), UI text '{counter.TestCountText}'");
+            }
+            finally
+            {
+                TownController.TestSuspendBuilds = false;
+            }
         }
 
         // ================================================================ SPAWNS
@@ -3384,23 +3488,42 @@ namespace DinoDigger.Testing
             int pickupsBefore = CountOverworldPickups(gm, false);
             int treasureBefore = gm.Save.Data.TreasureCount;
 
-            gm.TestTapWorldRouted(duck.transform.position);
-            ctx.Assert(duck.TestCaught, "tapping the duck did not catch it");
+            // The reward is a coin flip between fruit and TREASURE, and treasure banks into
+            // the same wallet the town builder spends from. A spend in the banking frame can
+            // leave the count at or below where it started, so a plain "wallet went up" poll
+            // could wait for a rise that already happened and been spent (see
+            // Case_TreasureCounter). Freeze the queue so the signal stays truthful.
+            TownController.TestSuspendBuilds = true;
+            try
+            {
+                gm.TestTapWorldRouted(duck.transform.position);
+                ctx.Assert(duck.TestCaught, "tapping the duck did not catch it");
 
-            // A reward appears: a lingering fruit pickup, or a treasure that flew to
-            // the counter (auto-collect bumps the treasure count).
-            yield return ctx.WaitUntil(() =>
-                CountOverworldPickups(gm, false) > pickupsBefore ||
-                gm.Save.Data.TreasureCount > treasureBefore);
+                // A reward appears: a lingering fruit pickup, or a treasure that flew to
+                // the counter (auto-collect bumps the treasure count). Both are one arc plus
+                // a short flight; 20s of wall clock is ~50x that even at 1x speed.
+                bool rewarded = false;
+                yield return ctx.WaitUntil(() =>
+                {
+                    rewarded |= CountOverworldPickups(gm, false) > pickupsBefore ||
+                                gm.Save.Data.TreasureCount > treasureBefore;
+                    return rewarded;
+                }, 20f, "no fruit/treasure reward left where the duck was caught");
 
-            // The caught duck flaps away and despawns.
-            yield return ctx.WaitUntil(() => duck == null);
+                // The caught duck flaps away and despawns. Latch the reward above rather than
+                // re-testing it here: a fruit reward can be eaten (or a treasure spent) while
+                // the duck is still flying out, and "the reward existed" is what this asserts.
+                yield return ctx.WaitUntil(() => duck == null, 20f,
+                    "caught duck never flapped away (no despawn)");
+                ctx.Assert(rewarded, "no fruit/treasure reward left where the duck was caught");
 
-            bool rewarded = CountOverworldPickups(gm, false) > pickupsBefore ||
-                            gm.Save.Data.TreasureCount > treasureBefore;
-            ctx.Assert(rewarded, "no fruit/treasure reward left where the duck was caught");
+                ctx.Log("tapped a duck: it quacked, flapped away (despawned), and left a reward");
+            }
+            finally
+            {
+                TownController.TestSuspendBuilds = false;
+            }
 
-            ctx.Log("tapped a duck: it quacked, flapped away (despawned), and left a reward");
             gm.TestReset();
         }
 
@@ -3419,6 +3542,18 @@ namespace DinoDigger.Testing
 
         // ================================================================= HELPERS
 
+        /// <summary>Realtime budget for one driven leg, using the model PathfindingAnywhere
+        /// settled on: a 6s floor plus 0.5s per world unit of crow-flies distance, capped at
+        /// 20s. The runner drives at 3x game speed and the backhoe moves 3.5 u/s, so a leg
+        /// really costs ~0.1s/unit — 0.5s/unit is 5x slack for detours, replans, and the load
+        /// hitches this machine produces when two editors and a pile of agents share it.
+        /// Distance-proportional on purpose: a flat budget is either too tight for the long
+        /// legs or too slack to ever catch a wedge on the short ones.</summary>
+        private static float LegBudget(Vector3 from, Vector3 to)
+        {
+            return Mathf.Clamp(6f + (to - from).magnitude * 0.5f, 6f, 20f);
+        }
+
         private IEnumerator EnterDig(TestContext ctx)
         {
             GameManager gm = ctx.GM;
@@ -3428,9 +3563,17 @@ namespace DinoDigger.Testing
             // TapWorld's world->screen conversion drops off-screen taps. Use the
             // same code path a mound tap invokes; the tap->collider routing itself
             // is covered by MoundToDig (which walks into view first).
+            Vector3 from = gm.TestBackhoe.transform.position;
             gm.TestBackhoe.DriveToMound(m);
-            yield return ctx.WaitUntil(() => gm.State.Is(GameState.Dig));
-            yield return ctx.WaitUntil(() => gm.TestDigMode.TestTileCount > 0);
+
+            // Budget the drive by DISTANCE (plus the dig zoom), so a mound on the far side of
+            // the island is not a race against a flat number, and name both waits: a wedged
+            // approach used to surface as an anonymous case-level timeout.
+            yield return ctx.WaitUntil(() => gm.State.Is(GameState.Dig),
+                LegBudget(from, m.transform.position) + 5f,
+                "backhoe never reached the mound / dig never opened");
+            yield return ctx.WaitUntil(() => gm.TestDigMode.TestTileCount > 0, 10f,
+                "dig opened but built no tiles");
         }
 
         private IEnumerator TapTileUntilDestroyed(TestContext ctx, DigModeController dm, DirtTile tile)
@@ -3571,6 +3714,43 @@ namespace DinoDigger.Testing
 
             Vector3 w = map.NearestWalkable(desired, out bool found);
             return found ? w : desired;
+        }
+
+        /// <summary>A walkable point at least <paramref name="minDist"/> world units from
+        /// <paramref name="start"/>, clear of active mounds. Unlike
+        /// <see cref="FindDistinctWalkable"/> this guarantees the SEPARATION, not just a
+        /// different cell: NearestWalkable can clamp a 2-unit probe back to a neighbouring
+        /// cell whose centre is a fraction of a unit away on this isometric grid, and a case
+        /// that then asserts "the backhoe moved > 0.5 units" is asserting against its own
+        /// setup. Sweeps 8 headings at growing radii and takes the first that qualifies;
+        /// returns <paramref name="start"/> only when the backhoe is genuinely boxed in (the
+        /// caller asserts on that).</summary>
+        private Vector3 FindMoveTarget(OverworldMap map, Vector3 start, float minDist)
+        {
+            GameManager gm = GameManager.Instance;
+            float minSq = minDist * minDist;
+            float[] radii = { 2f, 3f, 4f, 5f, 7f, 9f, 12f }; // grows past minDist for far parks
+            Vector2[] dirs =
+            {
+                new Vector2(1f, 0f), new Vector2(0f, 1f), new Vector2(-1f, 0f), new Vector2(0f, -1f),
+                new Vector2(1f, 1f), new Vector2(-1f, 1f), new Vector2(-1f, -1f), new Vector2(1f, -1f),
+            };
+
+            for (int r = 0; r < radii.Length; r++)
+            {
+                for (int d = 0; d < dirs.Length; d++)
+                {
+                    Vector2 u = dirs[d].normalized * radii[r];
+                    Vector3 w = map.NearestWalkable(start + new Vector3(u.x, u.y, 0f), out bool found);
+                    if (found && (w - start).sqrMagnitude >= minSq &&
+                        (gm == null || !NearActiveMound(gm, w, 1.2f)))
+                    {
+                        return w;
+                    }
+                }
+            }
+
+            return start;
         }
 
         private Vector3 FindDistinctWalkable(OverworldMap map, Vector3 start)
@@ -3932,36 +4112,168 @@ namespace DinoDigger.Testing
             return false;
         }
 
+        /// <summary>A POND SHORE cell: painted island water (never open ocean) that sits in a
+        /// real body of water and touches land, nearest the backhoe so the clamp-to-shore
+        /// drive is short. Found from the map data, not a hardcoded rect (DinoDigger-8e1):
+        /// the old scan swept x4-11,y13-19, which the pond moved out of, so it kept returning
+        /// an OCEAN cell and the case silently stopped testing the pond-tap rejection its
+        /// comment claims.</summary>
         private bool FindBlockedPondCell(OverworldMap map, out Vector3Int cell)
         {
-            // Scan the handcrafted pond region and return an interior water cell
-            // (a blocked cell that borders at least one walkable cell).
+            return FindIslandWaterCell(map, minWaterNeighbors: 3, requireLandNeighbor: true, out cell) ||
+                   FindIslandWaterCell(map, minWaterNeighbors: 2, requireLandNeighbor: true, out cell) ||
+                   FindIslandWaterCell(map, minWaterNeighbors: 0, requireLandNeighbor: true, out cell);
+        }
+
+        /// <summary>Scan the whole island for an ENCLOSED water cell and hand back the one
+        /// NEAREST the backhoe that satisfies the shape asked for.
+        ///
+        /// How the painted map actually distinguishes water from ocean (SceneBuilder.PaintMap,
+        /// verified against the built scene): pond ('W') and stream ('S') cells get a WATER
+        /// tile and NO ground tile; open ocean ('~') gets NO tile on any layer; land gets
+        /// ground and no water. So a water tile already means "not ocean" — an earlier version
+        /// of this helper additionally demanded a ground tile underneath and therefore matched
+        /// ZERO cells in the real scene. <see cref="InlandWaterMask"/> adds the enclosure test
+        /// the ticket asks for on top (flood-fill; a body touching the map border is ocean),
+        /// so this keeps working even if a future scene does paint its sea.
+        ///
+        /// <paramref name="minWaterNeighbors"/> (of the 4 orthogonal neighbours) filters out
+        /// the 1-cell-wide streams when a real pond BODY is wanted; <paramref name="requireLandNeighbor"/>
+        /// keeps the result on the shoreline, where the clamp-to-land target is a short drive away.</summary>
+        private bool FindIslandWaterCell(OverworldMap map, int minWaterNeighbors,
+            bool requireLandNeighbor, out Vector3Int cell)
+        {
             int[] dx = { -1, 1, 0, 0 };
             int[] dy = { 0, 0, -1, 1 };
 
-            for (int x = 4; x <= 11; x++)
+            GameManager gm = GameManager.Instance;
+            Vector3 from = gm != null && gm.TestBackhoe != null
+                ? gm.TestBackhoe.transform.position
+                : Vector3.zero;
+
+            bool[,] inland = InlandWaterMask(map);
+
+            cell = Vector3Int.zero;
+            bool found = false;
+            float bestSq = float.MaxValue;
+
+            for (int x = 0; x < MapCells; x++)
             {
-                for (int y = 13; y <= 19; y++)
+                for (int y = 0; y < MapCells; y++)
                 {
                     var c = new Vector3Int(x, y, 0);
-                    if (map.IsWalkableCell(c))
+                    if (!inland[x, y] || map.IsWalkableCell(c))
+                    {
+                        continue; // ocean, dry land, or a walkable cell — not pond water
+                    }
+
+                    int water = 0;
+                    bool land = false;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        var nb = new Vector3Int(x + dx[i], y + dy[i], 0);
+                        if (map.TestHasWater(nb))
+                        {
+                            water++;
+                        }
+
+                        if (map.IsWalkableCell(nb))
+                        {
+                            land = true;
+                        }
+                    }
+
+                    if (water < minWaterNeighbors || (requireLandNeighbor && !land))
                     {
                         continue;
                     }
 
-                    for (int i = 0; i < 4; i++)
+                    float sq = (map.CellCenter(c) - from).sqrMagnitude;
+                    if (sq < bestSq)
                     {
-                        if (map.IsWalkableCell(new Vector3Int(x + dx[i], y + dy[i], 0)))
+                        bestSq = sq;
+                        cell = c;
+                        found = true;
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>Which painted water cells belong to an ENCLOSED body — a pond or a stream
+        /// on the island — rather than to the open sea. Flood-fills the water cells 4-way and
+        /// discards any body that reaches the map border, which is the definition of "open
+        /// ocean" that survives a re-themed map: no rect, no ellipse, no assumption about
+        /// which tilemap layers a water cell happens to carry.</summary>
+        private bool[,] InlandWaterMask(OverworldMap map)
+        {
+            var water = new bool[MapCells, MapCells];
+            for (int x = 0; x < MapCells; x++)
+            {
+                for (int y = 0; y < MapCells; y++)
+                {
+                    water[x, y] = map.TestHasWater(new Vector3Int(x, y, 0));
+                }
+            }
+
+            var visited = new bool[MapCells, MapCells];
+            var inland = new bool[MapCells, MapCells];
+            var body = new List<Vector3Int>();
+            var stack = new List<Vector3Int>();
+            int[] dx = { -1, 1, 0, 0 };
+            int[] dy = { 0, 0, -1, 1 };
+
+            for (int sx = 0; sx < MapCells; sx++)
+            {
+                for (int sy = 0; sy < MapCells; sy++)
+                {
+                    if (!water[sx, sy] || visited[sx, sy])
+                    {
+                        continue;
+                    }
+
+                    body.Clear();
+                    stack.Clear();
+                    stack.Add(new Vector3Int(sx, sy, 0));
+                    visited[sx, sy] = true;
+                    bool touchesBorder = false;
+
+                    while (stack.Count > 0)
+                    {
+                        Vector3Int p = stack[stack.Count - 1];
+                        stack.RemoveAt(stack.Count - 1);
+                        body.Add(p);
+                        if (p.x == 0 || p.y == 0 || p.x == MapCells - 1 || p.y == MapCells - 1)
                         {
-                            cell = c;
-                            return true;
+                            touchesBorder = true; // reaches the edge of the world: open sea
+                        }
+
+                        for (int i = 0; i < 4; i++)
+                        {
+                            int nx = p.x + dx[i], ny = p.y + dy[i];
+                            if (nx < 0 || ny < 0 || nx >= MapCells || ny >= MapCells ||
+                                !water[nx, ny] || visited[nx, ny])
+                            {
+                                continue;
+                            }
+
+                            visited[nx, ny] = true;
+                            stack.Add(new Vector3Int(nx, ny, 0));
+                        }
+                    }
+
+                    if (!touchesBorder)
+                    {
+                        for (int i = 0; i < body.Count; i++)
+                        {
+                            inland[body[i].x, body[i].y] = true;
                         }
                     }
                 }
             }
 
-            cell = Vector3Int.zero;
-            return false;
+            return inland;
         }
 
         /// <summary>Locate a tree tile on the Obstacles tilemap that has a walkable

@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using DinoDigger.Core;
+using DinoDigger.Dig;
+using DinoDigger.Overworld;
 
 namespace DinoDigger.Testing
 {
@@ -252,6 +254,14 @@ namespace DinoDigger.Testing
                 gm.TestConfig.MoundRespawnSeconds = _cfgRespawn;
                 gm.TestConfig.ParentGateHoldSeconds = _cfgParentGate;
             }
+
+            // Static test pins are always cleared here as well as in each case's own finally:
+            // a pin that leaked into a later case would change that case's gameplay silently
+            // (a frozen build queue, an unstaffed dig crew), which is far worse to debug than
+            // the flake it was pinning.
+            TownController.TestSuspendBuilds = false;
+            DigModeController.TestSuppressCrew = false;
+            DigModeController.TestForceSurpriseKind = -1;
         }
 
         private void OnLog(string condition, string stackTrace, LogType type)

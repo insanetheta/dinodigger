@@ -403,68 +403,113 @@ namespace DinoDigger.Testing
             OverworldMap map = gm.TestMap;
             ctx.Assert(bh != null && map != null, "missing backhoe/map");
             TownController town = EnsureTown(ctx);
+            GameConfig cfg = gm.TestConfig;
 
-            // A buddy that must keep following the PLAYER, plus two residents so the town
-            // has a genuine crew and construction is really active.
-            DinoController buddy = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Kid);
-            DinoController res1 = gm.TestSpawnDino(DinoType.Triceratops, GrowthStage.Big);
-            DinoController res2 = gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Big);
-            gm.TestMakeResident(res1, teleportIntoMeadow: true);
-            gm.TestMakeResident(res2, teleportIntoMeadow: true);
-            yield return ctx.WaitFrames(2);
-            ctx.Assert(buddy.IsBuddy, "buddy is not a buddy");
-
-            gm.Save.Data.TreasureCount = gm.TestConfig.TownBuildingPrice(0);
-            yield return ctx.WaitUntil(() => town.TestActiveSite != null);
-            yield return ctx.WaitUntil(() => AnyBuilderWorking(town)); // build genuinely underway
-
-            // (1) The buddy is never drafted onto the crew.
-            IReadOnlyList<DinoController> crew = town.TestBuilders;
-            for (int i = 0; i < crew.Count; i++)
+            float savedPerState = cfg.TownSecondsPerBuildState;
+            try
             {
-                ctx.Assert(crew[i] != buddy, "the buddy was drafted to build (forbidden)");
-            }
+                // Park the per-state pacing so the site CANNOT finish while the case is still
+                // checking (BigDinoBuildsFaster's 1000s pattern). This case verifies player
+                // control during ACTIVE construction, and every check below re-asserts the
+                // site is still there — but the crew keeps working the whole time, and with
+                // the waits now budgeted generously enough to absorb a load hitch, two Big
+                // builders could legitimately complete the building mid-verification ("the
+                // build vanished mid-check"). Parking the pacing does not weaken anything:
+                // ground is still broken from the wallet, the crew still commutes and works
+                // on site for real, the site just never reaches its last state. Build
+                // PROGRESSION is BuildAdvancesThroughStates' and BuildingFinishesAndCelebrates'
+                // job, not this one's.
+                cfg.TownSecondsPerBuildState = 1000f;
 
-            // (2) Parked backhoe holds position for 2s of active construction — nothing
-            // commandeers it or nudges it toward the site.
-            Vector3 park = FindDistinctWalkable(map, bh.transform.position);
-            bh.MoveTo(park);
-            yield return ctx.WaitUntil(() => !bh.IsMoving);
-            Vector3 held = bh.transform.position;
-            float t = 0f;
-            while (t < 2f)
+                // A buddy that must keep following the PLAYER, plus two residents so the town
+                // has a genuine crew and construction is really active.
+                DinoController buddy = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Kid);
+                DinoController res1 = gm.TestSpawnDino(DinoType.Triceratops, GrowthStage.Big);
+                DinoController res2 = gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Big);
+                gm.TestMakeResident(res1, teleportIntoMeadow: true);
+                gm.TestMakeResident(res2, teleportIntoMeadow: true);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(buddy.IsBuddy, "buddy is not a buddy");
+
+                gm.Save.Data.TreasureCount = cfg.TownBuildingPrice(0);
+                yield return ctx.WaitUntil(() => town.TestActiveSite != null, 15f,
+                    "town never broke ground on a fully funded plot");
+
+                // The crew has to WALK from the meadow to the plot, so this is the case's one
+                // genuinely long wait — budget it for a cross-island commute plus load hitches,
+                // and name it so a wedged commute doesn't read as "the whole case timed out".
+                yield return ctx.WaitUntil(() => AnyBuilderWorking(town), 40f,
+                    "no builder ever clocked in at the site (commute wedged?)");
+
+                // (1) The buddy is never drafted onto the crew.
+                IReadOnlyList<DinoController> crew = town.TestBuilders;
+                for (int i = 0; i < crew.Count; i++)
+                {
+                    ctx.Assert(crew[i] != buddy, "the buddy was drafted to build (forbidden)");
+                }
+
+                // (2) Parked backhoe holds position for 2s of active construction — nothing
+                // commandeers it or nudges it toward the site.
+                Vector3 park = FindMoveTarget(map, bh.transform.position, 1.5f);
+                ctx.Assert((park - bh.transform.position).sqrMagnitude > 0.25f,
+                    "no distinct parking spot near the backhoe");
+                Vector3 preParkPos = bh.transform.position;
+                bh.MoveTo(park);
+                yield return ctx.WaitUntil(() => !bh.IsMoving, LegBudget(preParkPos, park),
+                    "backhoe never reached its parking spot");
+                Vector3 held = bh.transform.position;
+                float t = 0f;
+                while (t < 2f)
+                {
+                    ctx.Assert((bh.transform.position - held).sqrMagnitude < 0.0004f,
+                        "backhoe auto-moved during construction (player character was commandeered)");
+                    ctx.Assert(town.TestActiveSite != null, "the build vanished mid-check");
+                    t += Time.deltaTime;
+                    yield return null;
+                }
+
+                // (3) Player tap-to-move still works normally, mid-construction. The target is
+                // picked with a real minimum SEPARATION (not merely a different cell): on this
+                // isometric grid the neighbouring cell centre can sit well under the 0.5-unit
+                // movement threshold this then asserts, which made the old helper's target a
+                // coin flip against its own assertion.
+                Vector3 moveTarget = FindMoveTarget(map, bh.transform.position, 1.5f);
+                ctx.Assert((moveTarget - bh.transform.position).sqrMagnitude > 0.25f, "no distinct move target");
+                gm.TestTapWorldRouted(moveTarget);
+                yield return ctx.WaitUntil(() => !bh.IsMoving, LegBudget(held, moveTarget),
+                    "tap-to-move never completed during construction");
+                ctx.Assert((bh.transform.position - held).sqrMagnitude > 0.25f,
+                    "tap-to-move did not move the backhoe during construction");
+                ctx.Assert(map.IsWalkableWorld(bh.transform.position), "backhoe ended off a walkable cell");
+                ctx.Assert(town.TestActiveSite != null,
+                    "the build vanished during the tap-move check (pacing pin failed?)");
+
+                // (4) The buddy stays a follower (not pulled to the town) and follows the player.
+                ctx.Assert(buddy.IsBuddy, "buddy stopped being a buddy during construction");
+                yield return ctx.WaitUntil(
+                    () => buddy != null && (buddy.transform.position - bh.transform.position).magnitude < 3.5f,
+                    20f, () => "buddy never caught up to the player during construction " +
+                               $"(gap {(buddy != null ? (buddy.transform.position - bh.transform.position).magnitude : -1f):F1})");
+
+                // (5) Dig entry still works while the town builds.
+                DigMound m = FirstActiveMound(gm);
+                ctx.Assert(m != null, "no active mound to dig");
+                Vector3 preDigPos = bh.transform.position;
+                bh.DriveToMound(m);
+                yield return ctx.WaitUntil(() => gm.State.Is(GameState.Dig),
+                    LegBudget(preDigPos, m.transform.position) + 5f, // + the dig-zoom transition
+                    "never entered dig during construction");
+                ctx.Assert(town.TestActiveSite != null,
+                    "the build vanished during the dig-entry check (pacing pin failed?)");
+
+                ctx.Log("during active construction: backhoe held then moved on tap, buddy kept following, dig entry worked");
+            }
+            finally
             {
-                ctx.Assert((bh.transform.position - held).sqrMagnitude < 0.0004f,
-                    "backhoe auto-moved during construction (player character was commandeered)");
-                ctx.Assert(town.TestActiveSite != null, "the build vanished mid-check");
-                t += Time.deltaTime;
-                yield return null;
+                cfg.TownSecondsPerBuildState = savedPerState;
+                gm.TestForceRoam();
+                gm.TestReset();
             }
-
-            // (3) Player tap-to-move still works normally, mid-construction.
-            Vector3 moveTarget = FindDistinctWalkable(map, bh.transform.position);
-            ctx.Assert((moveTarget - bh.transform.position).sqrMagnitude > 0.25f, "no distinct move target");
-            gm.TestTapWorldRouted(moveTarget);
-            yield return ctx.WaitUntil(() => !bh.IsMoving);
-            ctx.Assert((bh.transform.position - held).sqrMagnitude > 0.25f,
-                "tap-to-move did not move the backhoe during construction");
-            ctx.Assert(map.IsWalkableWorld(bh.transform.position), "backhoe ended off a walkable cell");
-
-            // (4) The buddy stays a follower (not pulled to the town) and follows the player.
-            ctx.Assert(buddy.IsBuddy, "buddy stopped being a buddy during construction");
-            yield return ctx.WaitUntil(() =>
-                buddy != null && (buddy.transform.position - bh.transform.position).magnitude < 3.5f);
-
-            // (5) Dig entry still works while the town builds.
-            DigMound m = FirstActiveMound(gm);
-            ctx.Assert(m != null, "no active mound to dig");
-            bh.DriveToMound(m);
-            yield return ctx.WaitUntil(() => gm.State.Is(GameState.Dig));
-            ctx.Assert(gm.State.Is(GameState.Dig), "could not enter dig during construction");
-
-            ctx.Log("during active construction: backhoe held then moved on tap, buddy kept following, dig entry worked");
-            gm.TestForceRoam();
-            gm.TestReset();
         }
 
         // ============================================= DinoDigger-pu3 Fruit Stand
@@ -890,6 +935,163 @@ namespace DinoDigger.Testing
             {
                 cfg.RecessSeconds = savedRecess;
                 cfg.TownSecondsPerBuildState = savedPerState;
+                gm.Save.Data.TownNextIndex = savedNext;
+                gm.Save.Data.TownBuildings = savedList ?? new List<TownBuildingSave>();
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
+        // ============================ DinoDigger-lie overlapping-tap determinism
+
+        // Two tappables can share a world point — a respawned dig mound landing on a finished
+        // building's footprint is the case that bit us — and Physics2D.OverlapPointAll hands
+        // them back in NO defined order, so the same tap used to open a dig on one frame and
+        // throw a party on the next. This case pins BOTH halves of the fix:
+        //   (1) FindTappable resolves an overlap by explicit PRIORITY (the transient mound
+        //       above the permanent building) with nearest-collider-centre as the tiebreak,
+        //       so the answer is identical every time it is asked;
+        //   (2) SpawnManager never places a respawn on a built plot in the first place, so
+        //       the overlap does not arise in real play at all.
+        // The overlap is FORCED here through test hooks (a mound parked on the plot), never
+        // waited for — the bug was rare precisely because the placement is random.
+        private IEnumerator Case_TapPriorityOverlap(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            TownController town = EnsureTown(ctx);
+            OverworldMap map = gm.TestMap;
+            ctx.Assert(town.TestArea != null && town.TestArea.PlotCount >= 1, "no town plots");
+
+            int savedNext = gm.Save.Data.TownNextIndex;
+            List<TownBuildingSave> savedList = gm.Save.Data.TownBuildings;
+            int savedWallet = gm.Save.Data.TreasureCount;
+            RectInt savedDistrict = map.TestTownDistrict;
+            bool hadDistrict = map.TestHasTownDistrict;
+            DigMound parked = null;
+            Vector3 moundHome = Vector3.zero;
+            TownController.TestSuspendBuilds = true; // no build may start mid-case
+            try
+            {
+                // Author building 0 FINISHED (the only tappable building in the plaza).
+                gm.Save.Data.TreasureCount = 0;
+                gm.Save.Data.TownNextIndex = 1;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>
+                {
+                    new TownBuildingSave { Finished = true, State = BuildingController.ConstructionStates },
+                };
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+
+                Transform b0t = town.transform.Find("Building_0");
+                BuildingController b0 = b0t != null ? b0t.GetComponent<BuildingController>() : null;
+                ctx.Assert(b0 != null && b0.IsFinished, "building 0 not restored finished");
+                Collider2D bCol = b0.GetComponent<Collider2D>();
+                ctx.Assert(bCol != null, "finished building has no tap collider");
+
+                // ---- (a) Building alone: a tap there resolves to the building. ----
+                // Pick a point where the building is the ONLY tappable, so the overlap below
+                // is exactly two objects and the expected answer is unambiguous.
+                yield return new WaitForFixedUpdate();
+                Physics2D.SyncTransforms();
+                ctx.Assert(FindBuildingOnlyPoint(b0, out Vector3 overlapPoint),
+                    "no point on the finished building is free of other tappables");
+                ctx.Assert(gm.TestFindTappable(overlapPoint) == (Component)b0,
+                    "a tap on an unobstructed finished building did not resolve to it");
+
+                // ---- (b) Force the overlap: park an active mound on the building. ----
+                DigMound mound = FirstActiveMound(gm);
+                ctx.Assert(mound != null, "no active mound to park on the plot");
+                parked = mound;
+                moundHome = mound.transform.position; // put it back when the case ends
+                mound.Respawn(overlapPoint); // respawn pops in from scale 0, so wait for it
+
+                Collider2D mCol = mound.GetComponent<Collider2D>();
+                ctx.Assert(mCol != null, "mound has no collider");
+                yield return ctx.WaitUntil(() =>
+                {
+                    Physics2D.SyncTransforms();
+                    return mCol.OverlapPoint(overlapPoint) && bCol.OverlapPoint(overlapPoint);
+                }, 10f, "could not force a mound/building collider overlap");
+
+                // The whole bug: ask the same question repeatedly and get one answer. Ten
+                // asks (physics may reorder its results between queries) must all agree, and
+                // agree with the documented priority — the mound, the transient thing the
+                // toddler is aiming at, not the building underneath it.
+                Component first = gm.TestFindTappable(overlapPoint);
+                ctx.Assert(first == (Component)mound,
+                    $"overlap resolved to {(first != null ? first.GetType().Name : "nothing")} " +
+                    "(expected the mound: dino > pickup > mound > building)");
+                for (int i = 0; i < 10; i++)
+                {
+                    ctx.Assert(gm.TestFindTappable(overlapPoint) == first,
+                        $"overlap resolution changed between identical taps (ask {i + 1})");
+                    yield return null;
+                }
+
+                // And the routed tap really takes the mound's branch: no party starts.
+                int fbBefore = town.TestRecessTapFeedback;
+                gm.TestTapWorldRouted(overlapPoint);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(town.TestRecessTapFeedback == fbBefore,
+                    "the overlapping tap reached the building (should have gone to the mound)");
+                ctx.Assert(town.TestRecessCount == 0, "a recess started from the overlapping tap");
+
+                // ---- (c) Placement: a respawn may never land on a built plot. ----
+                // Test the rule in ISOLATION: drop the district rect (a CELL-measured guard
+                // that already covers the plaza and would mask the new one) and park the
+                // player well away from the plot (its 4-unit clearance would mask it too).
+                // With both out of the way, only the built-plot rule can refuse the plot —
+                // so this also proves the town actually reached SpawnManager.
+                // Teleporting the backhoe doubles as cancelling the dig drive the tap above
+                // started, so the next case begins from a parked player.
+                Vector3 plot0 = town.BuildingWorld(0);
+                BackhoeController bh = gm.TestBackhoe;
+                if (bh != null)
+                {
+                    Vector3 far = FindMoveTarget(map, plot0, 8f);
+                    ctx.Assert((far - plot0).sqrMagnitude > 25f, "nowhere to park the player clear of the plot");
+                    bh.TestTeleport(far, bh.Facing);
+                }
+
+                ctx.Assert(town.NearBuiltPlot(plot0, 1.2f), "built plot 0 not recognised as built");
+                ctx.Assert(!town.NearBuiltPlot(plot0 + new Vector3(4f, 0f, 0f), 1.2f),
+                    "a point 4 units off the plot counted as built");
+
+                map.SetTownDistrict(new RectInt(0, 0, 0, 0)); // district guard off
+                ctx.Assert(!gm.Spawn.TestCanPlace(plot0, mound),
+                    "a mound respawn was allowed onto a finished building's plot");
+                ctx.Assert(!gm.Spawn.TestCanPlace(plot0 + new Vector3(0.8f, 0f, 0f), mound),
+                    "a mound respawn was allowed to clip a finished building's footprint");
+
+                // Sanity: the filter is not simply refusing everything.
+                bool anyAllowed = false;
+                for (int i = 0; i < 200 && !anyAllowed; i++)
+                {
+                    if (map.TryRandomWalkableCell(out Vector3Int c))
+                    {
+                        anyAllowed = gm.Spawn.TestCanPlace(map.CellCenter(c), mound);
+                    }
+                }
+
+                ctx.Assert(anyAllowed, "the respawn filter rejected every walkable cell on the island");
+
+                ctx.Log("overlapping mound+building tap resolves to the mound, identically across " +
+                        "11 asks; respawn placement refuses built plots (and their 1.2u ring)");
+            }
+            finally
+            {
+                if (hadDistrict)
+                {
+                    map.SetTownDistrict(savedDistrict);
+                }
+
+                if (parked != null)
+                {
+                    parked.Respawn(moundHome); // never leave a mound sitting on the plaza
+                }
+
+                TownController.TestSuspendBuilds = false;
                 gm.Save.Data.TownNextIndex = savedNext;
                 gm.Save.Data.TownBuildings = savedList ?? new List<TownBuildingSave>();
                 gm.Save.Data.TreasureCount = savedWallet;
@@ -1554,12 +1756,25 @@ namespace DinoDigger.Testing
         }
 
         /// <summary>Route a REAL world tap (through GameManager.FindTappable) onto a finished
-        /// building, choosing a point on its collider where the building is the ONLY ITappable so
-        /// the routing is deterministic regardless of OverlapPointAll ordering (and immune to a
-        /// respawned mound clipping part of the footprint). Returns false if no clear point exists
-        /// (the whole footprint is covered by another tappable — effectively never).</summary>
+        /// building at a point where the building is the ONLY ITappable, so the case asserts the
+        /// building's own behaviour rather than the tap-priority order. Returns false if no clear
+        /// point exists (the whole footprint is covered by another tappable — effectively never).</summary>
         private bool RoutedTapOnBuilding(GameManager gm, BuildingController b, int index)
         {
+            if (!FindBuildingOnlyPoint(b, out Vector3 p))
+            {
+                return false;
+            }
+
+            gm.TestTapWorldRouted(p);
+            return true;
+        }
+
+        /// <summary>A point on this building's collider where NOTHING else tappable overlaps.
+        /// Tries spots high on the sprite first (least likely to share ground with a mound).</summary>
+        private bool FindBuildingOnlyPoint(BuildingController b, out Vector3 point)
+        {
+            point = Vector3.zero;
             Collider2D col = b != null ? b.GetComponent<Collider2D>() : null;
             if (col == null)
             {
@@ -1567,7 +1782,6 @@ namespace DinoDigger.Testing
             }
 
             Bounds bb = col.bounds;
-            // Candidates high on the sprite first (least likely to collide with a ground mound).
             Vector3[] cands =
             {
                 bb.center + new Vector3(0f, bb.extents.y * 0.6f, 0f),
@@ -1581,7 +1795,7 @@ namespace DinoDigger.Testing
             {
                 if (OnlyBuildingTappable(cands[c], b))
                 {
-                    gm.TestTapWorldRouted(cands[c]);
+                    point = cands[c];
                     return true;
                 }
             }
@@ -1590,8 +1804,8 @@ namespace DinoDigger.Testing
         }
 
         /// <summary>True when the ONLY ITappable overlapping <paramref name="p"/> is
-        /// <paramref name="b"/> — so GameManager.FindTappable (which returns the first ITappable
-        /// hit) is guaranteed to resolve a tap there to this building.</summary>
+        /// <paramref name="b"/> — so GameManager.FindTappable resolves a tap there to this
+        /// building whatever the tap-priority order says.</summary>
         private bool OnlyBuildingTappable(Vector3 p, BuildingController b)
         {
             Collider2D[] hits = Physics2D.OverlapPointAll(p);

@@ -107,6 +107,39 @@ namespace DinoDigger.Testing
             }
         }
 
+        /// <summary>
+        /// Poll until the condition holds, failing with a NAMED message if it has not held
+        /// within <paramref name="budgetSeconds"/> of wall clock. Prefer this over the
+        /// unbounded overload for any wait that can legitimately never finish: the case then
+        /// reports which step wedged instead of an opaque "timeout after Ns".
+        ///
+        /// Budgets are realtime (the runner's own timeout is) so keep them generous — this
+        /// machine often runs two editors plus heavy agents, and a load hitch must never fail
+        /// a case that is making progress. Where the wait scales with a distance or a step
+        /// count, size the budget from that rather than picking a flat number.
+        /// </summary>
+        public IEnumerator WaitUntil(Func<bool> condition, float budgetSeconds, string what)
+        {
+            return WaitUntil(condition, budgetSeconds, () => what);
+        }
+
+        /// <summary>As above, but the message is built ON FAILURE — so it can report how far
+        /// the wait actually got (counts seen, position reached) instead of the state the
+        /// caller had before waiting.</summary>
+        public IEnumerator WaitUntil(Func<bool> condition, float budgetSeconds, Func<string> what)
+        {
+            float deadline = Time.realtimeSinceStartup + budgetSeconds;
+            while (!condition())
+            {
+                if (Time.realtimeSinceStartup > deadline)
+                {
+                    throw new TestFailure($"{what()} (waited {budgetSeconds:F0}s)");
+                }
+
+                yield return null;
+            }
+        }
+
         // ----- Assertions -----
 
         public void Assert(bool condition, string message)
