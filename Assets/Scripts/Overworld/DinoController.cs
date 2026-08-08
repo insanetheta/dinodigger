@@ -83,6 +83,15 @@ namespace DinoDigger.Overworld
         private Vector3 _eatTarget;
         private Action _onReachedFood;
 
+        // Shared celebration hop (DinoDigger-5y9 tap-to-cheer, DinoDigger-0gd completion
+        // choreography). Deliberately NOT Tween.PunchScale: this pop resolves against the LIVE
+        // RestingScale every frame, so it can never inherit — and then bake in — another tween's
+        // in-flight size. _cheerHold silences the on-site work bob for the hop's duration, because
+        // that bob IS a PunchScale: let it fire mid-hop and it would capture the inflated scale as
+        // its base and settle the builder there for good.
+        private Coroutine _cheerFx;
+        private float _cheerHold;
+
         // Dance / nap.
         private bool _busyDancing;
         private bool _napping;
@@ -171,6 +180,12 @@ namespace DinoDigger.Overworld
         /// mid-flight can never strand a dino at the wrong size.</summary>
         public void RestoreRestingPose()
         {
+            // A celebration hop is a scale writer like any other: stop it here (rather than let
+            // it settle a frame later) so "restore" really is the last word on this transform.
+            Tween.Stop(_cheerFx);
+            _cheerFx = null;
+            _cheerHold = 0f;
+
             if (!_napping)
             {
                 transform.localRotation = Quaternion.identity;
@@ -327,6 +342,11 @@ namespace DinoDigger.Overworld
             if (_onVisit && _mode != Mode.Travel && _mode != Mode.Visit)
             {
                 EndVisitState();
+            }
+
+            if (_cheerHold > 0f)
+            {
+                _cheerHold -= Time.deltaTime; // work bob stays quiet until the hop has landed
             }
 
             switch (_mode)
@@ -873,7 +893,14 @@ namespace DinoDigger.Overworld
             if (_workBobTimer <= 0f)
             {
                 _workBobTimer = UnityEngine.Random.Range(0.55f, 0.95f);
-                Tween.PunchScale(transform, 0.14f, 0.4f);
+
+                // Skipped while a celebration hop owns the scale (see _cheerHold): this bob
+                // captures its base off the transform, so firing it mid-hop would bake the
+                // hop's inflated size in permanently. The mallet keeps swinging either way.
+                if (_cheerHold <= 0f)
+                {
+                    Tween.PunchScale(transform, 0.14f, 0.4f);
+                }
 
                 // Rock the mallet in time with the work bob (rotation only — LateUpdate
                 // owns its position/scale, so the two never fight). No-op without a mallet.
@@ -1119,6 +1146,47 @@ namespace DinoDigger.Overworld
                 if (this != null && _mode == Mode.Dance)
                 {
                     ResumeRole(); // something else (eat/parade) may have taken over meanwhile
+                }
+            });
+        }
+
+        /// <summary>Arms-up celebration hop: a bouncy scale pop that ALWAYS resolves back to
+        /// <see cref="RestingScale"/>. Used by the town's tap-to-cheer (the crew bounces when the
+        /// player cheers the site on) and by the completion choreography (everyone nearby cheers
+        /// the finished building).
+        ///
+        /// PURE DECORATION — it changes no mode, cancels no walk and claims no dino: a builder
+        /// keeps building through it, a resident keeps strolling, the parade keeps parading. That
+        /// is why the town may play it on anyone without asking. Two safety rules make it safe to
+        /// fire at any moment: an ambient VISITOR is refused outright (TownLifeController owns a
+        /// visitor's pose and would fight over it), and any punch already running is handed over
+        /// first — see <see cref="Tween.CancelPunch"/> and <see cref="_cheerHold"/>.</summary>
+        public void CheerHop(float amount = 0.3f, float duration = 0.45f)
+        {
+            if (_onVisit)
+            {
+                return; // the town-life scene is posing this body; never fight it
+            }
+
+            Tween.CancelPunch(transform); // hand the scale over from any in-flight punch
+            Tween.Stop(_cheerFx);
+            _cheerHold = Mathf.Max(0f, duration);
+
+            Transform t = transform;
+            _cheerFx = Tween.Run(duration, k =>
+            {
+                if (t != null)
+                {
+                    // Same decaying sin envelope as Tween.PunchScale, but multiplied against the
+                    // LIVE resting scale rather than a sampled one.
+                    float env = Mathf.Sin(k * Mathf.PI) * (1f - k);
+                    t.localScale = RestingScale * (1f + amount * env);
+                }
+            }, () =>
+            {
+                if (t != null)
+                {
+                    t.localScale = RestingScale;
                 }
             });
         }

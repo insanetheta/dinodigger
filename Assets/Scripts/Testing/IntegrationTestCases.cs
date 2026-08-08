@@ -75,7 +75,10 @@ namespace DinoDigger.Testing
                 new TestCase("CoinsAutoSpendStartsBuild",    25f, Case_CoinsAutoSpendStartsBuild),
                 new TestCase("BuildAdvancesThroughStates",   45f, Case_BuildAdvancesThroughStates),
                 new TestCase("BuilderCommutesFromMeadow",    45f, Case_BuilderCommutesFromMeadow),
-                new TestCase("BuildingFinishesAndCelebrates", 50f, Case_BuildingFinishesAndCelebrates),
+                // Headroom for the completion choreography's debut visit (DinoDigger-0gd): if a
+                // builder happens to be home and free when the debut fires, it may stroll back
+                // to the new building before finally settling in the meadow.
+                new TestCase("BuildingFinishesAndCelebrates", 70f, Case_BuildingFinishesAndCelebrates),
                 // Includes a cross-island builder commute (40s of its own budget).
                 new TestCase("PlayerControlUnaffectedByBuild", 100f, Case_PlayerControlUnaffectedByBuild),
                 new TestCase("TapPriorityOverlap",    40f, Case_TapPriorityOverlap),
@@ -85,6 +88,11 @@ namespace DinoDigger.Testing
                 new TestCase("SnackBuilders",         45f, Case_SnackBuilders),
                 new TestCase("RecessTime",            45f, Case_RecessTime),
                 new TestCase("EachBuildingPlaysInteraction", 150f, Case_EachBuildingPlaysInteraction),
+                // Four 40-frame measurement windows plus a meadow-to-plot commute.
+                new TestCase("TapToCheerSpeedsBuild",  70f, Case_TapToCheerSpeedsBuild),
+                // A whole build, the celebration beat, the debut interaction, and the walk home.
+                new TestCase("CelebrationNoConsoleErrors", 120f, Case_CelebrationNoConsoleErrors),
+                new TestCase("AttractShowsTownGrowth",  90f, Case_AttractShowsTownGrowth),
                 new TestCase("BerryPatch",            40f, Case_BerryPatch),
                 // Runs late (after the count-exact TreasureCounter and the town cases): a
                 // buddy dig can finish a round and bank a random amount of treasure, which

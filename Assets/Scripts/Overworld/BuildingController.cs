@@ -51,11 +51,13 @@ namespace DinoDigger.Overworld
         private float _worked;     // seconds of builder work banked toward the next state
         private float _perState = 8f;
 
-        // Recess Time (DinoDigger-x07): once FINISHED, the building becomes a tap target — a
-        // BoxCollider2D sized to its sprite plus ITappable routing, so GameManager.FindTappable
-        // picks it up and a tap throws a 15s dino party. Wired to its owning TownController +
-        // build-order index so the tap can reach the recess service. Under-construction sites
-        // stay non-tappable (no collider until IsFinished).
+        // Tap routing. A building is a tap target from the moment it breaks ground — a
+        // BoxCollider2D sized to its CURRENT sprite plus ITappable routing, so
+        // GameManager.FindTappable picks it up — and what a tap MEANS depends on the state:
+        //   under construction (DinoDigger-5y9) -> tap-to-cheer: the crew gets a speed burst
+        //   FINISHED          (DinoDigger-x07) -> Recess Time: a 15s dino party
+        // Wired to its owning TownController + build-order index so either tap can reach the
+        // town service.
         private TownController _town;
         private int _index = -1;
         private BoxCollider2D _tapCollider;
@@ -106,38 +108,38 @@ namespace DinoDigger.Overworld
             }
 
             ApplyVisual();
-            RefreshTappable(); // a restored-finished building is immediately a tap target
+            RefreshTappable(); // tappable from break-ground: cheer now, party once finished
         }
 
         // TEST HOOK (integration runner; no reflection).
         internal bool TestIsTappable => _tapCollider != null;
 
         /// <summary>Wire the building to its owning town service + build-order index so a tap
-        /// can reach the recess flow, then (re)evaluate its tap collider. Called by
-        /// <see cref="TownController"/> right after <see cref="Init"/>, on both the fresh
-        /// break-ground and the reload paths.</summary>
-        internal void WireRecess(TownController town, int index)
+        /// can reach the town (cheer while building, recess once finished), then (re)evaluate
+        /// its tap collider. Called by <see cref="TownController"/> right after
+        /// <see cref="Init"/>, on both the fresh break-ground and the reload paths.</summary>
+        internal void WireTown(TownController town, int index)
         {
             _town = town;
             _index = index;
             RefreshTappable();
         }
 
-        /// <summary>A finished building is a tap target: give it a BoxCollider2D sized to its
-        /// sprite (a sensible 1x1 default in placeholder-only, no-art runs) so
-        /// <see cref="GameManager.FindTappable"/> resolves the tap to this building. No-op while
-        /// under construction (never tappable) and idempotent once the collider exists.</summary>
+        /// <summary>Keep this building a tap target: a BoxCollider2D sized to its CURRENT sprite
+        /// (a sensible 1x1 default in placeholder-only, no-art runs) so
+        /// <see cref="GameManager.FindTappable"/> resolves a tap to this building. Created once,
+        /// then RE-FITTED on every state repaint — each construction state is a different size,
+        /// and a collider left at the ground-break footprint would leave half a finished building
+        /// (or half a nearly-done site) untappable.</summary>
         private void RefreshTappable()
         {
-            if (!IsFinished || _tapCollider != null)
-            {
-                return;
-            }
-
-            _tapCollider = gameObject.GetComponent<BoxCollider2D>();
             if (_tapCollider == null)
             {
-                _tapCollider = gameObject.AddComponent<BoxCollider2D>();
+                _tapCollider = gameObject.GetComponent<BoxCollider2D>();
+                if (_tapCollider == null)
+                {
+                    _tapCollider = gameObject.AddComponent<BoxCollider2D>();
+                }
             }
 
             _tapCollider.isTrigger = true;
@@ -155,17 +157,21 @@ namespace DinoDigger.Overworld
             }
         }
 
-        /// <summary>Tap on a FINISHED building: route to the town's recess service (bounce +
-        /// chime + confetti, and a party if any residents are free). The collider only exists
-        /// once finished, so the IsFinished guard is just belt-and-braces.</summary>
+        /// <summary>Tap on a building, routed by its state — a toddler taps the same shape and
+        /// always gets an answer, it just means something different while the scaffolding is up:
+        ///   FINISHED           -> the recess service (bounce + chime + confetti, and a party).
+        ///   under construction -> tap-to-cheer (DinoDigger-5y9): confetti at the site, the crew
+        ///                         hops, and their work speeds up for a few seconds.
+        /// The building itself decides nothing beyond which service to call.</summary>
         public void OnTapped(Vector2 worldPoint)
         {
-            if (!IsFinished)
+            if (IsFinished)
             {
+                _town?.OnBuildingTapped(this, _index);
                 return;
             }
 
-            _town?.OnBuildingTapped(this, _index);
+            _town?.OnSiteCheered(this, _index);
         }
 
         /// <summary>Bank <paramref name="seconds"/> of builder work; advances one state per
@@ -186,11 +192,6 @@ namespace DinoDigger.Overworld
                 _state++;
                 advanced++;
                 ApplyVisual();
-            }
-
-            if (IsFinished)
-            {
-                RefreshTappable(); // just finished: becomes a tap target for a recess party
             }
 
             return advanced;
@@ -238,6 +239,9 @@ namespace DinoDigger.Overworld
             {
                 ApplyFruitStandDressing();
             }
+
+            // Each state is a different silhouette, so the tap target follows the art.
+            RefreshTappable();
         }
 
         /// <summary>The sprite for construction <paramref name="state"/> (0..3, or

@@ -17,8 +17,20 @@ namespace DinoDigger.Overworld
 
         private Vector3 _digCenter;
         private bool _digMode;
-        private bool _focusMode;   // parked on a focus point (nest ceremony) — no roam follow
+        private bool _focusMode;   // parked on a focus point (nest ceremony, town tour) — no roam follow
         private bool _transitioning;
+
+        // The camera move currently in flight. Every transition below stops the previous one
+        // before starting its own: two live tweens would both write transform.position each
+        // frame and the loser would still be fighting for it. This is what lets a glide be
+        // CANCELLED mid-flight (the idle-attract town tour, DinoDigger-sbc, turns straight
+        // round on a player tap) instead of finishing on top of the reversal.
+        private Coroutine _move;
+
+        // TEST HOOKS (integration runner; no reflection).
+        internal bool TestFocused => _focusMode;
+        internal bool TestTransitioning => _transitioning;
+        internal Transform TestTarget => _target;
 
         private void Awake()
         {
@@ -84,7 +96,8 @@ namespace DinoDigger.Overworld
             float fromSize = _camera != null ? _camera.orthographicSize : 5.5f;
             float toSize = _config != null ? _config.DigOrthoSize : 3.2f;
 
-            Tween.Run(dur, t =>
+            Tween.Stop(_move);
+            _move = Tween.Run(dur, t =>
             {
                 if (_camera == null)
                 {
@@ -95,15 +108,18 @@ namespace DinoDigger.Overworld
                 _camera.orthographicSize = Mathf.Lerp(fromSize, toSize, t);
             }, () =>
             {
+                _move = null;
                 _transitioning = false;
                 _digMode = true;
                 onArrived?.Invoke();
             }, Tween.EaseInOutCubic);
         }
 
-        /// <summary>Ease to focus on a world point (nest ceremony), pushing in to the
-        /// ceremony ortho size. Reuses the same EaseInOutCubic as the dig transition and
-        /// stays parked there (no roam follow) until <see cref="ExitFocus"/>.</summary>
+        /// <summary>Ease to focus on a world point (the nest ceremony; the idle-attract town
+        /// tour, DinoDigger-sbc), pushing in to the ceremony ortho size. Reuses the same
+        /// EaseInOutCubic as the dig transition and stays parked there (no roam follow) until
+        /// <see cref="ExitFocus"/>. Calling ExitFocus mid-glide is well defined: it stops this
+        /// tween and reverses from wherever the camera has got to.</summary>
         public void EnterFocus(Vector3 worldPoint, System.Action onArrived)
         {
             _focusMode = true;
@@ -114,7 +130,8 @@ namespace DinoDigger.Overworld
             float fromSize = _camera != null ? _camera.orthographicSize : 5.5f;
             float toSize = _config != null ? _config.CeremonyOrthoSize : 4f;
 
-            Tween.Run(dur, t =>
+            Tween.Stop(_move);
+            _move = Tween.Run(dur, t =>
             {
                 if (_camera == null)
                 {
@@ -125,6 +142,7 @@ namespace DinoDigger.Overworld
                 _camera.orthographicSize = Mathf.Lerp(fromSize, toSize, t);
             }, () =>
             {
+                _move = null;
                 _transitioning = false;
                 onArrived?.Invoke();
             }, Tween.EaseInOutCubic);
@@ -143,7 +161,8 @@ namespace DinoDigger.Overworld
             float fromSize = _camera != null ? _camera.orthographicSize : 4f;
             float toSize = _config != null ? _config.RoamOrthoSize : 5.5f;
 
-            Tween.Run(dur, t =>
+            Tween.Stop(_move);
+            _move = Tween.Run(dur, t =>
             {
                 if (_camera == null)
                 {
@@ -154,14 +173,19 @@ namespace DinoDigger.Overworld
                 _camera.orthographicSize = Mathf.Lerp(fromSize, toSize, t);
             }, () =>
             {
+                _move = null;
                 _transitioning = false;
                 onArrived?.Invoke();
             }, Tween.EaseInOutCubic);
         }
 
-        /// <summary>TEST HOOK. Instantly cancel any dig transition and snap to the roam view.</summary>
+        /// <summary>TEST HOOK. Instantly cancel any dig/focus transition and snap to the roam
+        /// view. Stops the in-flight move first — a snap that leaves a tween running is undone
+        /// on the very next frame.</summary>
         internal void TestForceRoam()
         {
+            Tween.Stop(_move);
+            _move = null;
             _transitioning = false;
             _digMode = false;
             _focusMode = false;
@@ -191,7 +215,8 @@ namespace DinoDigger.Overworld
             float fromSize = _camera != null ? _camera.orthographicSize : 3.2f;
             float toSize = _config != null ? _config.RoamOrthoSize : 5.5f;
 
-            Tween.Run(dur, t =>
+            Tween.Stop(_move);
+            _move = Tween.Run(dur, t =>
             {
                 if (_camera == null)
                 {
@@ -202,6 +227,7 @@ namespace DinoDigger.Overworld
                 _camera.orthographicSize = Mathf.Lerp(fromSize, toSize, t);
             }, () =>
             {
+                _move = null;
                 _transitioning = false;
                 onArrived?.Invoke();
             }, Tween.EaseInOutCubic);

@@ -56,6 +56,24 @@ namespace DinoDigger.Testing
         private float _cfgRespawn;
         private float _cfgParentGate;
 
+        // TOWN TUNING BACKSTOP. GameConfig is a ScriptableObject ASSET: a value a case writes at
+        // runtime sticks to the asset for the rest of the editor session — it survives leaving
+        // play mode, so it leaks into every later case AND every later suite RUN. Each case does
+        // restore its own knobs in a finally (and those finallys really do run: RunCase disposes
+        // every abandoned enumerator on timeout, which executes their finally blocks), but a
+        // single missed restore is invisible until some unrelated case starts failing on the
+        // second run of the day. These are the town knobs cases park — accelerated or frozen
+        // build pacing, ambient visits, cheer windows — re-asserted after EVERY case so no run
+        // can inherit the previous one's tuning.
+        private float _cfgPerBuildState;
+        private float _cfgSnackSeconds;
+        private float _cfgCheerMultiplier;
+        private float _cfgCheerSeconds;
+        private float _cfgRecessSeconds;
+        private float _cfgVisitInterval;
+        private float _cfgVisitBeat;
+        private int _cfgMaxVisits;
+
 #if UNITY_EDITOR
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void AutoStart()
@@ -115,6 +133,27 @@ namespace DinoDigger.Testing
             {
                 _cfgRespawn = gm.TestConfig.MoundRespawnSeconds;
                 _cfgParentGate = gm.TestConfig.ParentGateHoldSeconds;
+                _cfgPerBuildState = gm.TestConfig.TownSecondsPerBuildState;
+                _cfgSnackSeconds = gm.TestConfig.SnackWorkSeconds;
+                _cfgCheerMultiplier = gm.TestConfig.TownCheerMultiplier;
+                _cfgCheerSeconds = gm.TestConfig.TownCheerSeconds;
+                _cfgRecessSeconds = gm.TestConfig.RecessSeconds;
+                _cfgVisitInterval = gm.TestConfig.TownVisitIntervalSeconds;
+                _cfgVisitBeat = gm.TestConfig.TownVisitBeatSeconds;
+                _cfgMaxVisits = gm.TestConfig.TownMaxVisits;
+            }
+
+            // START EVERY RUN BROKE. The save file outlives play mode (GameManager.OnDestroy
+            // writes on exit), so run N+1 of the suite boots holding whatever treasure run N
+            // banked — and the town builder auto-spends the instant it can afford a plot. That
+            // makes a second run of the same suite a DIFFERENT run: builds break ground during
+            // cases that never funded one, on plots those cases did not choose. Zeroing the
+            // in-memory wallet here is the one save field that changes behaviour on its own
+            // (dinos and town progress are wiped per case by TestReset), and it is what makes a
+            // suite run reproducible instead of a function of the day's history.
+            if (gm.Save != null && gm.Save.Data != null)
+            {
+                gm.Save.Data.TreasureCount = 0;
             }
 
             var ctx = new TestContext(gm);
@@ -253,6 +292,18 @@ namespace DinoDigger.Testing
             {
                 gm.TestConfig.MoundRespawnSeconds = _cfgRespawn;
                 gm.TestConfig.ParentGateHoldSeconds = _cfgParentGate;
+
+                // Town tuning: see the field comments — a ScriptableObject asset mutation
+                // outlives play mode, so this backstop is what keeps run 2 of the suite from
+                // playing under run 1's leftover pacing.
+                gm.TestConfig.TownSecondsPerBuildState = _cfgPerBuildState;
+                gm.TestConfig.SnackWorkSeconds = _cfgSnackSeconds;
+                gm.TestConfig.TownCheerMultiplier = _cfgCheerMultiplier;
+                gm.TestConfig.TownCheerSeconds = _cfgCheerSeconds;
+                gm.TestConfig.RecessSeconds = _cfgRecessSeconds;
+                gm.TestConfig.TownVisitIntervalSeconds = _cfgVisitInterval;
+                gm.TestConfig.TownVisitBeatSeconds = _cfgVisitBeat;
+                gm.TestConfig.TownMaxVisits = _cfgMaxVisits;
             }
 
             // Static test pins are always cleared here as well as in each case's own finally:

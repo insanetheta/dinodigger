@@ -53,6 +53,7 @@ namespace DinoDigger.Core
         private const float CourierDropDist = 0.9f;        // set down about here from the backhoe
         private const float ParadeSeconds = 8f;
         private const float CeremonyLingerSeconds = 3f;    // nest ceremony auto-returns after this
+        private const float TownTourLingerSeconds = 2.5f;  // idle-attract holds on the town this long
 
         // ---- Fruit Stand (surplus-fruit -> coins) tuning ----
         private const float SellerCommuteSpeed = 1.1f;     // resident hauling fruit to the stand
@@ -93,6 +94,17 @@ namespace DinoDigger.Core
         // ---- Shard-hatch ceremony state ----
         private bool _ceremonyActive;
         private DinoController _ceremonyDino;   // the freshly hatched baby waiting at the nest
+
+        // ---- Idle-attract town tour (DinoDigger-sbc) ----
+        // Once the town has something to show, some idle beats glide the camera over the
+        // district, hold a moment on the townsfolk/crew, and glide back. It borrows the nest
+        // ceremony's camera machinery (CameraFollow.EnterFocus/ExitFocus) but NOT its game
+        // state: the tour never leaves GameState.Roam, so a tap during it drives the backhoe
+        // exactly as it always would — the toddler rule, input always wins.
+        private bool _townTourActive;
+        private Coroutine _townTourLinger;
+        private bool _townTourNext = true;   // alternates: not every idle beat is a tour
+        private int _townTours;              // test-observable
 
         // ---- Egg-species uniqueness reservation ----
         // Species claimed by an egg that has been dug/finalized (after its unique
@@ -333,6 +345,80 @@ namespace DinoDigger.Core
             // A ripe berry is a harvest invite too — pulse the nearest one alongside the mound.
             NearestRipeSprout(from)?.AttractPulse();
             GameEvents.RaiseIdleAttract();
+            TryTownAttractTour();
+        }
+
+        /// <summary>Idle-attract's second act (DinoDigger-sbc): once Dino Town has something to
+        /// show — a finished building, or a site with a crew on it — some idle beats glide the
+        /// camera over to the district, linger long enough to watch a bit of townsfolk life or
+        /// construction, and glide back to the backhoe.
+        ///
+        /// Deliberately ALTERNATING rather than every beat: a tour that fired on every idle
+        /// would stop reading as a treat. With nothing built the whole thing is skipped and idle
+        /// attract stays exactly what it always was (honk + nearest-mound/berry pulse).
+        ///
+        /// The tour takes NOTHING away from the player: the game stays in Roam (so taps route
+        /// normally), the backhoe is untouched, and the first tap cancels it — see
+        /// <see cref="CancelTownAttractTour"/>.</summary>
+        private void TryTownAttractTour()
+        {
+            if (_townTourActive || _cameraFollow == null || _town == null || !_town.HasVisibleTown)
+            {
+                return;
+            }
+
+            if (State == null || !State.Is(GameState.Roam) || _ceremonyActive ||
+                (_digMode != null && _digMode.IsOpen))
+            {
+                return; // never over a dig, a ceremony, or a transition
+            }
+
+            if (_paradeActive || (_backhoe != null && _backhoe.IsMoving))
+            {
+                // Never yank the camera off a MOVING backhoe (the toddler is watching their
+                // digger go somewhere, and losing sight of it is the opposite of an attract),
+                // and never upstage the milestone parade — it is already the show.
+                return;
+            }
+
+            bool tourNow = _townTourNext;
+            _townTourNext = !_townTourNext;
+            if (!tourNow)
+            {
+                return; // this beat is a plain honk; the next qualifying one tours
+            }
+
+            _townTourActive = true;
+            _townTours++;
+            _cameraFollow.EnterFocus(_town.AttractFocusPoint, () =>
+            {
+                if (!_townTourActive)
+                {
+                    return; // cancelled while gliding in — the return trip is already running
+                }
+
+                _townTourLinger = Tween.After(TownTourLingerSeconds, CancelTownAttractTour);
+            });
+        }
+
+        /// <summary>End the attract tour and hand the camera back to the backhoe. Used for BOTH
+        /// exits — the linger timer running out and a player tap cutting it short — because they
+        /// want the same thing: stop waiting, glide home. Idempotent, so the timer firing after a
+        /// tap already cancelled is harmless.</summary>
+        private void CancelTownAttractTour()
+        {
+            if (!_townTourActive)
+            {
+                return;
+            }
+
+            _townTourActive = false;
+            Tween.Stop(_townTourLinger);
+            _townTourLinger = null;
+
+            // ExitFocus stops the glide-in mid-flight and reverses from wherever the camera is,
+            // so a tap two frames into the tour turns around immediately.
+            _cameraFollow?.ExitFocus(null);
         }
 
         // ------------------------------------------------------------ tap input
@@ -340,6 +426,13 @@ namespace DinoDigger.Core
         private void OnTap(Vector2 screenPos)
         {
             _idleTimer = 0f;
+
+            // INPUT ALWAYS WINS: an attract tour is cancelled before the tap is even resolved,
+            // so the camera is already on its way back while the tap does its normal job. The
+            // world point below is read with the camera where it is THIS frame, which is what
+            // the player was looking at when they touched the screen.
+            CancelTownAttractTour();
+
             if (_mainCamera == null)
             {
                 return;
@@ -476,12 +569,16 @@ namespace DinoDigger.Core
         ///   3 pickup      — fruit/egg lying around, the feed-and-hatch loop.
         ///   4 berry sprout— an interactive plant (harvest).
         ///   5 dig mound   — a ground prop, and the TRANSIENT one: it vanishes once dug.
-        ///   6 building    — the permanent town prop underneath everything else.
+        ///   6 build site  — a building still going up: a tap cheers the crew on (DinoDigger-5y9).
+        ///   7 building    — the permanent town prop underneath everything else.
         ///
         /// Mound above building is deliberate: the mound is the smaller, temporary object a
         /// toddler is aiming AT when the two overlap. That overlap should not happen at all
         /// any more — SpawnManager keeps respawns off built plots — so this ordering only
         /// decides the leftover degenerate case, and decides it the same way every time.
+        /// The under-construction SITE outranks a finished building for the same reason it sits
+        /// below the mound: it is the state that changes, the one with a crew hammering on it,
+        /// so if a site somehow overlapped a finished neighbour the live one should answer.
         /// Unknown implementors fall to the bottom, which is the old first-hit behaviour.
         /// </summary>
         private static int TappableRank(ITappable t)
@@ -494,8 +591,8 @@ namespace DinoDigger.Core
                 case ItemPickup _: return 3;
                 case BerrySprout _: return 4;
                 case DigMound _: return 5;
-                case BuildingController _: return 6;
-                default: return 7;
+                case BuildingController b: return b.IsFinished ? 7 : 6;
+                default: return 8;
             }
         }
 
@@ -517,6 +614,10 @@ namespace DinoDigger.Core
             {
                 return;
             }
+
+            // Belt-and-braces: every route into a dig starts with a tap (which already cancels),
+            // but the dig camera and an attract glide must never both own the camera.
+            CancelTownAttractTour();
 
             _activeMound = mound;
             State.Set(GameState.Transition);
@@ -2099,6 +2200,36 @@ namespace DinoDigger.Core
             return result;
         }
 
+        /// <summary>Every dino within <paramref name="radius"/> of a world point — who the town's
+        /// completion celebration invites to cheer (DinoDigger-0gd). Deliberately UNFILTERED by
+        /// role: a buddy that happened to be standing in the plaza when the roof went on should
+        /// cheer too, and cheering claims nothing (<see cref="DinoController.CheerHop"/> changes
+        /// no mode, cancels no walk), so handing the town this list can never take a dino away
+        /// from the player. An ambient VISITOR refuses the hop itself, inside CheerHop, because
+        /// town life owns its pose.</summary>
+        internal List<DinoController> TownDinosNear(Vector3 world, float radius)
+        {
+            var result = new List<DinoController>();
+            float rSq = radius * radius;
+            for (int i = 0; i < _dinos.Count; i++)
+            {
+                DinoController d = _dinos[i];
+                if (d == null)
+                {
+                    continue;
+                }
+
+                Vector3 p = d.transform.position;
+                p.z = world.z;
+                if ((p - world).sqrMagnitude <= rSq)
+                {
+                    result.Add(d);
+                }
+            }
+
+            return result;
+        }
+
         /// <summary>The town's build state changed (a site broke ground, advanced a state,
         /// or finished): write it to disk. Routes through <see cref="SaveNow"/> so the town's
         /// per-building progress is persisted alongside the rest of the save.</summary>
@@ -2600,6 +2731,12 @@ namespace DinoDigger.Core
         internal bool TestParadeActive => _paradeActive;
         internal bool TestCeremonyActive => _ceremonyActive;
         internal DinoController TestCeremonyDino => _ceremonyDino;
+        internal CameraFollow TestCameraFollow => _cameraFollow;
+
+        /// <summary>Idle-attract town tour (DinoDigger-sbc): whether one is running right now,
+        /// and how many have run since the last reset.</summary>
+        internal bool TestTownTourActive => _townTourActive;
+        internal int TestTownTours => _townTours;
         internal PlaceholderLibrary TestLibrary => _library;
         internal int TestShardCount => Save != null ? Save.Data.ShardCount : 0;
         internal bool TestEggSpeciesAllOwned => EggSpeciesAllOwned();
@@ -2764,6 +2901,7 @@ namespace DinoDigger.Core
         internal void TestTapWorldRouted(Vector3 world)
         {
             world.z = 0f;
+            CancelTownAttractTour(); // same input-wins cancel as the real OnTap
             ITappable tappable = FindTappable(world);
             if (tappable != null)
             {
@@ -2806,6 +2944,10 @@ namespace DinoDigger.Core
             {
                 _digMode.Close();
             }
+
+            // Drop any attract tour BEFORE snapping the camera, so its glide can't write over
+            // the snap a frame later.
+            CancelTownAttractTour();
 
             _cameraFollow?.TestForceRoam();
             _activeMound = null;
@@ -2860,6 +3002,11 @@ namespace DinoDigger.Core
             _snifferPulses = 0;
             _courierScanTimer = 0f;
             _idleTimer = 0f;
+
+            // Attract tours are transient: TestForceRoam (above) already cancelled any running
+            // one; rewind the tally + the alternation so every case sees the SAME first beat.
+            _townTours = 0;
+            _townTourNext = true;
 
             // Town builder: clear any in-progress/finished sites and rewind the queue. The
             // caller owns Save.Data.Town* (a save-state test sets/clears those explicitly);

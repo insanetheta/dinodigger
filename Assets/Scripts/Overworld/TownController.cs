@@ -34,9 +34,30 @@ namespace DinoDigger.Overworld
     /// CONSTRUCTION ONLY. What a FINISHED building does — the townsfolk who drop by to slide,
     /// sip, soak and splash — belongs to the sibling <see cref="TownLifeController"/> this
     /// class ensures and ticks but never reaches into (DinoDigger-3pz).
+    ///
+    /// THE JOY PASS (Phase 3) hangs two player-facing beats off that spine, both additive and
+    /// both incapable of taking control of anything: tapping the ACTIVE site cheers the crew on
+    /// for a short, NON-STACKING speed burst (<see cref="OnSiteCheered"/>, DinoDigger-5y9), and
+    /// topping a building out plays a choreographed celebration — confetti, a shared arms-up
+    /// cheer, hard hats in the air, then the building's DEBUT interaction
+    /// (<see cref="PlayCompletionChoreography"/>, DinoDigger-0gd).
     /// </summary>
     public class TownController : MonoBehaviour
     {
+        // Completion choreography timing (DinoDigger-0gd), in seconds of game time from the
+        // moment the last state is worked through:
+        //   0.00  confetti over the site; the crew AND every dino within CelebrationCheerRadius
+        //         throw an arms-up hop (0.45s, RestingScale-safe — see DinoController.CheerHop)
+        //   0.00  each crew hard hat pops off and arcs up-and-out, fading over HatTossSeconds
+        //   0.00  the crew's own StopWork(celebrate:true) dance starts (0.8s) and then walks it
+        //         home — untouched, because the stranded-builder guard depends on it
+        //   1.50  the finished building's DEBUT interaction plays once, handed to town life
+        // The debut is deliberately LAST and independent: the cheer reads as "we did it", the
+        // debut as "and look, someone's already using it".
+        private const float CelebrationCheerRadius = 3f;
+        private const float HatTossSeconds = 1f;
+        private const float DebutVisitDelay = 1.5f;
+
         [SerializeField] private TownArea _area;
         [SerializeField] private PlaceholderLibrary _library;
         [SerializeField] private GameConfig _config;
@@ -58,6 +79,21 @@ namespace DinoDigger.Overworld
         // SAME tick, so _workBanked / _workElapsed is an exact crew work-rate with no clock.
         private float _workBanked;  // crew work-seconds banked into the active site
         private float _workElapsed; // real seconds ticked while a crew was on that site
+
+        // Tap-to-cheer (DinoDigger-5y9): tapping the ACTIVE construction site cheers the crew on
+        // and they work faster for a few seconds. NON-STACKING BY CONSTRUCTION — a re-tap
+        // ASSIGNS this timer (never adds to it) and the multiplier is applied once, so a toddler
+        // hammering the site gets the same generous 2x, just for longer. Never saved: a reload
+        // comes back to a calm site.
+        private float _cheerTimer;
+        private int _cheerTaps;             // test-observable: cheers accepted
+
+        // Completion choreography (DinoDigger-0gd): tallies for the integration case plus the
+        // throwaway hard-hat props currently arcing through the air (dropped on a town reset so
+        // no case ever inherits the previous one's celebration).
+        private int _hatsTossed;
+        private int _celebrationCheers;
+        private readonly List<GameObject> _tossedHats = new List<GameObject>();
 
         // Recess Time (DinoDigger-x07): transient dino parties thrown by tapping a FINISHED
         // building. One recess per building at a time; multiple different buildings CAN party
@@ -89,6 +125,34 @@ namespace DinoDigger.Overworld
         /// from this range; zero means the plaza is still an empty lot and nothing is alive
         /// yet.</summary>
         public int FinishedBuildingCount => _nextIndex;
+
+        /// <summary>True when the town has something worth showing off — a finished building or
+        /// a site currently going up. The idle-attract camera tour (DinoDigger-sbc) asks this
+        /// before framing the district, so an empty lot keeps the plain honk + mound pulse.</summary>
+        public bool HasVisibleTown => _nextIndex > 0 || _activeSite != null;
+
+        /// <summary>Where the attract tour points the camera: the ACTIVE construction site when
+        /// one exists (the liveliest thing in town — a crew is hammering there), else the plot of
+        /// the most recently FINISHED building (its townsfolk scene may well be playing), else
+        /// the district centre. Always inside <see cref="TownArea.ContainsWorld"/>, so the tour
+        /// frames the plaza wherever the roster has got to.</summary>
+        public Vector3 AttractFocusPoint
+        {
+            get
+            {
+                if (_area == null)
+                {
+                    return transform.position;
+                }
+
+                if (_activeIndex >= 0)
+                {
+                    return _area.PlotWorld(_activeIndex);
+                }
+
+                return _nextIndex > 0 ? _area.PlotWorld(_nextIndex - 1) : _area.Center;
+            }
+        }
 
         /// <summary>World position of the plot for the building at <paramref name="index"/>
         /// (the drop-off point the Fruit Stand sell flow walks fruit to). Null-tolerant.</summary>
@@ -223,6 +287,22 @@ namespace DinoDigger.Overworld
         internal TownLifeController TestLife => _life;
         internal int TestRecessCount => _recesses.Count;
         internal int TestRecessTapFeedback => _recessTapFeedback;
+
+        /// <summary>Tap-to-cheer state (DinoDigger-5y9): how many cheers have been accepted and
+        /// how much of the current burst is left. The remaining time can never exceed
+        /// <see cref="GameConfig.TownCheerSeconds"/> — that IS the non-stacking rule, observable.</summary>
+        internal int TestCheerTaps => _cheerTaps;
+        internal float TestCheerSecondsLeft => _cheerTimer;
+        internal bool TestCheerActive => _cheerTimer > 0f;
+
+        /// <summary>The multiplier the crew is banking work at RIGHT NOW (1 when no cheer is
+        /// running). Lets a case assert the burst without inferring it from a rate.</summary>
+        internal float TestCheerMultiplier => CheerMultiplier;
+
+        /// <summary>Completion choreography tallies (DinoDigger-0gd): hard hats tossed and
+        /// celebration hops played, cumulative since the last town reset.</summary>
+        internal int TestHatsTossed => _hatsTossed;
+        internal int TestCelebrationCheers => _celebrationCheers;
         internal bool TestIsRecessRunning(int index) => IsRecessRunning(index);
         internal int TestRecessDinoTotal
         {
@@ -312,6 +392,14 @@ namespace DinoDigger.Overworld
             if (_config == null || _area == null)
             {
                 return;
+            }
+
+            // The cheer burst counts down every frame, whatever the site is doing — so a cheer
+            // whose building finishes (or gets torn down) mid-burst still expires on schedule
+            // instead of leaking into the next site.
+            if (_cheerTimer > 0f)
+            {
+                _cheerTimer = Mathf.Max(0f, _cheerTimer - dt);
             }
 
             // Recess parties run independently of the build queue (they use free residents,
@@ -409,7 +497,7 @@ namespace DinoDigger.Overworld
             // Recess Time (DinoDigger-x07): hand the building its owning town + build-order
             // index so a tap on the FINISHED building can reach the recess flow (the building
             // installs its own tap collider only once IsFinished).
-            building.WireRecess(this, index);
+            building.WireTown(this, index);
 
             return building;
         }
@@ -472,7 +560,12 @@ namespace DinoDigger.Overworld
         /// <summary>Build-work SECONDS this crew banks per real second (DinoDigger-s90). Only
         /// builders physically ON SITE count, and each contributes its growth-stage multiplier
         /// (<see cref="GameConfig.BuildSpeedFor"/>: Baby x1.0, Kid x1.6, Big x2.5) instead of a
-        /// flat 1 — so feeding the meadow visibly speeds the town up. Zero means the site waits.</summary>
+        /// flat 1 — so feeding the meadow visibly speeds the town up. Zero means the site waits.
+        ///
+        /// The whole crew total is then scaled by <see cref="CheerMultiplier"/> (DinoDigger-5y9),
+        /// which is 1 unless the player has just cheered the site on. Applying the cheer HERE, to
+        /// the summed rate, is what makes it non-stacking: it is a property of the moment, not
+        /// something banked per tap.</summary>
         private float CrewWorkRate()
         {
             float rate = 0f;
@@ -485,7 +578,57 @@ namespace DinoDigger.Overworld
                 }
             }
 
-            return rate;
+            return rate * CheerMultiplier;
+        }
+
+        /// <summary>How much faster the crew is working right now: the configured cheer
+        /// multiplier while a burst is running, else 1. Clamped to >= 1 so a mis-set config can
+        /// only ever fail to help, never SLOW the town down.</summary>
+        private float CheerMultiplier =>
+            _cheerTimer > 0f && _config != null ? Mathf.Max(1f, _config.TownCheerMultiplier) : 1f;
+
+        // -------------------------------------------------------------- tap to cheer
+
+        /// <summary>The ACTIVE construction site was tapped (routed here by
+        /// <see cref="BuildingController"/>): the player is cheering the crew on (DinoDigger-5y9).
+        ///
+        /// EVERY tap responds — the site bounces, confetti pops, dust puffs off the scaffolding,
+        /// a chime plays and every builder throws a happy hop — even when the burst is already
+        /// running and even with nobody on site yet. What a tap does NOT do is stack: the burst
+        /// timer is ASSIGNED (never added to), so ten taps in a row buy the same
+        /// <see cref="GameConfig.TownCheerMultiplier"/>, refreshed to a full
+        /// <see cref="GameConfig.TownCheerSeconds"/>, and never a compounding one.
+        ///
+        /// The player is not drafted by any of this: the burst only scales what the RESIDENT
+        /// crew is already banking (see <see cref="CrewWorkRate"/>), so a cheer with an empty
+        /// site is pure fireworks and moves the build not at all.
+        ///
+        /// <paramref name="index"/> is the tapped plot, carried for symmetry with
+        /// <see cref="OnBuildingTapped"/> (and for a future per-building cheer); the burst itself
+        /// belongs to whatever site is active, of which there is only ever one.</summary>
+        internal void OnSiteCheered(BuildingController site, int index)
+        {
+            _cheerTaps++;
+
+            GameManager gm = GameManager.Instance;
+            if (site != null)
+            {
+                Tween.PunchScale(site.transform, 0.16f, 0.3f); // re-bounces on every tap
+                site.EmitWorkPuff();                           // dust off the scaffolding
+                gm?.TownSpawnConfetti(site.transform.position + new Vector3(0f, 0.5f, 0f));
+            }
+
+            gm?.Audio?.Chime();
+
+            // Refresh, never accumulate — this single assignment IS the non-stacking rule.
+            _cheerTimer = _config != null ? Mathf.Max(0f, _config.TownCheerSeconds) : 3f;
+
+            // The crew bounces back. CheerHop claims nothing and changes no mode, so a builder
+            // hops WHILE it keeps hammering (and a still-commuting one hops mid-walk).
+            for (int i = 0; i < _builders.Count; i++)
+            {
+                _builders[i]?.CheerHop(0.26f, 0.35f);
+            }
         }
 
         private void ManageBuilders(GameManager gm)
@@ -553,17 +696,21 @@ namespace DinoDigger.Overworld
         private void FinishSite(GameManager gm)
         {
             int finishedIndex = _activeIndex;
-
-            if (_activeSite != null)
-            {
-                gm.TownSpawnConfetti(_activeSite.transform.position + new Vector3(0f, 0.5f, 0f));
-            }
+            Vector3 sitePos = _activeSite != null
+                ? _activeSite.transform.position
+                : (_area != null ? _area.PlotWorld(Mathf.Max(0, finishedIndex)) : transform.position);
 
             gm.Audio?.Grow(); // completion sting
             GameEvents.RaiseBuildingFinished(finishedIndex);
 
+            // The party (DinoDigger-0gd) runs BEFORE the crew is stood down, because it needs
+            // the crew: it tosses their hats and it needs to know where they are standing.
+            PlayCompletionChoreography(gm, sitePos);
+
             // Crew celebrates (dance) then trots home; the finished building stays put
-            // showing its finished state. Buddies/player were never involved.
+            // showing its finished state. Buddies/player were never involved. UNCHANGED by the
+            // choreography on purpose — every builder is stood down in the same frame the
+            // building tops out, which is what keeps a commuting builder from being stranded.
             for (int i = 0; i < _builders.Count; i++)
             {
                 _builders[i]?.StopWork(celebrate: true);
@@ -572,8 +719,129 @@ namespace DinoDigger.Overworld
             _builders.Clear();
             _activeSite = null;
             _activeIndex = -1;
-            _nextIndex++; // curated order advances to the next building/plot
+            _cheerTimer = 0f; // a cheer never carries over to the NEXT building
+            _nextIndex++;     // curated order advances to the next building/plot
             gm.TownPersist(); // the finished building + advanced queue index land in the save
+
+            // ...and a beat later the building opens for business: its townsfolk scene plays
+            // once as a debut. Independent of the crew's walk home — the two overlap, which is
+            // the point (the builders wander off while the first customer arrives).
+            Tween.After(DebutVisitDelay, () => PlayDebut(finishedIndex));
+        }
+
+        // ------------------------------------------------- completion choreography
+
+        /// <summary>The "we built it!" beat (DinoDigger-0gd): confetti over the site, an arms-up
+        /// hop from the crew AND from every dino close enough to have watched it go up, and the
+        /// crew's hard hats popping off in little arcs.
+        ///
+        /// All decoration, no claims: <see cref="DinoController.CheerHop"/> changes no mode and
+        /// the tossed hats are throwaway props, so nothing here can delay the walk home, poach a
+        /// dino from town life, or strand a pose. Every piece is null-tolerant, so a
+        /// placeholder-only run simply celebrates with fewer sprites.</summary>
+        private void PlayCompletionChoreography(GameManager gm, Vector3 sitePos)
+        {
+            if (gm == null)
+            {
+                return;
+            }
+
+            gm.TownSpawnConfetti(sitePos + new Vector3(0f, 0.5f, 0f));
+
+            // The crew's hats fly off. The REAL overlay hats are not touched — they hide by
+            // themselves the moment StopWork drops the assignment (gear visibility is derived
+            // from mode), so the throwaway props read as exactly those hats leaving.
+            for (int i = 0; i < _builders.Count; i++)
+            {
+                TossHardHat(_builders[i], i);
+            }
+
+            // Everyone in earshot cheers — the crew plus any resident/buddy standing nearby
+            // (an ambient VISITOR is skipped inside CheerHop; its pose belongs to town life).
+            List<DinoController> nearby = gm.TownDinosNear(sitePos, CelebrationCheerRadius);
+            for (int i = 0; i < nearby.Count; i++)
+            {
+                if (nearby[i] == null)
+                {
+                    continue;
+                }
+
+                nearby[i].CheerHop(0.32f, 0.45f);
+                _celebrationCheers++;
+            }
+        }
+
+        /// <summary>Pop ONE throwaway hard hat off a builder's head: it arcs up and away from the
+        /// site, tumbling and fading, and destroys itself after <see cref="HatTossSeconds"/>.
+        /// Sized from the sprite's own bounds so the art's PPU doesn't matter, and parented to
+        /// the town root (never the dino — the hat is leaving, it must not ride the walk home).
+        /// No-op without hat art.</summary>
+        private void TossHardHat(DinoController builder, int slot)
+        {
+            Sprite hat = _library != null ? _library.HardHat : null;
+            if (builder == null || hat == null)
+            {
+                return;
+            }
+
+            float h = hat.bounds.size.y;
+            var go = new GameObject("TossedHardHat");
+            go.transform.SetParent(transform, true);
+            Vector3 from = builder.transform.position + new Vector3(0f, 0.55f, 0f);
+            go.transform.position = from;
+            go.transform.localScale = Vector3.one * (h > 0.0001f ? 0.4f / h : 1f);
+
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = hat;
+            sr.sortingOrder = 40; // above the buildings, below the particle bursts
+
+            _tossedHats.Add(go);
+            _hatsTossed++;
+
+            // Alternate the throw side so two hats never trace the same arc.
+            float side = (slot % 2 == 0) ? 1f : -1f;
+            Vector3 to = from + new Vector3(side * 0.9f, 0.25f, 0f);
+
+            Tween.MoveArc(go.transform, from, to, 0.9f, HatTossSeconds, () =>
+            {
+                _tossedHats.Remove(go);
+                if (go != null)
+                {
+                    Destroy(go);
+                }
+            });
+            Tween.ShakeRotation(go.transform, 180f, HatTossSeconds, 2); // tumbling
+
+            // Fade out over the same window so it vanishes rather than blinking away.
+            Tween.Run(HatTossSeconds, t =>
+            {
+                if (sr != null)
+                {
+                    Color c = sr.color;
+                    c.a = 1f - t;
+                    sr.color = c;
+                }
+            });
+        }
+
+        /// <summary>The finished building's DEBUT: its townsfolk interaction plays once, right
+        /// after the completion beat, so the very first thing the new building does is be USED.
+        /// Routed through the ambient service's own entry point
+        /// (<see cref="TownLifeController.PlayDebutVisit"/>), so a debut is an ordinary visit in
+        /// every respect — same eligibility, same yielding, same cleanup.
+        ///
+        /// Best-effort and single-shot ON PURPOSE: with everybody still dancing or walking home
+        /// there may be nobody free, and the right answer then is "no debut", not "chase the
+        /// crew". Retrying would risk pulling a builder back out of the meadow it was walking to,
+        /// which is exactly what the stranded-builder guard watches for.</summary>
+        private void PlayDebut(int index)
+        {
+            if (_life == null || !IsBuildingFinished(index))
+            {
+                return; // torn down / reset between the finish and this callback
+            }
+
+            _life.PlayDebutVisit(index);
         }
 
         // ------------------------------------------------------------ recess time
@@ -875,6 +1143,22 @@ namespace DinoDigger.Overworld
 
             _recesses.Clear();
             _recessTapFeedback = 0;
+
+            // Tap-to-cheer + the completion party are transient too: end any running burst and
+            // destroy the hats still in the air, so the next case starts on a quiet plaza.
+            _cheerTimer = 0f;
+            _cheerTaps = 0;
+            _hatsTossed = 0;
+            _celebrationCheers = 0;
+            for (int i = 0; i < _tossedHats.Count; i++)
+            {
+                if (_tossedHats[i] != null)
+                {
+                    Destroy(_tossedHats[i]);
+                }
+            }
+
+            _tossedHats.Clear();
 
             // Ambient visits are transient too (never saved): send every visitor home, destroy
             // its props, and rewind the life tallies so the next case starts on a quiet plaza.

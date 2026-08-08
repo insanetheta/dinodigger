@@ -205,6 +205,16 @@ namespace DinoDigger.Config
         [Tooltip("Walk-speed multiplier for a resident commuting from the meadow to a build site.")]
         public float TownBuilderCommuteSpeed = 1.1f;
 
+        [Tooltip("Tap-to-cheer: how much faster the crew works while a cheer is running (x2 = " +
+                 "double the whole crew's banked work). Applied ONCE however many times the site " +
+                 "is tapped — a re-tap refreshes the timer, it never compounds.")]
+        public float TownCheerMultiplier = 2f;
+
+        [Tooltip("Tap-to-cheer: seconds one cheer lasts after tapping the ACTIVE construction " +
+                 "site. NON-STACKING — re-tapping refreshes this window back to full rather than " +
+                 "adding to it, so hammering the site is generous but never exploitable.")]
+        public float TownCheerSeconds = 3f;
+
         [Tooltip("Recess Time: seconds a tapped FINISHED building throws a dino party (residents " +
                  "trot over and orbit it) before everyone does a final dance and heads home.")]
         public float RecessSeconds = 15f;

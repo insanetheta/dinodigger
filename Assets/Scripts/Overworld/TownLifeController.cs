@@ -171,6 +171,15 @@ namespace DinoDigger.Overworld
             return list;
         }
 
+        /// <summary>A building's DEBUT (DinoDigger-0gd): play its interaction ONCE, right now,
+        /// because it has just been finished — the completion choreography's last beat. Bypasses
+        /// the ambient countdown but not a single eligibility rule: same finished-building check,
+        /// same guest pool, same yielding, same cleanup, so a debut is an ordinary visit that
+        /// merely skipped the queue. Returns false, changing nothing, when the building is not
+        /// finished, is already hosting a visit, or nobody is free to go — the caller treats that
+        /// as "no debut this time" rather than retrying.</summary>
+        internal bool PlayDebutVisit(int index) => StartVisit(index);
+
         /// <summary>TEST HOOK. Start a visit on <paramref name="index"/> RIGHT NOW, bypassing
         /// the ambient timer (but not a single eligibility rule — same finished-building check
         /// and same guest pool). Returns false, with no side effects, when the building is not

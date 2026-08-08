@@ -123,6 +123,24 @@ namespace DinoDigger.Core
             return co;
         }
 
+        /// <summary>Stop any punch still running on <paramref name="target"/> and put the
+        /// transform back on the base scale that punch captured. Lets another system take the
+        /// scale over cleanly: an in-flight punch keeps writing — and finally SETTLES on — its
+        /// own captured base, so without this hand-off it would stomp whatever pose replaced it
+        /// (and a later punch could capture the replacement's inflated scale as its new base,
+        /// which is the compounding bug all over again). No-op when nothing is punching.</summary>
+        public static void CancelPunch(Transform target)
+        {
+            if (target == null || !_punches.TryGetValue(target, out var active))
+            {
+                return;
+            }
+
+            Stop(active.co);
+            _punches.Remove(target);
+            target.localScale = active.baseScale;
+        }
+
         /// <summary>Smooth scale from current to <paramref name="to"/>.</summary>
         public static Coroutine ScaleTo(Transform target, Vector3 to, float duration = 0.35f,
             Action onComplete = null)

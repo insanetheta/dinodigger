@@ -780,9 +780,10 @@ namespace DinoDigger.Testing
         // ============================================= DinoDigger-x07 Recess Time
 
         // Tapping a FINISHED building throws a 15s dino party. Proves: (a) a finished building
-        // is tappable and bounces (instant feedback fires); (b) an under-construction building
-        // is NOT tappable; (c) a recess recruits free residents but never poaches a busy
-        // builder off an active site; (d) a repeat tap during a running recess re-bounces but
+        // is tappable and bounces (instant feedback fires); (b) a tap on an UNDER-CONSTRUCTION
+        // building cheers the crew instead of partying (DinoDigger-5y9 made the site tappable
+        // too, and the two taps must never be confused); (c) a recess recruits free residents
+        // but never poaches a busy builder off an active site; (d) a repeat tap re-bounces but
         // does not re-recruit; (e) the party runs then ends, its residents heading home; and
         // (f) a tap with zero free dinos still responds (feedback only, never an error).
         private IEnumerator Case_RecessTime(TestContext ctx)
@@ -845,9 +846,22 @@ namespace DinoDigger.Testing
                 BuildingController site = town.TestActiveSite;
                 ctx.Assert(!site.IsFinished, "active site finished too fast (per-state timing)");
 
-                // (b) An UNDER-CONSTRUCTION building is NOT tappable.
-                ctx.Assert(!site.TestIsTappable && site.GetComponent<Collider2D>() == null,
-                    "under-construction building is tappable (should not be)");
+                // (b) An UNDER-CONSTRUCTION building is tappable too (DinoDigger-5y9 gave it the
+                // tap-to-cheer), but a tap there is a CHEER, never a party: the recess flow is
+                // the finished building's alone. Proven by routing a real tap at the site and
+                // watching the recess counters stay put while the cheer counter moves.
+                ctx.Assert(site.TestIsTappable && site.GetComponent<Collider2D>() != null,
+                    "under-construction site is not tappable (tap-to-cheer needs a collider)");
+                yield return new WaitForFixedUpdate();
+                Physics2D.SyncTransforms();
+                int siteFbBefore = town.TestRecessTapFeedback;
+                int cheersBefore = town.TestCheerTaps;
+                bool cheered = RoutedTapOnBuilding(gm, site, 1);
+                ctx.Assert(cheered, "routed tap did not resolve to the under-construction site");
+                ctx.Assert(town.TestCheerTaps == cheersBefore + 1,
+                    "tapping the active site did not cheer the crew on");
+                ctx.Assert(town.TestRecessTapFeedback == siteFbBefore && town.TestRecessCount == 0,
+                    "tapping the UNDER-CONSTRUCTION site threw a recess party");
 
                 yield return ctx.WaitUntil(() => AnyBuilderWorking(town));
                 DinoController worker = FirstWorkingBuilder(town);
@@ -927,7 +941,8 @@ namespace DinoDigger.Testing
                 ctx.Assert(town.TestRecessCount == 0,
                     "a recess started with zero free dinos (should be feedback-only)");
 
-                ctx.Log("recess: finished building tappable+bounces, under-construction not tappable; " +
+                ctx.Log("recess: finished building tappable+bounces, an under-construction tap cheered " +
+                        "instead of partying; " +
                         "party recruited free residents (busy builder not poached), repeat tap re-bounced " +
                         "without re-recruiting, party ended and residents went home; zero-free tap still responded");
             }
@@ -1644,7 +1659,512 @@ namespace DinoDigger.Testing
             outRate[0] = dw / de;
         }
 
+        // ===================================================== DinoDigger-5y9 tap-to-cheer
+
+        // Tapping the ACTIVE construction site cheers the crew on: they work faster for a few
+        // seconds. Measured the way BigDinoBuildsFaster measures growth — counter-based, on the
+        // SAME crew and the SAME site, with per-state time parked at 1000s so nothing can
+        // advance mid-measurement and NO wall clock is anywhere in the arithmetic.
+        //
+        // Proves: (a) the site is a real tap target and a REAL simulated tap (through
+        // InputService.SimulateTap, the whole camera-raycast + ITappable pipeline) reaches it;
+        // (b) a cheer multiplies the crew's banked work by exactly TownCheerMultiplier;
+        // (c) it does NOT stack — three taps buy one multiplier and a window that is refreshed,
+        // never extended past TownCheerSeconds; (d) the burst EXPIRES and the rate falls back to
+        // base; and (e) a tap on the site never throws a recess party (that is the finished
+        // building's tap).
+        private IEnumerator Case_TapToCheerSpeedsBuild(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            TownController town = EnsureTown(ctx);
+            GameConfig cfg = gm.TestConfig;
+
+            float savedPerState = cfg.TownSecondsPerBuildState;
+            float savedCheerSeconds = cfg.TownCheerSeconds;
+            int savedWallet = gm.Save.Data.TreasureCount;
+            try
+            {
+                // The shipped tuning itself, read straight off the asset — a GameConfig that
+                // deserialized these to 0 must fail HERE, loudly, not as a mysteriously flat
+                // rate three windows later.
+                float mul = cfg.TownCheerMultiplier;
+                ctx.Assert(Mathf.Abs(mul - 2f) < 0.001f, $"TownCheerMultiplier is {mul} (expected 2)");
+                ctx.Assert(Mathf.Abs(cfg.TownCheerSeconds - 3f) < 0.001f,
+                    $"TownCheerSeconds is {cfg.TownCheerSeconds} (expected 3)");
+
+                cfg.TownSecondsPerBuildState = 1000f; // the site cannot advance mid-measurement
+                gm.Save.Data.TreasureCount = 0;
+
+                // Two Big residents (Big is never hungry, so nothing pulls one off site).
+                DinoController b1 = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
+                DinoController b2 = gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Big);
+                gm.TestMakeResident(b1, teleportIntoMeadow: true);
+                gm.TestMakeResident(b2, teleportIntoMeadow: true);
+                yield return ctx.WaitFrames(2);
+
+                gm.Save.Data.TreasureCount = cfg.TownBuildingPrice(0);
+                yield return ctx.WaitUntil(() => town.TestActiveSite != null, 15f,
+                    "town never broke ground on a fully funded plot");
+                BuildingController site = town.TestActiveSite;
+
+                // The whole crew must be clocked in before the first window, so crew size is
+                // stable and every window is directly comparable.
+                yield return ctx.WaitUntil(() => town.TestBuilderCount >= 2 && AllBuildersWorking(town),
+                    40f, "the crew never all clocked in at the site (commute wedged?)");
+                int crew = town.TestBuilderCount;
+                ctx.Assert(crew == 2, $"crew is {crew} builders (expected 2)");
+
+                var rate = new float[1];
+
+                // --- (1) base rate, nobody cheering ---
+                ctx.Assert(!town.TestCheerActive, "a cheer was already running before the first tap");
+                yield return MeasureBuildRate(ctx, town, rate);
+                float baseRate = rate[0];
+                ctx.Assert(baseRate > 0f, "the crew banked no work at all");
+
+                // --- (2) a REAL tap on the site starts a cheer ---
+                // One burst long enough to cover a whole measurement window, so the window
+                // measures the cheer rather than the tail of it.
+                cfg.TownCheerSeconds = 60f;
+
+                // Park the player (and so the camera) in sight of the site: a toddler can only
+                // tap what is on screen, and this tap goes through the real world->screen->world
+                // pipeline, so it should be a tap they could actually make. The backhoe is not
+                // tappable and has no collider, so standing it nearby cannot cloud the tap.
+                BackhoeController bh = gm.TestBackhoe;
+                OverworldMap map = gm.TestMap;
+                if (bh != null && map != null)
+                {
+                    Vector3 stand = map.NearestWalkable(
+                        town.BuildingWorld(0) + new Vector3(2.5f, -1.5f, 0f), out bool ok);
+                    if (ok)
+                    {
+                        bh.TestTeleport(stand, bh.Facing);
+                    }
+                }
+
+                gm.TestForceRoam(); // snap the camera onto the backhoe: the site is now in view
+                yield return ctx.WaitFrames(2);
+
+                yield return new WaitForFixedUpdate();
+                Physics2D.SyncTransforms();
+                ctx.Assert(FindBuildingOnlyPoint(site, out Vector3 sitePoint),
+                    "no point on the construction site is free of other tappables");
+                ctx.Assert(gm.TestFindTappable(sitePoint) == (Component)site,
+                    "a tap on the ACTIVE construction site does not resolve to it (ITappable wiring)");
+
+                int tapsBefore = town.TestCheerTaps;
+                int recessFbBefore = town.TestRecessTapFeedback;
+                ctx.TapWorld(sitePoint); // the real input path: SimulateTap -> OnTap -> FindTappable
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(town.TestCheerTaps == tapsBefore + 1,
+                    "the simulated tap never reached the site (input pipeline not wired to the site)");
+                ctx.Assert(town.TestCheerActive, "the tap did not start a cheer burst");
+
+                // (e) ...and it is a CHEER, not a party.
+                ctx.Assert(town.TestRecessTapFeedback == recessFbBefore && town.TestRecessCount == 0,
+                    "tapping the under-construction site threw a recess party");
+
+                yield return MeasureBuildRate(ctx, town, rate);
+                float cheerRate = rate[0];
+                ctx.Assert(Mathf.Abs(cheerRate - baseRate * mul) < 0.01f,
+                    $"cheered crew banked {cheerRate:0.###} work/s (expected {baseRate:0.###} x {mul} = " +
+                    $"{baseRate * mul:0.###})");
+
+                // --- (3) NON-STACKING: two more taps buy the same multiplier ---
+                float leftBefore = town.TestCheerSecondsLeft;
+                gm.TestTapWorldRouted(sitePoint);
+                gm.TestTapWorldRouted(sitePoint);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(town.TestCheerTaps == tapsBefore + 3, "the re-taps never reached the site");
+                ctx.Assert(town.TestCheerSecondsLeft <= cfg.TownCheerSeconds + 0.001f,
+                    $"re-tapping STACKED the window ({town.TestCheerSecondsLeft:0.##}s left, " +
+                    $"cap {cfg.TownCheerSeconds:0.##}s)");
+                ctx.Assert(town.TestCheerSecondsLeft >= leftBefore - 0.001f,
+                    "a re-tap shortened the window (it must refresh it to full)");
+                ctx.Assert(Mathf.Abs(town.TestCheerMultiplier - mul) < 0.001f,
+                    $"the burst multiplier compounded to {town.TestCheerMultiplier:0.###} over three taps");
+
+                yield return MeasureBuildRate(ctx, town, rate);
+                float stackedRate = rate[0];
+                ctx.Assert(Mathf.Abs(stackedRate - cheerRate) < 0.01f,
+                    $"three taps banked {stackedRate:0.###} work/s vs one tap's {cheerRate:0.###} — " +
+                    "cheers are compounding");
+
+                // --- (4) EXPIRY: the burst runs out and the crew returns to base speed ---
+                cfg.TownCheerSeconds = 0.25f;
+                gm.TestTapWorldRouted(sitePoint); // refreshes the window DOWN to the new length
+                ctx.Assert(town.TestCheerActive, "the short cheer did not start");
+                yield return ctx.WaitUntil(() => !town.TestCheerActive, 15f,
+                    () => $"the cheer never expired ({town.TestCheerSecondsLeft:0.##}s still on the clock)");
+
+                yield return MeasureBuildRate(ctx, town, rate);
+                float expiredRate = rate[0];
+                ctx.Assert(Mathf.Abs(expiredRate - baseRate) < 0.01f,
+                    $"after the cheer expired the crew banked {expiredRate:0.###} work/s " +
+                    $"(expected the base {baseRate:0.###})");
+
+                // ...and every bit of that work really landed IN the building, not in a counter:
+                // no state boundary was crossed, so the site's partial IS the total banked work.
+                ctx.Assert(site.State == 0,
+                    $"site advanced to state {site.State} mid-measurement (per-state time not parked)");
+                ctx.Assert(Mathf.Abs(site.WorkedPartial - town.TestWorkBanked) < 0.05f,
+                    $"site banked {site.WorkedPartial:0.###}s but the crew contributed " +
+                    $"{town.TestWorkBanked:0.###}s — the cheered work is not reaching the building");
+
+                ctx.Log($"tap-to-cheer: a simulated tap on the site took the crew from {baseRate:0.##} to " +
+                        $"{cheerRate:0.##} work/s (x{mul}); three taps in a row still banked " +
+                        $"{stackedRate:0.##} (no stacking, window capped at {cfg.TownCheerSeconds:0.##}s " +
+                        $"as refreshed); after expiry it fell back to {expiredRate:0.##}");
+            }
+            finally
+            {
+                cfg.TownSecondsPerBuildState = savedPerState;
+                cfg.TownCheerSeconds = savedCheerSeconds;
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
+        // ============================================ DinoDigger-0gd completion choreography
+
+        // Drive a WHOLE build to completion under the new celebration choreography and prove the
+        // party is pure joy — nothing breaks and nobody is left behind. Asserts: (a) the beat
+        // actually plays (a shared cheer, and hard hats in the air where the art exists);
+        // (b) the building's DEBUT interaction then plays once via town life; (c) the crew still
+        // walks home — the stranded-builder guard, re-checked under the choreography;
+        // (d) NOT ONE Error/Exception reaches the console across the whole sequence; and
+        // (e) nothing is stranded afterwards — no dino wearing a hat or mallet, nobody left at a
+        // celebration scale, and no tossed-hat prop still lying around the plaza.
+        private IEnumerator Case_CelebrationNoConsoleErrors(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            MeadowArea meadow = gm.TestMeadow;
+            ctx.Assert(meadow != null, "no MeadowArea in the scene");
+            TownController town = EnsureTown(ctx);
+            TownLifeController life = town.TestLife;
+            ctx.Assert(life != null, "the town has no TownLifeController (the debut has nowhere to go)");
+
+            GameConfig cfg = gm.TestConfig;
+            float savedPerState = cfg.TownSecondsPerBuildState;
+            float savedInterval = cfg.TownVisitIntervalSeconds;
+            float savedBeat = cfg.TownVisitBeatSeconds;
+            int savedWallet = gm.Save.Data.TreasureCount;
+
+            int finished = 0;
+            Action<int> onFin = _ => finished++;
+            GameEvents.BuildingFinished += onFin;
+
+            // SELF-CONTAINED SETUP, deliberately independent of whatever wallet this case
+            // inherits. The save file survives play mode AND the whole editor session, so a
+            // later suite RUN boots on the previous run's banked treasure (GameManager.OnDestroy
+            // saves on play-mode exit). With the accelerated pacing set below, a fat inherited
+            // wallet used to break ground during the setup frames, before this case had funded
+            // anything — see the crew wait further down for why that mattered.
+            TownController.TestSuspendBuilds = true;
+            try
+            {
+                cfg.TownSecondsPerBuildState = 0.25f;  // a whole build in a couple of seconds
+                cfg.TownVisitIntervalSeconds = 10000f; // no AMBIENT visit: only the debut may run
+                cfg.TownVisitBeatSeconds = 0.25f;      // ...and it plays out quickly
+                life.TestResetLife();                  // re-arm the countdown at the new interval
+                gm.Save.Data.TreasureCount = 0;        // drop any inherited wallet
+
+                // THREE residents: two are drafted as the crew, the third stays free so the
+                // debut has somebody to send while the crew is still dancing/walking home.
+                var residents = new List<DinoController>();
+                DinoType[] types = { DinoType.TRex, DinoType.Stegosaurus, DinoType.Triceratops };
+                for (int i = 0; i < types.Length; i++)
+                {
+                    DinoController d = gm.TestSpawnDino(types[i], GrowthStage.Big);
+                    gm.TestMakeResident(d, teleportIntoMeadow: true);
+                    residents.Add(d);
+                }
+
+                yield return ctx.WaitFrames(2);
+
+                // EXACTLY one building's price, released only now: the wallet drains to 0 on the
+                // spend, so this case drives one build on one plot and no second site can break
+                // ground behind the celebration.
+                gm.Save.Data.TreasureCount = cfg.TownBuildingPrice(0);
+                TownController.TestSuspendBuilds = false;
+                yield return ctx.WaitUntil(() => town.TestActiveSite != null, 15f,
+                    "town never broke ground on a fully funded plot");
+                BuildingController site = town.TestActiveSite;
+
+                // Snapshot the crew AS DRAFTED — both builders, whether or not they have finished
+                // their commute. Deliberately NOT "wait until they are all working": the pacing
+                // above is fast enough that the FIRST builder to clock in can top the building out
+                // (4 states x 0.25s = 1 work-second, and one Big builder banks 2.5/s) before the
+                // second one arrives, at which point FinishSite empties the crew and an
+                // all-working wait can never come true. The draft itself is deterministic — it
+                // happens on the first tick after break-ground, long before anyone can walk there
+                // — so this is both stable and the right list for the walk-home check, which is
+                // exactly about a builder recalled MID-COMMUTE not being stranded.
+                yield return ctx.WaitUntil(() => town.TestBuilderCount >= 2, 20f,
+                    "the town never drafted a full crew for the site");
+                var crew = new List<DinoController>(town.TestBuilders);
+
+                // Everything from here on is the choreography under test, so count console
+                // errors from HERE (the runner's own global tally is NoConsoleErrors' job).
+                int errorsBefore = _errors.Count;
+
+                yield return ctx.WaitUntil(() => finished >= 1, 60f, "the build never finished");
+                ctx.Assert(site != null && site.IsFinished, "site not finished on the BuildingFinished event");
+                ctx.Assert(town.TestActiveSite == null, "town still holds an active site after finishing");
+
+                // (a) The beat plays: everyone in earshot cheers, and the crew's hats fly off
+                //     (hat art guarded like every other art assertion in this suite).
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(town.TestCelebrationCheers > 0,
+                    "nobody cheered the finished building (crew + neighbours should hop)");
+                bool hatArt = gm.TestLibrary != null && gm.TestLibrary.HardHat != null;
+                if (hatArt)
+                {
+                    ctx.Assert(town.TestHatsTossed > 0, "no hard hat flew off the crew on completion");
+                }
+
+                // (b) ...then the building opens: its debut interaction runs once. Nothing else
+                //     can start a visit here (ambient parked), so any visit IS the debut.
+                yield return ctx.WaitUntil(() => life.TestVisitsStarted > 0, 25f,
+                    "the finished building's debut interaction never started");
+                ctx.Assert(life.TestIsVisiting(0) || life.TestVisitsCompleted > 0,
+                    "the debut was recorded as started but no visit ever ran on building 0");
+
+                // (c) The crew still goes home. This is the stranded-builder guard, re-run under
+                //     the choreography — the celebration must not delay or swallow the walk.
+                yield return ctx.WaitUntil(() =>
+                {
+                    for (int i = 0; i < crew.Count; i++)
+                    {
+                        if (crew[i] == null || !meadow.ContainsInterior(crew[i].transform.position))
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }, 60f, "a builder never made it home after the celebration");
+
+                for (int i = 0; i < crew.Count; i++)
+                {
+                    ctx.Assert(!crew[i].IsBuddy, "a builder was promoted off the crew (builders stay residents)");
+                }
+
+                // Let the debut scene finish and its exit bounce settle before auditing poses.
+                yield return ctx.WaitUntil(() => life.TestVisitCount == 0, 40f,
+                    "the debut visit never retired");
+                yield return ctx.WaitSecondsScaled(0.6f);
+
+                // (e) Nothing stranded: no gear left on any dino, everyone at its stage scale,
+                //     and no tossed-hat prop still sitting in the plaza.
+                IReadOnlyList<DinoController> all = gm.TestDinos;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    DinoController d = all[i];
+                    ctx.Assert(d != null, "a dino vanished during the celebration");
+                    ctx.Assert(!d.TestHatActive, "a dino is still wearing a hard hat after the celebration");
+                    ctx.Assert(!d.TestMalletActive, "a dino is still holding a mallet after the celebration");
+
+                    float rest = cfg.StageScale(d.Stage);
+                    Vector3 s = d.transform.localScale;
+                    ctx.Assert(Mathf.Abs(s.x - rest) < 0.05f && Mathf.Abs(s.y - rest) < 0.05f,
+                        $"a dino was left at scale {s.x:0.##}x{s.y:0.##} (expected {rest:0.##}) — " +
+                        "a celebration hop stranded its pose");
+                }
+
+                ctx.Assert(town.transform.Find("TossedHardHat") == null,
+                    "a tossed hard-hat prop is still lying in the plaza (it must despawn)");
+                ctx.Assert(town.TestNextIndex == 1,
+                    $"queue index is {town.TestNextIndex} after one completed building (expected 1)");
+
+                // (d) The whole sequence was silent.
+                int newErrors = _errors.Count - errorsBefore;
+                string errDetail = newErrors == 0
+                    ? "no console errors"
+                    : string.Join(" | ", _errors.GetRange(errorsBefore, Mathf.Min(3, newErrors)));
+                ctx.Assert(newErrors == 0,
+                    $"the completion choreography logged {newErrors} console error(s): {errDetail}");
+
+                ctx.Log($"completion choreography: {town.TestCelebrationCheers} dinos cheered, " +
+                        $"{town.TestHatsTossed} hard hats tossed, the building's debut interaction played, " +
+                        "the crew walked home, and nothing was left wearing gear or stuck at a " +
+                        "celebration scale — zero console errors across the whole sequence");
+            }
+            finally
+            {
+                TownController.TestSuspendBuilds = false;
+                GameEvents.BuildingFinished -= onFin;
+                cfg.TownSecondsPerBuildState = savedPerState;
+                cfg.TownVisitIntervalSeconds = savedInterval;
+                cfg.TownVisitBeatSeconds = savedBeat;
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestReset();
+            }
+        }
+
+        // ======================================= DinoDigger-sbc idle-attract town tour
+
+        // Once the town has something to show, idle-attract occasionally glides the camera over
+        // the district, holds a beat on the life there, and glides back. Proves: (a) with NOTHING
+        // built the tour never fires and idle-attract is exactly what it always was; (b) with a
+        // finished building the camera really travels INTO the district footprint, lingers, then
+        // returns to following the backhoe on its own; and (c) THE TODDLER RULE — a player tap
+        // mid-glide cancels the tour that same instant AND still does its normal job (the tapped
+        // spot is driven to), with the camera back on the backhoe right after.
+        //
+        // Every wait is a named, bounded state poll: no wall-clock races anywhere.
+        private IEnumerator Case_AttractShowsTownGrowth(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            TownController town = EnsureTown(ctx);
+            TownArea area = town.TestArea;
+            BackhoeController bh = gm.TestBackhoe;
+            Camera cam = gm.TestCamera;
+            OverworldMap map = gm.TestMap;
+            CameraFollow follow = gm.TestCameraFollow;
+            ctx.Assert(area != null && bh != null && cam != null && map != null && follow != null,
+                "missing town/backhoe/camera/map/camera-follow");
+
+            int savedNext = gm.Save.Data.TownNextIndex;
+            List<TownBuildingSave> savedList = gm.Save.Data.TownBuildings;
+            int savedWallet = gm.Save.Data.TreasureCount;
+            TownController.TestSuspendBuilds = true; // no build may break ground mid-case
+            try
+            {
+                // ---- (a) an empty lot is not worth showing off ----
+                gm.Save.Data.TreasureCount = 0;
+                ctx.Assert(!town.HasVisibleTown,
+                    "the town already has something built at the start of the case");
+                gm.ForceIdleAttract();
+                yield return ctx.WaitFrames(3);
+                ctx.Assert(!gm.TestTownTourActive && gm.TestTownTours == 0,
+                    "the attract camera toured an EMPTY town (no finished building, no site)");
+
+                // ---- author building 0 FINISHED: now there is a town ----
+                gm.Save.Data.TownNextIndex = 1;
+                gm.Save.Data.TownBuildings = new List<TownBuildingSave>
+                {
+                    new TownBuildingSave { Finished = true, State = BuildingController.ConstructionStates },
+                };
+                town.RestoreFromSave(gm.Save.Data);
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(town.HasVisibleTown && town.FinishedBuildingCount == 1,
+                    "building 0 did not restore finished");
+
+                Vector3 focus = town.AttractFocusPoint;
+                ctx.Assert(area.ContainsWorld(focus),
+                    "the attract focus point is outside the district footprint");
+                Vector3 startCam = cam.transform.position;
+                ctx.Assert(FlatDistance(startCam, focus) > 1f,
+                    "the camera already sits on the town — this case cannot see it travel");
+
+                // ---- (b) glide in, linger, glide home ----
+                yield return ForceTownTour(ctx, gm);
+                yield return ctx.WaitUntil(() => FlatDistance(cam.transform.position, focus) < 0.6f, 15f,
+                    () => $"the camera never reached the district (still " +
+                          $"{FlatDistance(cam.transform.position, focus):0.##}u from the focus point)");
+                ctx.Assert(area.ContainsWorld(cam.transform.position),
+                    "the camera stopped outside the town footprint");
+
+                // It HOLDS there (the linger is what makes the town readable, not a drive-by).
+                yield return ctx.WaitFrames(3);
+                ctx.Assert(gm.TestTownTourActive, "the tour ended the instant it arrived (no linger)");
+                ctx.Assert(follow.TestFocused, "the camera is not parked on the district during the linger");
+
+                // ...and it comes home by itself, back to following the backhoe.
+                yield return ctx.WaitUntil(() => !gm.TestTownTourActive, 25f,
+                    "the attract tour never ended on its own");
+                yield return ctx.WaitUntil(
+                    () => !follow.TestFocused &&
+                          FlatDistance(cam.transform.position, bh.transform.position) < 1.6f, 25f,
+                    () => "the camera never returned to the backhoe after the tour " +
+                          $"(gap {FlatDistance(cam.transform.position, bh.transform.position):0.##}u)");
+
+                // ---- (c) input always wins ----
+                yield return ForceTownTour(ctx, gm);
+                yield return ctx.WaitFrames(2); // a couple of frames INTO the glide
+                ctx.Assert(gm.TestTownTourActive, "the second tour did not survive two frames");
+
+                Vector3 held = bh.transform.position;
+                Vector3 moveTarget = held;
+                float[] reaches = { 1.5f, 2.5f, 3.5f };
+                for (int i = 0; i < reaches.Length; i++)
+                {
+                    Vector3 c = FindMoveTarget(map, held, reaches[i]);
+                    if ((c - held).sqrMagnitude > 0.25f && gm.TestFindTappable(c) == null)
+                    {
+                        moveTarget = c;
+                        break;
+                    }
+                }
+
+                ctx.Assert((moveTarget - held).sqrMagnitude > 0.25f,
+                    "no clear (untappable) move target near the backhoe");
+
+                ctx.TapWorld(moveTarget); // the REAL input path, mid-glide
+                ctx.Assert(!gm.TestTownTourActive,
+                    "a player tap did not cancel the attract tour on the spot");
+
+                yield return ctx.WaitFrames(2);
+                ctx.Assert(!follow.TestFocused,
+                    "the camera is still parked on the town two frames after the cancelling tap");
+
+                // ...and the tap did its normal job as well as cancelling.
+                yield return ctx.WaitUntil(() => !bh.IsMoving, LegBudget(held, moveTarget),
+                    "tap-to-move never completed after the tour was cancelled");
+                ctx.Assert((bh.transform.position - held).sqrMagnitude > 0.25f,
+                    "the cancelling tap did not also move the backhoe (input must still count)");
+                yield return ctx.WaitUntil(
+                    () => FlatDistance(cam.transform.position, bh.transform.position) < 1.6f, 25f,
+                    () => "the camera never got back to following the backhoe after the cancel " +
+                          $"(gap {FlatDistance(cam.transform.position, bh.transform.position):0.##}u)");
+
+                ctx.Log($"idle-attract framed the town {gm.TestTownTours}x: an empty lot never toured, a " +
+                        "finished building drew the camera into the district footprint where it lingered " +
+                        "then returned to the backhoe, and a tap mid-glide cancelled it instantly while " +
+                        "still driving the backhoe to the tapped spot");
+            }
+            finally
+            {
+                TownController.TestSuspendBuilds = false;
+                gm.Save.Data.TownNextIndex = savedNext;
+                gm.Save.Data.TownBuildings = savedList ?? new List<TownBuildingSave>();
+                gm.Save.Data.TreasureCount = savedWallet;
+                gm.TestForceRoam();
+                gm.TestReset();
+            }
+        }
+
         // ================================================================= HELPERS
+
+        /// <summary>Fire idle-attract until one beat actually tours the town. The tour alternates
+        /// with a plain honk on purpose (a tour every single idle would stop reading as a treat),
+        /// so "no tour" on any one beat is expected — but four in a row without one is a bug, and
+        /// this reports that instead of looping forever.</summary>
+        private IEnumerator ForceTownTour(TestContext ctx, GameManager gm)
+        {
+            for (int i = 0; i < 4 && !gm.TestTownTourActive; i++)
+            {
+                gm.ForceIdleAttract();
+                yield return ctx.WaitFrames(1);
+            }
+
+            ctx.Assert(gm.TestTownTourActive,
+                "four idle-attract beats in a row and the camera never toured the town");
+        }
+
+        /// <summary>Planar (XY) distance — the camera sits at z = -10, so a raw magnitude would
+        /// drown every interesting difference in that constant offset.</summary>
+        private static float FlatDistance(Vector3 a, Vector3 b)
+        {
+            a.z = 0f;
+            b.z = 0f;
+            return (a - b).magnitude;
+        }
 
         /// <summary>Return the scene's town (real or previously-injected), building a small
         /// TownArea near the meadow + injecting a TownController when the district has not
