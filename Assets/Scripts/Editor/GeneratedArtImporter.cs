@@ -1273,6 +1273,17 @@ namespace DinoDigger.EditorTools
             importer.ReadTextureSettings(s);
             s.spriteAlignment = (int)SpriteAlignment.Center;
             s.spriteMode = (int)SpriteImportMode.Single;
+            // FULL RECT, not Tight (DinoDigger-ajm). A Tight sprite mesh clips the drawn
+            // geometry to the alpha silhouette, which is exactly the 3px dilated skirt the
+            // ground tiles rely on to overlap their neighbours: whatever the mesh
+            // generator trims off that skirt becomes a gap the camera's clear colour
+            // shines through, one hairline per diamond edge, worst at the four vertices
+            // where the skirt is already clipped by the canvas. FullRect draws the whole
+            // 256x128 quad, so the overlap is guaranteed to be rasterised and the only
+            // thing deciding coverage is the alpha the baker authored. It also costs the
+            // env set nothing to sort/batch — these are one-sprite Single tiles.
+            s.spriteMeshType = SpriteMeshType.FullRect;
+            s.spriteExtrude = 0;   // meaningless for FullRect; keep it off the meta churn
             importer.SetTextureSettings(s);
 
             importer.SaveAndReimport();

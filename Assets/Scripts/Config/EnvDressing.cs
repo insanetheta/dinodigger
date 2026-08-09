@@ -118,10 +118,10 @@ namespace DinoDigger.Config
     ///
     /// Mask bits (map-cell space, the axes OverworldMap uses — see
     /// <see cref="EnvDressing.EdgeOffsets"/> and Tools/generate_env.py):
-    ///   bit0 (1) = -Y neighbour  -> screen UPPER-RIGHT diamond edge
-    ///   bit1 (2) = +X neighbour  -> screen LOWER-RIGHT diamond edge
-    ///   bit2 (4) = +Y neighbour  -> screen LOWER-LEFT diamond edge
-    ///   bit3 (8) = -X neighbour  -> screen UPPER-LEFT diamond edge
+    ///   bit0 (1) = +X neighbour  -> screen UPPER-RIGHT diamond edge
+    ///   bit1 (2) = -Y neighbour  -> screen LOWER-RIGHT diamond edge
+    ///   bit2 (4) = -X neighbour  -> screen LOWER-LEFT diamond edge
+    ///   bit3 (8) = +Y neighbour  -> screen UPPER-LEFT diamond edge
     /// </summary>
     [Serializable]
     public class EnvEdgeSet
@@ -289,14 +289,38 @@ namespace DinoDigger.Config
         public const int SaltDecalPlace = 0x3F6B;
         public const int SaltDecalPick = 0x6D2A;
 
-        /// <summary>Neighbour offsets in MASK BIT ORDER: bit0 -Y, bit1 +X, bit2 +Y, bit3 -X.
-        /// Must stay in this order — it is the contract with the baked edge tiles.</summary>
+        /// <summary>
+        /// Neighbour offsets in the BAKED ART'S MASK BIT ORDER. The bit order is a fact
+        /// about the PNGs, not a choice: Tools/generate_env.py builds every mask in
+        /// map-space (u, v) and then maps it onto the diamond with `_iso_affine`, which
+        /// sends map (u,v) to the tile image so that
+        ///   v == 0    -> the screen UPPER-RIGHT diamond edge   (bit0)
+        ///   u == CELL -> the screen LOWER-RIGHT diamond edge   (bit1)
+        ///   v == CELL -> the screen LOWER-LEFT  diamond edge   (bit2)
+        ///   u == 0    -> the screen UPPER-LEFT  diamond edge   (bit3)
+        /// (Verified directly off the shipped art: path_b254 banks its UPPER-RIGHT edge,
+        /// b253 its LOWER-RIGHT, b251 its LOWER-LEFT, b247 its UPPER-LEFT.)
+        ///
+        /// This Grid is IsometricZAsY with cellSize (1, 0.5), so a cell's neighbours land
+        /// on screen like this (measured, Grid.GetCellCenterWorld deltas):
+        ///   +X (1, 0)  -> (+0.50, +0.25)  screen UPPER-RIGHT
+        ///   -Y (0, -1) -> (+0.50, -0.25)  screen LOWER-RIGHT
+        ///   -X (-1, 0) -> (-0.50, -0.25)  screen LOWER-LEFT
+        ///   +Y (0, 1)  -> (-0.50, +0.25)  screen UPPER-LEFT
+        ///
+        /// So bit0 is the +X neighbour, NOT -Y. Getting this wrong is DinoDigger-ajm: the
+        /// old table listed the cardinals anticlockwise from -Y, which is the mirror image
+        /// of the art's clockwise-from-+X order, so every connected piece was banked on
+        /// the wrong two edges. On a path that put a grass bank ACROSS the run — the
+        /// "green lines between adjacent brown path tiles" Greg saw on device — and put a
+        /// hard brown edge along the shoulders where the soft bank belonged.
+        /// </summary>
         public static readonly Vector3Int[] EdgeOffsets =
         {
-            new Vector3Int(0, -1, 0), // bit0 (1)
-            new Vector3Int(1, 0, 0),  // bit1 (2)
-            new Vector3Int(0, 1, 0),  // bit2 (4)
-            new Vector3Int(-1, 0, 0), // bit3 (8)
+            new Vector3Int(1, 0, 0),  // bit0 (1)  +X -> screen UPPER-RIGHT edge
+            new Vector3Int(0, -1, 0), // bit1 (2)  -Y -> screen LOWER-RIGHT edge
+            new Vector3Int(-1, 0, 0), // bit2 (4)  -X -> screen LOWER-LEFT  edge
+            new Vector3Int(0, 1, 0),  // bit3 (8)  +Y -> screen UPPER-LEFT  edge
         };
 
         /// <summary>Default decal density per biome (chance a dressable cell gets one).
@@ -367,21 +391,26 @@ namespace DinoDigger.Config
         // always agree about the edge between them, and the DIAGONALS in the key are what
         // make the perpendicular bank agree too.
         //
-        // Key layout (same bit order as the transition masks, which is the baked art's):
-        //   bits 0-3  cardinals  -Y, +X, +Y, -X
+        // Key layout (same bit order as the transition masks, which is the baked art's —
+        // CLOCKWISE round the diamond starting at the upper-right edge, see EdgeOffsets):
+        //   bits 0-3  cardinals  +X, -Y, -X, +Y
         //   bits 4-7  diagonals, where diagonal i is the cell between cardinals i and
-        //             (i+1)%4:  (+X,-Y), (+X,+Y), (-X,+Y), (-X,-Y)
+        //             (i+1)%4:  (+X,-Y), (-X,-Y), (-X,+Y), (+X,+Y)
         // A diagonal only changes the tile when BOTH its cardinals are same-biome (that
         // is the only time a corner gets carved), so the 256 raw neighbourhoods collapse
         // onto exactly 47 pieces.
 
-        /// <summary>Diagonal offsets, in the key's bit order (bits 4..7).</summary>
+        /// <summary>Diagonal offsets, in the key's bit order (bits 4..7): diagonal i is the
+        /// cell shared by cardinals i and (i+1)%4, i.e. the one behind the diamond VERTEX
+        /// between those two edges. Follows <see cref="EdgeOffsets"/>' clockwise-from-+X
+        /// order, so bit4 sits behind the RIGHT vertex, bit5 the BOTTOM, bit6 the LEFT and
+        /// bit7 the TOP. (Rotated with the cardinals by DinoDigger-ajm.)</summary>
         public static readonly Vector3Int[] DiagonalOffsets =
         {
-            new Vector3Int(1, -1, 0),  // bit4: between -Y and +X
-            new Vector3Int(1, 1, 0),   // bit5: between +X and +Y
-            new Vector3Int(-1, 1, 0),  // bit6: between +Y and -X
-            new Vector3Int(-1, -1, 0), // bit7: between -X and -Y
+            new Vector3Int(1, -1, 0),  // bit4: between +X and -Y  -> RIGHT  vertex
+            new Vector3Int(-1, -1, 0), // bit5: between -Y and -X  -> BOTTOM vertex
+            new Vector3Int(-1, 1, 0),  // bit6: between -X and +Y  -> LEFT   vertex
+            new Vector3Int(1, 1, 0),   // bit7: between +Y and +X  -> TOP    vertex
         };
 
         /// <summary>How many distinct connected pieces one biome ships.</summary>
