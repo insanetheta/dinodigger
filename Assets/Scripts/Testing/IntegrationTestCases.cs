@@ -102,6 +102,11 @@ namespace DinoDigger.Testing
                 // Runs late alongside BuddyDigCrew: a fired Giggle Pocket banks coins, which
                 // would inflate the wallet ahead of the count-exact treasure/town cases.
                 new TestCase("SurprisePocket",       90f, Case_SurprisePocket),
+                // Gravity cascade cases run late for the same reason as the two above: a
+                // cascade can uncover the last buried item and finish the round, which banks a
+                // random amount of treasure into the persistent wallet.
+                new TestCase("TilesFallAndSettle",   60f, Case_TilesFallAndSettle),
+                new TestCase("CascadeNeverWedges",   90f, Case_CascadeNeverWedges),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }
@@ -773,8 +778,11 @@ namespace DinoDigger.Testing
             {
                 // The excavator arm bites one tile at a time and drops a same-tile
                 // re-tap while that bite is still in flight — wait until it is parked
-                // before each tap so every tap lands as a fresh bite.
-                yield return ctx.WaitUntil(() => dm.TestArmReady || tile.IsDestroyed);
+                // before each tap so every tap lands as a fresh bite. A tile that is
+                // mid-FALL also drops taps (gravity, DinoDigger-7fw); this tile is the
+                // top-row one so nothing can land on it, but pacing to both keeps the
+                // case honest if the pick ever changes.
+                yield return ctx.WaitUntil(() => (dm.TestArmReady && !tile.IsFalling) || tile.IsDestroyed);
                 if (tile.IsDestroyed)
                 {
                     break;
@@ -1724,12 +1732,16 @@ namespace DinoDigger.Testing
 
             ctx.Assert(tile != null, "no suitable plain interior tile with a neighbor");
 
+            // Hold the neighbours as REFERENCES, not coordinates: if this bite crumbles the
+            // tile, gravity drops the column into its cell and a coordinate-addressed sum would
+            // be comparing different tiles before and after (see NeighborTilesOf).
             int tileBefore = tile.TestDamage;
-            int neighborBefore = NeighborDamageSum(dm, tile);
+            List<DirtTile> neighbors = NeighborTilesOf(dm, tile);
+            int neighborBefore = DamageSumOf(neighbors);
             ctx.TapWorld(tile.transform.position);
             yield return ctx.WaitUntil(() => tile.TestDamage > tileBefore);
 
-            int neighborAfter = NeighborDamageSum(dm, tile);
+            int neighborAfter = DamageSumOf(neighbors);
             ctx.Assert(tile.TestDamage >= tileBefore + 1, "tapped tile not damaged");
             ctx.Assert(neighborAfter >= neighborBefore + 1, "helper did not also damage an adjacent tile");
             ctx.Log($"helper enabled; tap damaged tile + adjacent (neighborSum {neighborBefore}->{neighborAfter})");
@@ -1784,7 +1796,8 @@ namespace DinoDigger.Testing
                     break;
                 }
 
-                yield return ctx.WaitUntil(() => dm.TestArmReady || !dm.IsOpen);
+                // Pace to the arm and to gravity alike (a falling tile drops taps).
+                yield return ctx.WaitUntil(() => (dm.TestArmReady && !plain.IsFalling) || !dm.IsOpen);
                 if (!dm.IsOpen)
                 {
                     break;
@@ -1827,7 +1840,7 @@ namespace DinoDigger.Testing
                     break;
                 }
 
-                yield return ctx.WaitUntil(() => dm.TestArmReady || !dm.IsOpen);
+                yield return ctx.WaitUntil(() => (dm.TestArmReady && !plain.IsFalling) || !dm.IsOpen);
                 if (!dm.IsOpen)
                 {
                     break;
@@ -1901,11 +1914,12 @@ namespace DinoDigger.Testing
             }
 
             ctx.Assert(target != null, "no interior plain tile with an intact neighbor");
-            int nBefore = NeighborDamageSum(dm, target);
+            List<DirtTile> targetNeighbors = NeighborTilesOf(dm, target); // references: gravity moves cells
+            int nBefore = DamageSumOf(targetNeighbors);
             int tBefore = target.TestDamage;
             ctx.TapWorld(target.transform.position);
             yield return ctx.WaitUntil(() => target.TestDamage > tBefore || target.IsDestroyed);
-            int nAfter = NeighborDamageSum(dm, target);
+            int nAfter = DamageSumOf(targetNeighbors);
             ctx.Assert(nAfter >= nBefore + 1, "Big T-Rex did not also clear an adjacent tile");
 
             ctx.Log("crew: 2 helpers + Stego map + Trike headbutt; Brachio bonus x1 through ResolveDugItem; " +
@@ -1996,6 +2010,15 @@ namespace DinoDigger.Testing
                     DirtTile pocket = dm.TestSurpriseTile;
                     ctx.Assert(pocket != null && !pocket.HasItem, "Giggle site has no clean surprise tile");
 
+                    // GRAVITY (DinoDigger-7fw): clearing the pocket drops its column, and each
+                    // landing cracks the tile under it. On a soft theme a 1-tap tile is COMPLETED
+                    // by that crack, which could uncover buried items and — in the corner case
+                    // where they were the last ones — end the round, breaking the "cracking the
+                    // pocket wrongly ended the round" assertion below for a reason that has
+                    // nothing to do with the pocket. Pinning this one column at 3 taps makes the
+                    // cascade purely cosmetic here; the chain itself is CascadeNeverWedges's job.
+                    PinColumnHardness(dm, pocket.Col);
+
                     bankEvents = 0;
                     yield return TapTileUntilDestroyed(ctx, dm, pocket);
                     ctx.Assert(dm.TestSurpriseFired, "Giggle pocket did not fire when cracked");
@@ -2034,7 +2057,11 @@ namespace DinoDigger.Testing
                 ctx.Assert(dm.TestSurpriseFired && dm.TestSurpriseFireCount == 1,
                     $"crew-clear fired {dm.TestSurpriseFireCount}x (expected 1)");
 
-                ctx.TapWorld(pocketPos); // re-tap the now-cleared tile must NOT re-fire
+                // Re-tapping where the pocket USED to be must not re-fire it. Under gravity
+                // (DinoDigger-7fw) that spot is no longer empty — the column above dropped into
+                // it — so this now taps a perfectly ordinary tile, which is if anything a
+                // stronger check: the fire count must hold at 1 through a real bite there.
+                ctx.TapWorld(pocketPos);
                 yield return ctx.WaitFrames(3);
                 ctx.Assert(dm.TestSurpriseFireCount == 1,
                     $"pocket fired again on re-tap ({dm.TestSurpriseFireCount})");
@@ -2049,6 +2076,12 @@ namespace DinoDigger.Testing
                 ctx.Assert(dm.TestCrewCount == 0,
                     $"{dm.TestCrewCount} helper(s) staffed despite the crew pin — a superpower " +
                     "could crack the pocket without a tap");
+
+                // The gravity cascade adds a clearing path this check has to survive: tiles
+                // dropped onto the pocket. The engine exempts the pocket from landing cracks
+                // (ApplyLandingCracks) precisely so a mystery tile is always DISCOVERED and
+                // never squashed — digging out the whole site below it must still leave it
+                // uncracked, which is what the assertion after this loop proves.
 
                 int guard = 0;
                 while (gm.State.Is(GameState.Dig) && dm.TestBuriedCount > 0 && guard++ < 60)
@@ -2076,6 +2109,255 @@ namespace DinoDigger.Testing
                 DigModeController.TestForceSurpriseKind = -1;
                 DigModeController.TestSuppressCrew = false;
             }
+        }
+
+        // ========================================================= GRAVITY CASCADE
+
+        // Tiles fall. Clearing a tile drops every tile above it in the column onto the next
+        // occupied cell (or the pit floor), each landing deals one hardness tick to what it
+        // lands on, and the whole board is resolved SYNCHRONOUSLY (only the travel is a tween),
+        // so this case can assert the settled state on the same frame it clears a tile.
+        // Covers: the column shift, the landing crack, a buried peek riding its own tile down
+        // (items fall WITH their tile), the board resting exactly on its cells, settle
+        // idempotence, and taps staying live through a cascade.
+        private IEnumerator Case_TilesFallAndSettle(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+
+            try
+            {
+                // No crew: every superpower is a clearing path of its own, and this case is
+                // about what exactly ONE clear does. (BuddyDigCrew covers the powers;
+                // CascadeNeverWedges covers them all cascading together.)
+                DigModeController.TestSuppressCrew = true;
+
+                yield return EnterDig(ctx);
+                DigModeController dm = gm.TestDigMode;
+                ctx.Assert(dm.TestRows >= 3, $"grid is only {dm.TestRows} rows — too shallow to drop a tile");
+
+                // ---- A mid-column clear drops the column by exactly one row ----
+                int col = FindDropColumn(dm);
+                ctx.Assert(col >= 0, "no full pocket-free column to drop");
+                int mid = dm.TestRows - 2;                       // one above the deepest row
+                DirtTile above = dm.TestTileAt(mid - 1, col);    // must end up at `mid`
+                DirtTile below = dm.TestTileAt(mid + 1, col);    // must take the landing crack
+                ctx.Assert(above != null && below != null, "column too shallow for a fall onto a tile");
+
+                // Pin the whole column at 3 taps so no landing crack can COMPLETE a tile: this
+                // section is about the crack being dealt and the column shifting by one, not
+                // about the chain a completed tile starts (CascadeNeverWedges drives that).
+                PinColumnHardness(dm, col);
+                int heightBefore = dm.TestColumnCount(col);
+                int cracksBefore = dm.TestLandingCracks;
+                List<DirtTile> buriedBefore = dm.TestBuriedTiles();
+                ctx.Assert(buriedBefore.Count > 0, "site buried nothing — no peeks to check");
+
+                dm.TestClearCell(mid, col); // engine chokepoint: clear + collect + cascade, all now
+
+                ctx.Assert(dm.TestColumnCount(col) == heightBefore - 1,
+                    $"column {col} holds {dm.TestColumnCount(col)} tiles after one clear (expected {heightBefore - 1})");
+                ctx.Assert(above.Row == mid && above.Col == col,
+                    $"tile above the hole sits at r{above.Row}c{above.Col} (expected r{mid}c{col})");
+                ctx.Assert(dm.TestTileAt(mid, col) == above, "grid does not report the fallen tile in the hole");
+                ctx.Assert(dm.TestTileAt(0, col) == null, "top cell not vacated after the column dropped");
+                ctx.Assert(below.TestDamage == 1,
+                    $"landing dealt {below.TestDamage} ticks to the tile below (expected exactly 1)");
+                ctx.Assert(dm.TestLandingCracks > cracksBefore, "engine recorded no landing crack at all");
+                ctx.Assert(dm.TestFloaterReport() == "", $"board not settled: {dm.TestFloaterReport()}");
+                ctx.Assert(dm.TestSettleImmediately() == 1,
+                    "re-settling a settled board moved something (the settle is not idempotent)");
+
+                // ---- Items fall WITH their tile: a peek is never orphaned ----
+                DirtTile buriedFaller = null;
+                for (int i = 0; i < buriedBefore.Count && buriedFaller == null; i++)
+                {
+                    DirtTile b = buriedBefore[i];
+                    if (b == null || b.IsDestroyed || b.Row + 1 >= dm.TestRows)
+                    {
+                        continue;
+                    }
+
+                    DirtTile under = dm.TestTileAt(b.Row + 1, b.Col);
+                    if (under != null && !under.HasItem && !under.IsSurprise && !b.IsSurprise)
+                    {
+                        buriedFaller = b;
+                    }
+                }
+
+                ctx.Assert(buriedFaller != null, "no buried tile sitting on a clearable plain tile");
+                int buriedRow = buriedFaller.Row;
+                int buriedCol = buriedFaller.Col;
+                ItemType buriedType = dm.TestBuriedType(buriedFaller);
+                PinColumnHardness(dm, buriedCol); // no chain: exactly one row of drop to assert
+                dm.TestClearCell(buriedRow + 1, buriedCol);
+
+                ctx.Assert(buriedFaller.Row == buriedRow + 1 && buriedFaller.Col == buriedCol,
+                    $"buried tile did not ride its column down (r{buriedFaller.Row}c{buriedFaller.Col})");
+                ctx.Assert(dm.TestTileAt(buriedRow + 1, buriedCol) == buriedFaller,
+                    "grid lost track of the fallen buried tile");
+                ctx.Assert(buriedFaller.TestPeekEnabled && buriedFaller.TestPeekAlpha > 0.01f,
+                    "buried peek went dark after the fall");
+                ctx.Assert(dm.TestBuriedTiles().Contains(buriedFaller),
+                    "buried bookkeeping lost the item when its tile fell");
+                ctx.Assert(dm.TestBuriedType(buriedFaller) == buriedType,
+                    "buried item changed identity across the fall");
+
+                // ---- Every tile comes to rest exactly on its cell (travel tween lands) ----
+                yield return ctx.WaitSecondsScaled(1f);
+                if (dm.IsOpen)
+                {
+                    int checkedTiles = 0;
+                    for (int r = 0; r < dm.TestRows; r++)
+                    {
+                        for (int c = 0; c < dm.TestCols; c++)
+                        {
+                            DirtTile t = dm.TestTileAt(r, c);
+                            if (t == null)
+                            {
+                                continue;
+                            }
+
+                            float off = (t.transform.position - dm.TestCellPosition(r, c)).magnitude;
+                            ctx.Assert(off < 0.05f, $"tile r{r}c{c} rests {off:F2}u off its cell");
+                            ctx.Assert(!t.IsFalling, $"tile r{r}c{c} still falling a second after the cascade");
+                            checkedTiles++;
+                        }
+                    }
+
+                    ctx.Assert(checkedTiles > 0, "no tiles left to check for rest positions");
+
+                    // Every peek still readable after the board moved under it.
+                    List<DirtTile> buriedNow = dm.TestBuriedTiles();
+                    for (int i = 0; i < buriedNow.Count; i++)
+                    {
+                        DirtTile b = buriedNow[i];
+                        ctx.Assert(b != null && b.TestPeekEnabled && b.TestPeekAlpha > 0.01f,
+                            "a buried tile lost its peek during the cascade");
+                    }
+
+                    // ---- Taps stay live: the child can dig straight through a cascade ----
+                    DirtTile plain = FindPlainTile(dm);
+                    ctx.Assert(plain != null, "no plain tile left to prove taps still work");
+                    int dmgBefore = plain.TestDamage;
+                    yield return ctx.WaitUntil(() => dm.TestArmReady && !plain.IsFalling, 10f,
+                        "arm never parked after the cascade");
+                    ctx.TapWorld(plain.transform.position);
+                    yield return ctx.WaitUntil(() => plain.TestDamage > dmgBefore || plain.IsDestroyed, 15f,
+                        "tap after a cascade never landed — falling stole the input");
+
+                    ctx.Log($"clear dropped column {col} by 1 (landing crack dealt, {dm.TestLandingCracks} total); " +
+                            $"buried {buriedType} rode its tile r{buriedRow}->r{buriedFaller.Row}; " +
+                            "board rests on its cells; taps still live");
+                }
+                else
+                {
+                    ctx.Log($"clear dropped column {col} by 1 (landing crack dealt); " +
+                            "cascade finished the round early — collection path clean");
+                }
+            }
+            finally
+            {
+                DigModeController.TestSuppressCrew = false;
+            }
+
+            gm.TestForceRoam();
+        }
+
+        // Worst-case chaining: grind a whole column out from under the board one cell at a time
+        // (every clear drops the rest of it and cracks it again), then fire a geode ring into
+        // the middle — a radial clear whose staggered steps land while the board is still
+        // moving. The settle must resolve every time, well inside its iteration cap, leaving no
+        // floating tile, no console error, and a site that is either still playable or finished
+        // cleanly. This is the case that would catch an infinite settle or a wedged board.
+        private IEnumerator Case_CascadeNeverWedges(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            int errorsBefore = _errors.Count;
+
+            try
+            {
+                DigModeController.TestSuppressCrew = true;
+                yield return EnterDig(ctx);
+                DigModeController dm = gm.TestDigMode;
+
+                int col = FindDropColumn(dm);
+                ctx.Assert(col >= 0, "no full pocket-free column to grind");
+                int worstPasses = 0;
+
+                // Clear the DEEPEST cell over and over: each clear drops the entire remaining
+                // column one row onto the floor and cracks it on the way, so the column is fed
+                // through the engine tile by tile — the longest chain a single column can make.
+                for (int i = 0; i < dm.TestRows && dm.IsOpen; i++)
+                {
+                    dm.TestClearCell(dm.TestRows - 1, col);
+                    worstPasses = Mathf.Max(worstPasses, dm.TestSettlePasses);
+                    ctx.Assert(dm.TestSettlePasses < dm.TestSettleCap,
+                        $"settle needed {dm.TestSettlePasses} passes (cap {dm.TestSettleCap}) on column grind {i}");
+                    ctx.Assert(dm.TestFloaterReport() == "",
+                        $"column grind {i} left the board unsettled: {dm.TestFloaterReport()}");
+                }
+
+                ctx.Assert(dm.TestColumnCount(col) == 0 || !dm.IsOpen,
+                    $"column {col} still holds {dm.TestColumnCount(col)} tiles after being ground out");
+
+                // Geode on top of that: a radial 8-neighbour clear, staggered across ~0.5s, each
+                // step landing on whatever gravity has dropped into those coordinates by then.
+                if (dm.IsOpen)
+                {
+                    DirtTile center = FindAliveTile(dm);
+                    if (center != null)
+                    {
+                        dm.TestFireGeode(center.Row, center.Col);
+                    }
+                }
+
+                yield return ctx.WaitSecondsScaled(1.5f); // let the whole ring + its falls play out
+
+                if (dm.IsOpen)
+                {
+                    int passes = dm.TestSettleImmediately();
+                    worstPasses = Mathf.Max(worstPasses, passes);
+                    ctx.Assert(passes >= 1 && passes < dm.TestSettleCap,
+                        $"final settle took {passes} passes (cap {dm.TestSettleCap})");
+                    ctx.Assert(dm.TestFloaterReport() == "",
+                        $"board never settled after the geode: {dm.TestFloaterReport()}");
+
+                    // Still playable: a tap must still dig, with the site in one piece.
+                    DirtTile plain = FindPlainTile(dm);
+                    if (plain != null)
+                    {
+                        int before = plain.TestDamage;
+                        yield return ctx.WaitUntil(() => dm.TestArmReady && !plain.IsFalling, 10f,
+                            "arm never parked after the worst-case cascade");
+                        ctx.TapWorld(plain.transform.position);
+                        yield return ctx.WaitUntil(() => plain.TestDamage > before || plain.IsDestroyed || !dm.IsOpen,
+                            15f, "site stopped accepting taps after the worst-case cascade");
+                    }
+                }
+                else
+                {
+                    // The cascade uncovered every buried item: the round must have ended the
+                    // normal way rather than stranding the player in an empty pit.
+                    yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam), 25f,
+                        "cascade finished the dig but never returned to roam");
+                }
+
+                int newErrors = _errors.Count - errorsBefore;
+                ctx.Assert(newErrors == 0,
+                    $"{newErrors} console error(s) during the cascade: " +
+                    (newErrors > 0 ? _errors[_errors.Count - 1] : ""));
+
+                ctx.Log($"ground column {col} + geode chain: worst settle {worstPasses}/{dm.TestSettleCap} passes, " +
+                        $"{dm.TestLandingCracks} landing cracks, board settled, zero errors");
+            }
+            finally
+            {
+                DigModeController.TestSuppressCrew = false;
+            }
+
+            gm.TestForceRoam();
         }
 
         // ============================================================ TREASURE / UI
@@ -3589,10 +3871,15 @@ namespace DinoDigger.Testing
             int guard = 0;
             while (tile != null && !tile.IsDestroyed && dm.IsOpen && guard++ < 12)
             {
-                // Pace to the arm: a same-tile re-tap issued mid-bite is dropped by
-                // the dig queue, so wait until the arm is parked before each tap.
+                // Pace to the arm AND to gravity: a same-tile re-tap issued mid-bite is dropped
+                // by the dig queue, and a tap aimed at a tile that is still FALLING into the
+                // cell the cascade moved it to is dropped by the controller (it lands first).
+                // Waiting on both is what keeps every tap in this helper a real bite — and the
+                // tap position is re-read below, so a tile that fell is still tapped where it
+                // now sits, not where it used to be.
                 yield return ctx.WaitUntil(() =>
-                    tile == null || tile.IsDestroyed || !dm.IsOpen || dm.TestArmReady);
+                    tile == null || tile.IsDestroyed || !dm.IsOpen ||
+                    (dm.TestArmReady && !tile.IsFalling));
                 if (tile == null || tile.IsDestroyed || !dm.IsOpen)
                 {
                     break;
@@ -4422,10 +4709,13 @@ namespace DinoDigger.Testing
             return found;
         }
 
+        /// <summary>A tappable plain (unburied) tile. Never returns a tile that is mid-FALL: the
+        /// controller drops taps aimed at a travelling tile, so handing one back would spend a
+        /// case's tap budget on bites that can never land.</summary>
         private DirtTile FindPlainTile(DigModeController dm)
         {
             DirtTile mid = dm.TestTileAt(0, dm.TestCols / 2);
-            if (mid != null && !mid.HasItem && !mid.IsDestroyed)
+            if (mid != null && !mid.HasItem && !mid.IsDestroyed && !mid.IsFalling)
             {
                 return mid;
             }
@@ -4434,7 +4724,7 @@ namespace DinoDigger.Testing
             for (int i = 0; i < tiles.Count; i++)
             {
                 DirtTile t = tiles[i];
-                if (t != null && !t.HasItem && !t.IsDestroyed)
+                if (t != null && !t.HasItem && !t.IsDestroyed && !t.IsFalling)
                 {
                     return t;
                 }
@@ -4460,21 +4750,112 @@ namespace DinoDigger.Testing
             return n;
         }
 
-        private int NeighborDamageSum(DigModeController dm, DirtTile tile)
+        /// <summary>The tile's four neighbours captured AS REFERENCES.
+        ///
+        /// GRAVITY (DinoDigger-7fw): a grid coordinate no longer names the same tile from one
+        /// moment to the next — clearing a tile drops its whole column by a row — so a
+        /// before/after damage comparison addressed by row/col can read a different tile at the
+        /// end than it did at the start (or nothing at all, since a cleared cell is vacated).
+        /// Holding the tiles themselves is what keeps such a comparison meaningful.</summary>
+        private List<DirtTile> NeighborTilesOf(DigModeController dm, DirtTile tile)
         {
+            var list = new List<DirtTile>(4);
             int[] dr = { -1, 1, 0, 0 };
             int[] dc = { 0, 0, -1, 1 };
-            int sum = 0;
             for (int i = 0; i < 4; i++)
             {
                 DirtTile t = dm.TestTileAt(tile.Row + dr[i], tile.Col + dc[i]);
                 if (t != null)
                 {
-                    sum += t.TestDamage;
+                    list.Add(t);
+                }
+            }
+
+            return list;
+        }
+
+        /// <summary>Total damage across a captured tile list. Damage never decreases and a
+        /// crumbled tile keeps its final value, so this only ever grows — which is exactly what
+        /// makes it safe to compare across a cascade.</summary>
+        private int DamageSumOf(List<DirtTile> tiles)
+        {
+            int sum = 0;
+            for (int i = 0; i < tiles.Count; i++)
+            {
+                if (tiles[i] != null)
+                {
+                    sum += tiles[i].TestDamage;
                 }
             }
 
             return sum;
+        }
+
+        /// <summary>A clean stage for a gravity assertion: a column with every cell still
+        /// filled, no surprise pocket in it (the pocket is exempt from landing cracks, which
+        /// would make an expected crack count conditional), and a plain tile one row above the
+        /// floor to clear (clearing a BURIED tile would collect an item, and collecting the last
+        /// one ends the round mid-assertion).</summary>
+        private int FindDropColumn(DigModeController dm)
+        {
+            DirtTile pocket = dm.TestSurpriseTile;
+            for (int c = 0; c < dm.TestCols; c++)
+            {
+                if (pocket != null && pocket.Col == c)
+                {
+                    continue;
+                }
+
+                if (dm.TestColumnCount(c) != dm.TestRows)
+                {
+                    continue;
+                }
+
+                DirtTile target = dm.TestTileAt(dm.TestRows - 2, c);
+                if (target != null && !target.HasItem)
+                {
+                    return c;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>Pin every tile in a column at the canonical 3 taps.
+        ///
+        /// Per-theme hardness rolls as low as ONE tap, and a 1-tap tile is COMPLETED by a single
+        /// landing crack — which turns a tidy one-row drop into a chain. That chain is real
+        /// behaviour (CascadeNeverWedges drives it on purpose), but a case asserting what one
+        /// clear does must not have its outcome decided by a hardness roll.</summary>
+        private void PinColumnHardness(DigModeController dm, int col)
+        {
+            for (int r = 0; r < dm.TestRows; r++)
+            {
+                DirtTile t = dm.TestTileAt(r, col);
+                if (t != null && !t.IsDestroyed)
+                {
+                    t.TestSetMaxHealth(3);
+                }
+            }
+        }
+
+        /// <summary>Any tile still standing (for driving a cascade into a board that several
+        /// clears have already chewed through).</summary>
+        private DirtTile FindAliveTile(DigModeController dm)
+        {
+            for (int r = 0; r < dm.TestRows; r++)
+            {
+                for (int c = 0; c < dm.TestCols; c++)
+                {
+                    DirtTile t = dm.TestTileAt(r, c);
+                    if (t != null && !t.IsDestroyed)
+                    {
+                        return t;
+                    }
+                }
+            }
+
+            return null;
         }
 
         private int CountOverworldPickups(GameManager gm, bool nonTreasureOnly)

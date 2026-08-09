@@ -139,7 +139,58 @@ namespace DinoDigger.Dig
         // A callback that outlives its site would then crumble whatever now sits at that
         // row/col in the NEXT site — including its untouched surprise pocket, which is
         // exactly the "surprise fired even though it was never cracked" flake (DinoDigger-38r).
+        //
+        // The gravity cascade extends the same discipline: its LOGIC is synchronous (no
+        // deferred step can cross a site boundary at all), and the only deferred parts left —
+        // the per-tile fall tween's landing flourish — capture the generation and check it
+        // before touching anything site-owned. The settle loop itself re-checks the generation
+        // every pass, so a site that closes mid-cascade aborts it cleanly.
         private int _siteGeneration;
+
+        // ---- Gravity cascade (Dig Loop 2.0) -----------------------------------
+        // When ANY tile clears — a bite, a superpower, a geode chain, a landing crack —
+        // every tile above it in its column falls to rest on the next occupied cell (or
+        // the pit floor), and each landing deals ONE hardness tick to the tile it lands
+        // on, which can complete that tile and cascade further.
+        //
+        // DATA FLOW of one cascade:
+        //   clear path -> ClearTile (vacate the cell + collect what it hid)
+        //              -> SettleGrid: repeat SettlePass until a pass moves nothing
+        //                 SettlePass: per column, bottom-up, compact every alive tile
+        //                             down to the lowest free cell (logical: _grid +
+        //                             DirtTile.SetCell), record (faller -> victim)
+        //                             landings, then apply one Damage() tick per landing;
+        //                             a tick that crumbles a victim vacates + collects it,
+        //                             which the NEXT pass picks up as a fresh hole.
+        // The whole board is therefore resolved SYNCHRONOUSLY in one call — tests can assert
+        // the final state on the same frame — while each mover carries a staggered travel
+        // tween so the chain still reads as a chunky top-to-bottom tumble.
+        //
+        // ITEMS FALL WITH THEIR TILE. The buried bookkeeping is keyed by tile reference and
+        // the peek sprite is a child of the tile renderer, so a buried item riding its own
+        // dirt is both free and the only readable option: a peek pinned to a fixed cell would
+        // end up glowing through a different tile than the one hiding it.
+        private const int MaxSettlePasses = 64;   // see SettleGrid: the real bound is ~1 + rows*cols
+        private const float FallRowTime = 0.07f;  // travel time per row dropped...
+        private const float FallMaxTime = 0.28f;  // ...capped, so a deep drop never drags
+        private const float FallStagger = 0.05f;  // per-tile start delay up the column (the tumble)
+        private const float FallStaggerMax = 0.25f;
+        private const float ThumpMinGap = 0.08f;  // one landing thump per beat, not one per tile
+
+        /// <summary>One faller and the tile it came to rest on (null = the pit floor).</summary>
+        private struct Landing
+        {
+            public DirtTile Faller;
+            public DirtTile Victim;
+        }
+
+        private readonly List<Landing> _landings = new List<Landing>();
+        private bool _settling;        // re-entrancy: a clear DURING a settle rides the running loop
+        private float _gridHalfW;      // column 0's x offset from the dig origin
+        private float _lastThump;
+        private int _settlePasses;     // test-observable: passes the last settle took
+        private int _settleFalls;      // test-observable: tiles moved by the last settle
+        private int _landingCracks;    // test-observable: landing ticks dealt this site
 
         // TEST BREADCRUMB (DinoDigger-38r). Which path cracked the pocket, on which tile and
         // frame. Purely diagnostic and set nowhere else: the case that asserts the pocket was
@@ -298,6 +349,79 @@ namespace DinoDigger.Dig
             }
         }
 
+        // ---- Gravity cascade test hooks ----
+        internal int TestSettlePasses => _settlePasses;
+        internal int TestSettleFalls => _settleFalls;
+        internal int TestLandingCracks => _landingCracks;
+        internal int TestSettleCap => MaxSettlePasses;
+
+        /// <summary>TEST HOOK. Resolve the board to its stable state right now and return how
+        /// many passes it took. The cascade is already synchronous on every clear path, so on
+        /// a settled board this is a single no-move pass — it exists so a case can assert the
+        /// engine's own idempotence and read the pass count without racing a tween.</summary>
+        internal int TestSettleImmediately()
+        {
+            return SettleGrid("test settle hook");
+        }
+
+        /// <summary>TEST HOOK. World position of a grid cell, so a case can prove a fallen
+        /// tile (and the peek riding it) really came to rest on its new cell.</summary>
+        internal Vector3 TestCellPosition(int r, int c) => CellPosition(r, c);
+
+        /// <summary>TEST HOOK. Alive tiles in a column (destroyed tiles are vacated from the
+        /// grid, so this is the column's real height).</summary>
+        internal int TestColumnCount(int c)
+        {
+            int n = 0;
+            for (int r = 0; r < _rows; r++)
+            {
+                if (TileAt(r, c) != null)
+                {
+                    n++;
+                }
+            }
+
+            return n;
+        }
+
+        /// <summary>TEST HOOK. "" when the board is fully settled; otherwise the first floating
+        /// tile found (an alive tile with an empty cell under it) — a named failure beats a bare
+        /// false when a cascade wedges.</summary>
+        internal string TestFloaterReport()
+        {
+            for (int c = 0; c < _cols; c++)
+            {
+                for (int r = 0; r < _rows - 1; r++)
+                {
+                    if (TileAt(r, c) != null && TileAt(r + 1, c) == null)
+                    {
+                        return $"tile at r{r}c{c} floats over an empty cell";
+                    }
+                }
+            }
+
+            return "";
+        }
+
+        /// <summary>TEST HOOK. Fully clear one cell through the crew-clear chokepoint (the same
+        /// route the Trike column and the geode chain take), so a case can drive the cascade
+        /// without depending on a hardness roll or a power cadence.</summary>
+        internal void TestClearCell(int r, int c)
+        {
+            ClearTileFully(TileAt(r, c), "test cell clear");
+        }
+
+        /// <summary>TEST HOOK. Fire the geode chain on a cell without waiting for the surprise
+        /// pool to roll one — the worst-case cascade driver (a radial clear on top of falls).</summary>
+        internal void TestFireGeode(int r, int c)
+        {
+            DirtTile t = TileAt(r, c);
+            if (t != null)
+            {
+                FireGeode(t);
+            }
+        }
+
         // True when the excavator arm is parked and free to accept a fresh tap:
         // no bite in flight and an empty dig queue. The arm bites ONE tile at a
         // time and dedups a tile that is already the active/queued bite, so a
@@ -434,13 +558,24 @@ namespace DinoDigger.Dig
 
             float halfW = (_cols - 1) * 0.5f;
 
+            // Cell geometry the gravity cascade lands fallers on. Captured here (not in
+            // PlaceBackhoe, which runs later) so a cell position is available the moment the
+            // first tile exists, and per-site cascade bookkeeping starts clean.
+            _origin = origin;
+            _gridHalfW = halfW;
+            _settling = false;
+            _settlePasses = 0;
+            _settleFalls = 0;
+            _landingCracks = 0;
+            _landings.Clear();
+
             for (int r = 0; r < _rows; r++)
             {
                 for (int c = 0; c < _cols; c++)
                 {
                     var go = new GameObject($"Dirt_{r}_{c}");
                     go.transform.SetParent(_root != null ? _root : transform, false);
-                    go.transform.position = origin + new Vector3(c - halfW, -(r + 1), 0f);
+                    go.transform.position = CellPosition(r, c);
 
                     var box = go.AddComponent<BoxCollider2D>();
                     box.size = new Vector2(1.0f, 1.0f); // generous touch target
@@ -789,7 +924,13 @@ namespace DinoDigger.Dig
         }
 
         /// <summary>Triceratops headbutt: clear the whole column of the last-tapped tile in
-        /// a quick top-to-bottom cascade (rows staggered so it reads as a tumble).</summary>
+        /// a quick top-to-bottom cascade (rows staggered so it reads as a tumble).
+        ///
+        /// Top-DOWN is what makes this play nicely with gravity: each step clears a cell with
+        /// nothing left above it, so no step ever drops tiles into the column it is emptying —
+        /// the headbutt still ends with the column truly empty, not half-refilled by its own
+        /// falls. (Each step still routes through ClearTileFully, so the rest of the board
+        /// settles around the hole exactly as it would after a bite.)</summary>
         private void HeadbuttColumn(DirtTile tile, Crew c)
         {
             if (tile == null || _grid == null)
@@ -820,10 +961,12 @@ namespace DinoDigger.Dig
             }
         }
 
-        /// <summary>Damage a tile until it crumbles, then collect anything it hid. Used by
-        /// the Triceratops column cascade (these are helper hits, NOT player bites, so they
-        /// never advance the power cadence). <paramref name="cause"/> is the diagnostic
-        /// breadcrumb recorded if this clear happens to crack the surprise pocket.</summary>
+        /// <summary>Damage a tile until it crumbles, then collect anything it hid and let the
+        /// board fall into the hole. Used by the Triceratops column cascade (these are helper
+        /// hits, NOT player bites, so they never advance the power cadence) and by the geode
+        /// chain, so every superpower clears through the SAME gravity chokepoint a bite does.
+        /// <paramref name="cause"/> is the diagnostic breadcrumb recorded if this clear happens
+        /// to crack the surprise pocket.</summary>
         private void ClearTileFully(DirtTile t, string cause)
         {
             if (t == null || t.IsDestroyed)
@@ -839,8 +982,7 @@ namespace DinoDigger.Dig
 
             if (t.IsDestroyed)
             {
-                _clearCause = cause;
-                CollectIfBuried(t);
+                TileCleared(t, cause);
             }
         }
 
@@ -1389,6 +1531,10 @@ namespace DinoDigger.Dig
             // addressed by ROW/COL, so each delayed step must also prove the site it was
             // fired for is still open (see _siteGeneration): a step landing after a NEW site
             // was built would crumble that site's tile at the same coordinates.
+            //
+            // With gravity live, the board falls between ring steps, so a later step clears
+            // whichever tile has dropped into that coordinate by then. That is deliberate: the
+            // geode keeps blowing a hole in the same place rather than firing into thin air.
             int[] dr = { -1, 1, 0, 0, -1, -1, 1, 1 };
             int[] dc = { 0, 0, -1, 1, -1, 1, -1, 1 };
             int gen = _siteGeneration;
@@ -1484,11 +1630,250 @@ namespace DinoDigger.Dig
             });
         }
 
+        // ----- Gravity cascade -----
+
+        /// <summary>World position of a grid cell (row 0 is the top layer, one unit per row).
+        /// The single source of truth for where a tile sits: BuildGrid places tiles with it and
+        /// the cascade lands fallers on it, so the two can never drift apart.</summary>
+        private Vector3 CellPosition(int r, int c)
+        {
+            return _origin + new Vector3(c - _gridHalfW, -(r + 1), 0f);
+        }
+
+        /// <summary>A tile has fully crumbled: vacate its cell so gravity sees a hole, then run
+        /// the normal collect chokepoint (buried item, surprise pocket, round finish). Does NOT
+        /// settle — the caller decides when the board is allowed to fall, so a single bite that
+        /// clears several tiles cascades ONCE, and a clear that happens inside a running settle
+        /// is simply picked up by that loop's next pass.</summary>
+        private void ClearTile(DirtTile t, string cause)
+        {
+            if (t == null)
+            {
+                return;
+            }
+
+            if (_grid != null && t.Row >= 0 && t.Row < _rows && t.Col >= 0 && t.Col < _cols &&
+                _grid[t.Row, t.Col] == t)
+            {
+                _grid[t.Row, t.Col] = null; // the corpse object lives on (it dies with the site)
+            }
+
+            _clearCause = cause;
+            CollectIfBuried(t);
+        }
+
+        /// <summary>The ONE chokepoint for "this tile just crumbled": vacate + collect, then let
+        /// the board fall. Bites, superpowers, geode chains and landing cracks all end here, so
+        /// every clearing path in the game cascades identically.</summary>
+        private void TileCleared(DirtTile t, string cause)
+        {
+            ClearTile(t, cause);
+            SettleGrid(cause);
+        }
+
+        /// <summary>Resolve the whole board to its stable state: repeat a compaction pass until
+        /// one moves nothing, and return the passes taken.
+        ///
+        /// TERMINATION: a single pass compacts every column completely, so a later pass can only
+        /// move something if a landing tick crumbled a tile — which is bounded by the tile count.
+        /// The true bound is ~1 + rows*cols (36 here); <see cref="MaxSettlePasses"/> is a loud
+        /// backstop that must never be reached in play, not a working limit.
+        ///
+        /// The loop re-checks the site every pass, so a close/rebuild/finish landing mid-cascade
+        /// aborts it cleanly and silently. A re-entrant call (a clear raised from inside the
+        /// loop) is a no-op: the running loop already sees that hole.</summary>
+        private int SettleGrid(string cause)
+        {
+            if (_grid == null || _settling || !_open || _finished)
+            {
+                return 0;
+            }
+
+            _settling = true;
+            int gen = _siteGeneration;
+            int passes = 0;
+            int falls = 0;
+            bool stable = false;
+            bool aborted = false;
+
+            try
+            {
+                while (passes < MaxSettlePasses)
+                {
+                    if (_grid == null || gen != _siteGeneration || !_open || _finished)
+                    {
+                        aborted = true;
+                        break;
+                    }
+
+                    passes++;
+                    int moved = SettlePass(gen);
+                    falls += moved;
+                    if (moved == 0)
+                    {
+                        stable = true;
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                _settling = false;
+            }
+
+            if (!stable && !aborted)
+            {
+                // Never silently: a cascade that needs this many passes is a bug in the
+                // compaction, and the site is still playable, so it must be findable in the log.
+                Debug.LogError($"[Dig] gravity cascade hit its {MaxSettlePasses}-pass cap after " +
+                               $"'{cause}' ({falls} falls); board left as-is, site still playable");
+            }
+
+            _settlePasses = passes;
+            _settleFalls = falls;
+            return passes;
+        }
+
+        /// <summary>One compaction pass. Per column, bottom-up, every alive tile slides down to
+        /// the lowest free cell and each tile that MOVED is recorded against whatever it came to
+        /// rest on. Landing ticks are applied only once every column has compacted, so a pass
+        /// never damages a tile it is still relocating. Returns the number of movers.</summary>
+        private int SettlePass(int gen)
+        {
+            DirtTile[,] grid = _grid;
+            if (grid == null)
+            {
+                return 0;
+            }
+
+            _landings.Clear();
+            int moved = 0;
+
+            for (int c = 0; c < _cols; c++)
+            {
+                int write = _rows - 1; // lowest cell still free in this column
+                int order = 0;         // movers start bottom-first, so the column reads as a tumble
+                for (int r = _rows - 1; r >= 0; r--)
+                {
+                    DirtTile t = grid[r, c];
+                    if (t == null)
+                    {
+                        continue;
+                    }
+
+                    if (t.IsDestroyed)
+                    {
+                        // A path that crumbled a tile straight through DirtTile.Damage (a direct
+                        // test probe, a future effect) leaves a corpse in the grid. Treat it as a
+                        // hole so the engine stays correct even for a clear it was never told of.
+                        grid[r, c] = null;
+                        continue;
+                    }
+
+                    if (r != write)
+                    {
+                        grid[r, c] = null;
+                        grid[write, c] = t;
+                        t.SetCell(write, c); // logical move NOW; the tween below is pure travel
+
+                        int drop = write - r;
+                        float delay = Mathf.Min(order * FallStagger, FallStaggerMax);
+                        float time = Mathf.Min(FallMaxTime, 0.05f + FallRowTime * drop);
+                        Vector3 landAt = CellPosition(write, c);
+                        t.FallTo(landAt, delay, time, () => OnTileLanded(landAt, gen));
+
+                        _landings.Add(new Landing
+                        {
+                            Faller = t,
+                            Victim = write + 1 < _rows ? grid[write + 1, c] : null, // null = pit floor
+                        });
+                        moved++;
+                        order++;
+                    }
+
+                    write--;
+                }
+            }
+
+            ApplyLandingCracks(gen);
+            return moved;
+        }
+
+        /// <summary>One hardness tick per landing, dealt to the tile that was landed ON (the pit
+        /// floor takes none). A tick that crumbles its victim clears it through the normal
+        /// chokepoint and the next pass turns that fresh hole into more falling — the cascade.
+        ///
+        /// The SURPRISE POCKET is exempt: it must be DISCOVERED, never squashed. A pocket that a
+        /// falling tile could complete would fire its one-shot with the child never having
+        /// cracked it — the wiggle would simply vanish mid-cascade, which is the opposite of the
+        /// "find the mystery tile" beat. It still takes its thump and dust, just no damage.</summary>
+        private void ApplyLandingCracks(int gen)
+        {
+            for (int i = 0; i < _landings.Count; i++)
+            {
+                if (_grid == null || gen != _siteGeneration || !_open || _finished)
+                {
+                    break; // the site closed/finished mid-cascade: stop touching it
+                }
+
+                DirtTile victim = _landings[i].Victim;
+                if (victim == null || victim.IsDestroyed || victim.IsSurprise)
+                {
+                    continue;
+                }
+
+                _landingCracks++;
+                if (victim.Damage())
+                {
+                    ClearTile(victim, "cascade landing");
+                }
+            }
+
+            _landings.Clear();
+        }
+
+        /// <summary>Landing flourish for one fallen tile: a small dust puff at the impact line
+        /// plus a soft thump. This fires from the tile's own travel tween, which can outlive its
+        /// site, so it proves the generation before touching anything site-owned.</summary>
+        private void OnTileLanded(Vector3 at, int gen)
+        {
+            if (!_open || gen != _siteGeneration)
+            {
+                return;
+            }
+
+            if (_crumbs != null)
+            {
+                _crumbs.transform.position = at + new Vector3(0f, -0.45f, 0f);
+                _crumbs.Emit(4);
+            }
+
+            PlayThump();
+        }
+
+        /// <summary>Soft landing thump. AUDIO HOOK: the dig audio pass gives falls their own low
+        /// "whump"; until then a landing borrows the crumble sample, throttled to one per beat so
+        /// a ten-tile cascade lands as one thud rather than a rattle.</summary>
+        private void PlayThump()
+        {
+            if (Time.time - _lastThump < ThumpMinGap)
+            {
+                return;
+            }
+
+            _lastThump = Time.time;
+            GameManager.Instance?.Audio?.Crumble();
+        }
+
         // ----- Tap handling -----
 
         public void OnTileTapped(DirtTile tile)
         {
-            if (!_open || _finished || tile == null || tile.IsDestroyed)
+            // A tile that is still travelling to the cell the cascade moved it into is not a
+            // valid bite target: the arm would chase a moving tile and the child would watch
+            // the bucket miss. The tap is dropped, nothing else is blocked — input stays live
+            // through the whole cascade and the tile is tappable again within ~0.3s.
+            if (!_open || _finished || tile == null || tile.IsDestroyed || tile.IsFalling)
             {
                 return;
             }
@@ -1523,9 +1908,18 @@ namespace DinoDigger.Dig
             bool destroyed = tile.Damage();
             GameManager.Instance?.Audio?.Crumble();
 
+            // VACATE BEFORE ANY FALL. The bite's own clear is booked first (and without
+            // settling): the T-Rex clear below picks its neighbour from the live grid, and a
+            // board that fell while the tapped cell still read as occupied would drop a column
+            // onto a tile that is not there any more.
+            if (destroyed)
+            {
+                ClearTile(tile, "player bite");
+            }
+
             // T-Rex superpower (Big-stage gate): the big fella's bite clears one adjacent
             // intact tile as well. Keyed off a Big T-Rex buddy being on the crew.
-            if (_trexBigHelps)
+            if (!_finished && _trexBigHelps)
             {
                 DirtTile adjacent = FindAdjacentIntact(tile);
                 if (adjacent != null)
@@ -1539,17 +1933,14 @@ namespace DinoDigger.Dig
                     bool adjDestroyed = adjacent.Damage();
                     if (adjDestroyed)
                     {
-                        _clearCause = "T-Rex adjacent clear";
-                        CollectIfBuried(adjacent);
+                        ClearTile(adjacent, "T-Rex adjacent clear");
                     }
                 }
             }
 
-            if (destroyed)
-            {
-                _clearCause = "player bite";
-                CollectIfBuried(tile);
-            }
+            // ONE cascade for everything this bite cleared, so a bite plus its T-Rex bonus
+            // reads as a single tumble instead of two staggered ones.
+            SettleGrid("player bite");
 
             // Fire the rest of the crew's automatic powers on this bite (additive; the
             // tap has already fully resolved above).
@@ -1572,6 +1963,10 @@ namespace DinoDigger.Dig
             // through, so firing here (guarded to once) covers the tap bite, the T-Rex
             // adjacent clear, the Trike column, and the geode chain alike. The pocket tile
             // hides no item, so it falls through the buried lookup below with no double-handling.
+            // The gravity cascade is deliberately NOT one of those paths: a landing tick skips
+            // the pocket entirely (see ApplyLandingCracks) so it can only ever be uncovered by
+            // digging, never squashed by a tile falling on it. The breadcrumb below still names
+            // "cascade landing" if that ever regresses.
             if (tile == _surpriseTile && !_surpriseFired)
             {
                 _surpriseFired = true;
@@ -1676,6 +2071,10 @@ namespace DinoDigger.Dig
             _arm = ArmState.Reaching;
         }
 
+        // A tile that starts FALLING while the arm is reaching for it is simply followed down:
+        // BiteAim reads the tile's live position every frame, so the bucket tracks it and the
+        // bite still lands. (A tap AT a falling tile is dropped in OnTileTapped; this is the
+        // already-accepted tap whose target the cascade moved out from under it.)
         private void TickReaching(float dt)
         {
             if (_activeTile == null || _activeTile.IsDestroyed)
@@ -1885,6 +2284,7 @@ namespace DinoDigger.Dig
 
             _tiles.Clear();
             _buried.Clear();
+            _landings.Clear(); // a cascade in flight has nothing left to land on
             _grid = null;
         }
 
