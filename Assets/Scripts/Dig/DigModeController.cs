@@ -565,7 +565,17 @@ namespace DinoDigger.Dig
 
         // ---- Fossil bone test hooks (DinoDigger-0z5) ----
         internal int TestBoneCount => _bones.Count;
+        internal bool TestBoneAssigned => _boneAssigned;
         internal int TestBonesPopped => _bonesPopped;
+
+        /// <summary>TEST HOOK. Which skeleton the <paramref name="bone"/>-th buried bone belongs
+        /// to, so a case can assert the site is digging toward the species the BOARD wants.</summary>
+        internal DinoType TestBoneSpecies(int bone) =>
+            bone >= 0 && bone < _bones.Count ? _bones[bone].Species : default;
+
+        /// <summary>TEST HOOK. Which <see cref="BoneType"/> the buried bone is.</summary>
+        internal int TestBoneIndex(int bone) =>
+            bone >= 0 && bone < _bones.Count ? _bones[bone].BoneIndex : -1;
         internal int TestBoneCellsUncovered => _boneCellsUncovered;
 
         /// <summary>TEST HOOK. Cells the <paramref name="bone"/>-th bone spans (0 = no such bone).</summary>
@@ -876,6 +886,29 @@ namespace DinoDigger.Dig
         internal ItemType TestBuriedType(DirtTile tile)
         {
             return (tile != null && _buried.TryGetValue(tile, out Buried b)) ? b.Type : ItemType.Fruit;
+        }
+
+        /// <summary>TEST HOOK. Bury an item on an EXACT cell, through the same two-step
+        /// bookkeeping site generation uses (the <c>_buried</c> map plus the tile's own peek), so
+        /// a case can CONSTRUCT the board configuration it needs instead of scanning a random
+        /// site for a lucky one. Refuses any cell generation itself would refuse — off the board,
+        /// dead, a toy, the surprise pocket, a bone cell, or already carrying an item — so a
+        /// hand-buried item is exactly as legal as a rolled one, and a case cannot accidentally
+        /// assert against a board state the real generator could never produce.</summary>
+        internal bool TestBuryItemAt(int r, int c, ItemType type, int variant)
+        {
+            DirtTile t = TileAt(r, c);
+            if (t == null || t.IsDestroyed || t.HasItem || t.IsSurprise || t.CoversBone ||
+                t.Kind != DigTileKind.Dirt || _buried.ContainsKey(t))
+            {
+                return false;
+            }
+
+            var b = new Buried { Type = type, Dino = DinoType.TRex, Variant = variant };
+            _buried[t] = b;
+            Sprite peek = PeekSprite(b, out Color tint);
+            t.SetPeek(peek, tint);
+            return true;
         }
 
         internal int TestBuriedVariant(DirtTile tile)
@@ -2065,36 +2098,23 @@ namespace DinoDigger.Dig
             }
         }
 
-        // EGG-SHARD NERF: once every egg species is owned, a dug egg can no longer
-        // hatch anything new, so its configured weight is cut to EggNerfFraction and
-        // the freed remainder rolls EGG SHARDS instead. (Any residual egg that still
-        // rolls resolves to a shard downstream too, since no unique species remains —
-        // see GameManager.ResolveDugItem — so the nest, not duplicates, gets fed.)
+        // EGG NERF: once every egg species is owned, a dug egg can no longer hatch anything
+        // new, so its configured weight is cut to EggNerfFraction and the freed remainder rolls
+        // TREASURE instead. (Any residual egg that still rolls resolves to treasure downstream
+        // too, since no unique species remains — see GameManager.ResolveDugItem.) The late-game
+        // COLLECTION is not in this table at all: it is the multi-cell fossil bone the site
+        // buries in its own layer, behind the very same all-species-owned gate.
         private const float EggNerfFraction = 0.2f;
 
         /// <summary>Roll one buried item FOR THIS SITE — the loot table plus the site's own
-        /// context.
-        ///
-        /// BONES REPLACE DIG SHARDS ONE-FOR-ONE (DinoDigger-0z5). Egg shards exist to feed the
-        /// nest once every egg species is owned; fossil bones unlock behind exactly the same
-        /// gate and feed the skeleton board instead. Running both at full rate would just double
-        /// the late-game drip, so at a site that actually buried a bone a rolled shard pays out
-        /// as treasure and the bone is the site's collectible. Deliberately applied HERE and not
-        /// in <see cref="RollItem"/>: that is the pure loot table, which the shard-rate tests
-        /// measure directly and which the rock-smash payout mirrors — rock shards stay live, so
-        /// the nest still progresses while the board fills. One config bool turns the trade off
-        /// and makes bones pure bonus.</summary>
+        /// context. The site-specific layer that used to live here (trading a rolled egg shard
+        /// for treasure at a site that buried a bone) retired with the shards themselves in
+        /// save v5, so this is currently the plain loot table; it stays as the seam any future
+        /// per-site loot rule hangs off, which is what kept the bone trade out of
+        /// <see cref="RollItem"/> — the pure table the distribution tests measure.</summary>
         private Buried RollSiteItem()
         {
-            Buried b = RollItem();
-            bool trade = _config == null || _config.DigBonesReplaceShardDrops;
-            if (b.Type == ItemType.Shard && _boneAssigned && trade)
-            {
-                b.Type = ItemType.Treasure;
-                b.Variant = Random.Range(0, _config != null ? Mathf.Max(1, _config.TreasureVariants) : 1);
-            }
-
-            return b;
+            return RollItem();
         }
 
         private Buried RollItem()
@@ -2104,16 +2124,23 @@ namespace DinoDigger.Dig
             float egg = _theme != null ? _theme.EggWeight : _config.EggWeight;
             float fruit = _theme != null ? _theme.FruitWeight : _config.FruitWeight;
             float treasure = _theme != null ? _theme.TreasureWeight : _config.TreasureWeight;
-            float shard = 0f;
 
+            // THE EGG NERF. Once every egg species is owned an egg has no dinosaur left to
+            // contain, so most of its weight is freed. It used to become egg SHARDS for the
+            // nest; the nest is retired (save v5) and the late-game collectible is now the
+            // multi-cell FOSSIL BONE this site buries directly (see PlaceBones), which is not
+            // part of the loot table at all. So the freed weight simply becomes treasure —
+            // the reward the child can always use — and the collection rides on the bone.
             GameManager gm = GameManager.Instance;
+            float nerfed = 0f;
             if (gm != null && gm.EggSpeciesAllOwned())
             {
-                shard = egg * (1f - EggNerfFraction);
+                nerfed = egg * (1f - EggNerfFraction);
                 egg *= EggNerfFraction;
+                treasure += nerfed;
             }
 
-            float total = Mathf.Max(0.0001f, egg + shard + fruit + treasure);
+            float total = Mathf.Max(0.0001f, egg + fruit + treasure);
             float roll = Random.value * total;
 
             var b = new Buried();
@@ -2122,11 +2149,7 @@ namespace DinoDigger.Dig
                 b.Type = ItemType.Egg;
                 b.Dino = RandomDino();
             }
-            else if (roll < egg + shard)
-            {
-                b.Type = ItemType.Shard;
-            }
-            else if (roll < egg + shard + fruit)
+            else if (roll < egg + fruit)
             {
                 b.Type = ItemType.Fruit;
                 b.Variant = Random.Range(0, Mathf.Max(1, _config.FruitVariants));
@@ -2484,14 +2507,26 @@ namespace DinoDigger.Dig
             return gm != null && gm.EggSpeciesAllOwned();
         }
 
-        /// <summary>Roll a shape and a skeleton and find somewhere on the board for it: templates
-        /// are tried in a shuffled order and anchors are scanned from a shuffled start, so a
-        /// cramped board falls back to a smaller bone instead of failing outright. Row 0 is
-        /// avoided while anything deeper fits — a bone lying along the surface would uncover
-        /// itself on the first bite, and the beat is meant to take some digging.</summary>
+        /// <summary>Pick the bone this site should bury and find somewhere on the board for it.
+        ///
+        /// THE SITE DIGS WHAT THE BOARD STILL NEEDS (DinoDigger-5ve). The skeleton board asks
+        /// for the next species in its fill order with an incomplete skeleton, plus one of the
+        /// bones that skeleton is still missing — so a dig always moves the collection forward
+        /// and a child never banks a tenth skull. Templates for THAT bone are tried first (a
+        /// femur has two shapes, the rest one); only if none of them fits the board does it fall
+        /// back to any shape at all, because a bone that could not be placed is a dig with no
+        /// treat in it, which is worse than an off-plan bone.
+        ///
+        /// Anchors are scanned from a shuffled start so the same bone never lands in the same
+        /// spot, and row 0 is avoided while anything deeper fits — a bone lying along the
+        /// surface would uncover itself on the first bite, and the beat is meant to take some
+        /// digging.</summary>
         private bool TryPlaceRolledBone()
         {
-            DinoType species = RandomBoneSpecies();
+            if (!TryBoneToBury(out DinoType species, out int wantedBone))
+            {
+                return false; // every skeleton is complete: nothing left worth burying
+            }
 
             var order = new List<int>(BoneTemplates.Length);
             for (int i = 0; i < BoneTemplates.Length; i++)
@@ -2500,6 +2535,14 @@ namespace DinoDigger.Dig
             }
 
             Shuffle(order);
+
+            // Templates that ARE the wanted bone come first; the rest stay as the fallback.
+            order.Sort((a, b) =>
+            {
+                int wa = BoneTemplateType[a] == wantedBone ? 0 : 1;
+                int wb = BoneTemplateType[b] == wantedBone ? 0 : 1;
+                return wa.CompareTo(wb);
+            });
 
             // Two passes: everything below the top row first, then the top row as a last resort.
             for (int pass = 0; pass < 2; pass++)
@@ -2589,9 +2632,21 @@ namespace DinoDigger.Dig
         /// <summary>Which skeleton this bone belongs to. The four EGG species: they are the ones
         /// the child owns by the time bones unlock, so every bone dug is a bone for a dinosaur
         /// they know. (D2b owns the real board roster and may widen this.)</summary>
-        private DinoType RandomBoneSpecies()
+        /// <summary>Ask the skeleton board what to bury: the species it is currently filling in
+        /// and one of the bones that skeleton still needs. False once every skeleton is complete
+        /// (nothing left to collect) or with no GameManager (a bare test rig), and the site then
+        /// buries no bone at all rather than a meaningless one.</summary>
+        private bool TryBoneToBury(out DinoType species, out int boneIndex)
         {
-            return (DinoType)Random.Range(0, DinoSpecies.EggHatchableCount);
+            GameManager gm = GameManager.Instance;
+            if (gm != null)
+            {
+                return gm.TryNextNeededBone(out species, out boneIndex);
+            }
+
+            species = default;
+            boneIndex = -1;
+            return false;
         }
 
         /// <summary>The unpopped bone owning cell r,c, or null.</summary>
@@ -2722,8 +2777,15 @@ namespace DinoDigger.Dig
             SpawnPitBurst(at, BonePeekTint, sparkles);
             SpawnBoneProp(b, at);
 
-            // The bank, not the wallet: bones are the collection D2b's skeleton board reads.
-            gm?.BankBone(b.Species, b.BoneIndex);
+            // The bank, not the wallet: bones are the collection the skeleton board reads. Once
+            // every skeleton has been revived there is nothing left to collect, and BankBone
+            // pays the duplicate out as a fountain of coins instead — it says which it did, so
+            // the pit's own flourish can follow suit.
+            bool banked = gm == null || gm.BankBone(b.Species, b.BoneIndex, at);
+            if (!banked)
+            {
+                SpawnPitBurst(at, new Color(1f, 0.85f, 0.4f), 16); // a coin-coloured second puff
+            }
 
             // Whatever tiles are standing on its cells are no longer covering anything.
             for (int k = 0; k < b.Rows.Length; k++)

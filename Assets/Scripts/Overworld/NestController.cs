@@ -1,4 +1,3 @@
-using System;
 using UnityEngine;
 using DinoDigger.Config;
 using DinoDigger.Core;
@@ -6,40 +5,44 @@ using DinoDigger.Core;
 namespace DinoDigger.Overworld
 {
     /// <summary>
-    /// The egg-shard nest prop that lives in the meadow. It:
-    ///   - registers itself as <see cref="GameEvents.NestTargetProvider"/> so dug egg
-    ///     shards fly TO the egg sitting in the nest;
-    ///   - listens to <see cref="GameEvents.ShardCollected"/> and advances the egg's
-    ///     5-state assembly sprite, its thresholds SCALED onto the current shard
-    ///     requirement (GameManager.ShardsPerHatch, which escalates 5/8/15/20 per egg):
-    ///     state = floor(ShardCount / requirement * (states-1)), punch-scaling +
-    ///     sparkling on each arrival;
-    ///   - drives the ceremony egg wobble/crack visual on GameManager's cue.
+    /// The meadow's nest prop — RETIRED AS A MECHANIC, KEPT AS A PLACE (DinoDigger-5ve).
     ///
-    /// Persists nothing itself — ShardCount lives in the save (read via GameManager).
-    /// Fully null-tolerant so a partially-wired scene never throws. Art comes from the
-    /// <see cref="PlaceholderLibrary"/> (NestSprite + EggAssemblySprites); real generated
-    /// art can replace those fields in place with no code change here.
+    /// It used to be the egg-shard machine: shards flew to it, its egg assembled through five
+    /// states, and a full nest ran the hatch ceremony. Save v5 retires that whole path — bones
+    /// and the skeleton board replace shards, and the Dino-Matic replaces the hatch — so the
+    /// nest keeps only what was always good about it: it is the spot in the meadow where new
+    /// dinosaurs come from.
+    ///
+    /// WHY KEEP IT AT ALL, rather than deleting the prop with its system? Three reasons, and
+    /// the third is the deciding one:
+    ///   - it is already placed, wired and loved in the shipped scene, and tearing it out would
+    ///     need a scene rebuild to gain literally nothing;
+    ///   - the whole roster of shard dinos visibly came out of it, so an empty meadow corner
+    ///     would read as something LOST rather than something finished; and
+    ///   - it becomes the board's WORLD ANCHOR: the collection lives in a HUD panel, which is
+    ///     nowhere, so every banked bone also pops the nest — a punch and a sparkle out in the
+    ///     world — and the meadow keeps a physical place where progress is visible.
+    ///
+    /// It therefore shows its FINAL, fully-assembled egg forever (the nest did its job) and
+    /// listens to <see cref="GameEvents.BoneBanked"/> instead of the retired shard event. It
+    /// still registers <see cref="GameEvents.NestTargetProvider"/> so camera framing has a
+    /// meadow focal point. Persists nothing; fully null-tolerant.
     /// </summary>
     public class NestController : MonoBehaviour
     {
         [SerializeField] private SpriteRenderer _base;    // twig-ring nest bowl
-        [SerializeField] private SpriteRenderer _egg;     // assembling egg
-        [SerializeField] private ParticleSystem _sparkle; // shard-arrival + hatch fx
+        [SerializeField] private SpriteRenderer _egg;     // the finished egg it hatched
+        [SerializeField] private ParticleSystem _sparkle; // bone-banked echo
         [SerializeField] private PlaceholderLibrary _library;
 
-        private int _assemblyIndex = -1;
+        private int _bonePops;   // test-observable
 
         // TEST HOOKS (integration runner; no reflection).
-        internal int TestAssemblyIndex => _assemblyIndex;
         internal Sprite TestEggSprite => _egg != null ? _egg.sprite : null;
         internal Vector3 TestEggWorld => EggWorld;
-        internal int TestStateCount =>
-            _library != null && _library.EggAssemblySprites != null &&
-            _library.EggAssemblySprites.Length > 0 ? _library.EggAssemblySprites.Length : 5;
+        internal int TestBonePops => _bonePops;
 
-        /// <summary>Where a dug shard flies / the ceremony spawns the new dino: the egg's
-        /// world position (falls back to the nest base, then this transform).</summary>
+        /// <summary>The nest's focal point (the egg, else the bowl, else this transform).</summary>
         public Vector3 EggWorld =>
             _egg != null ? _egg.transform.position :
             _base != null ? _base.transform.position : transform.position;
@@ -55,12 +58,12 @@ namespace DinoDigger.Overworld
         private void OnEnable()
         {
             GameEvents.NestTargetProvider = () => EggWorld;
-            GameEvents.ShardCollected += OnShardCollected;
+            GameEvents.BoneBanked += OnBoneBanked;
         }
 
         private void OnDisable()
         {
-            GameEvents.ShardCollected -= OnShardCollected;
+            GameEvents.BoneBanked -= OnBoneBanked;
             // Only surrender the provider if it is still ours.
             if (GameEvents.NestTargetProvider != null)
             {
@@ -70,81 +73,36 @@ namespace DinoDigger.Overworld
 
         private void Start()
         {
-            // Reflect the saved shard progress (RestoreFromSave also pushes this, but
-            // self-refreshing covers scenes wired without a GameManager restore call).
-            int count = GameManager.Instance != null ? GameManager.Instance.ShardCount : 0;
-            RefreshAssembly(count);
+            ShowFinishedEgg();
         }
 
-        private void OnShardCollected(int total)
+        /// <summary>A bone landed on the board: the nest pops and sparkles, so the collection
+        /// filling has a place in the WORLD and not only in a HUD panel.</summary>
+        private void OnBoneBanked(DinoType species, int boneIndex)
         {
-            int before = _assemblyIndex;
-            RefreshAssembly(total);
+            _bonePops++;
 
-            // A shard landed: always give a little pop + sparkle so the arrival reads,
-            // and a bigger punch when the assembly state actually stepped forward.
             if (_egg != null)
             {
-                Tween.PunchScale(_egg.transform, _assemblyIndex != before ? 0.4f : 0.22f, 0.35f);
+                Tween.PunchScale(_egg.transform, 0.3f, 0.35f);
             }
 
             if (_sparkle != null)
             {
-                _sparkle.Emit(_assemblyIndex != before ? 16 : 8);
+                _sparkle.Emit(10);
             }
         }
 
-        /// <summary>Set the egg's assembly sprite for a given banked shard count.
-        /// No fx — used for the initial restore and the post-ceremony reset.</summary>
-        public void RefreshAssembly(int shardCount)
-        {
-            int idx = AssemblyIndex(shardCount);
-            _assemblyIndex = idx;
-
-            Sprite[] set = _library != null ? _library.EggAssemblySprites : null;
-            if (_egg != null && set != null && set.Length > 0)
-            {
-                _egg.sprite = set[Mathf.Clamp(idx, 0, set.Length - 1)];
-            }
-        }
-
-        /// <summary>Ceremony cue: show the fully-assembled egg, then wobble + crack it,
-        /// firing <paramref name="onHatched"/> when the wobble completes (the caller
-        /// spawns the new dino there). Uses ShakeRotation so its onComplete always fires.</summary>
-        public void PlayHatch(Action onHatched)
+        /// <summary>Park the nest on its LAST assembly sprite — the whole, hatched egg — and
+        /// leave it there. State-derived and idempotent: there is exactly one look a retired
+        /// nest can have, so no code path can strand it mid-assembly.</summary>
+        public void ShowFinishedEgg()
         {
             Sprite[] set = _library != null ? _library.EggAssemblySprites : null;
             if (_egg != null && set != null && set.Length > 0)
             {
-                _egg.sprite = set[set.Length - 1]; // whole egg
-                _assemblyIndex = set.Length - 1;
+                _egg.sprite = set[set.Length - 1];
             }
-
-            if (_sparkle != null)
-            {
-                _sparkle.Emit(24);
-            }
-
-            Transform t = _egg != null ? _egg.transform : transform;
-            Tween.ShakeRotation(t, 16f, 1.0f, 3, () => onHatched?.Invoke());
-        }
-
-        private int AssemblyIndex(int shardCount)
-        {
-            Sprite[] set = _library != null ? _library.EggAssemblySprites : null;
-            int states = set != null && set.Length > 0 ? set.Length : 5;
-            if (states <= 1)
-            {
-                return 0;
-            }
-
-            // Scale the (states-1) build steps across the CURRENT requirement so the egg
-            // reads as "full" exactly as the ceremony fires, whatever the requirement is
-            // (5/8/15/20). At requirement 20 this reproduces the old 0/5/10/15/20 steps.
-            int per = GameManager.Instance != null ? GameManager.Instance.ShardsPerHatch : 20;
-            per = Mathf.Max(1, per);
-            int idx = Mathf.FloorToInt((float)shardCount * (states - 1) / per);
-            return Mathf.Clamp(idx, 0, states - 1);
         }
     }
 }

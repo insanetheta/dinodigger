@@ -150,10 +150,13 @@ namespace DinoDigger.Overworld
                     GameManager.Instance?.CollectTreasure(this);
                     break;
                 case ItemType.Shard:
-                    // Sparkly shell piece: auto-collects like treasure, but flies to
-                    // the nest (or a graceful fallback) instead of the corner counter.
+                    // SHARDS ARE RETIRED (save v5): the egg-shard nest is gone and fossil
+                    // bones replaced it. Nothing produces one any more, but a stray must still
+                    // be worth something rather than sitting there inert, so it banks as
+                    // treasure — which is also what GameManager.ResolveDugItem downgrades it
+                    // to before it ever gets this far.
                     SetColliderEnabled(false);
-                    GameManager.Instance?.CollectShard(this);
+                    GameManager.Instance?.CollectTreasure(this);
                     break;
             }
         }

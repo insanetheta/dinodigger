@@ -278,11 +278,9 @@ namespace DinoDigger.Config
                  "the skeleton board is the late-game collection and it should always tick over.")]
         public float DigBoneSiteChance = 1f;
 
-        [Tooltip("Bones REPLACE dig-site egg shards one-for-one: at a site that buried a bone, " +
-                 "a buried item that rolls a shard becomes treasure instead, so the late-game " +
-                 "reward moves from the nest to the skeleton board. Rock-smash shards are " +
-                 "untouched, so the nest still progresses. Turn off to run bones as pure bonus.")]
-        public bool DigBonesReplaceShardDrops = true;
+        // The shard TRADE (a site that buried a bone downgraded its rolled shards to treasure)
+        // is gone with the shards themselves: save v5 retires the egg-shard nest outright, so
+        // there is no second late-game drip left to trade against.
 
         [Tooltip("Seconds the assembled bone takes to rise out of the pit when its last cell " +
                  "is uncovered.")]
@@ -315,21 +313,18 @@ namespace DinoDigger.Config
         // plus all grid rows below it (see DigModeController.DigCenter): rows=5
         // needs a half-height of ~4.2.
         public float DigOrthoSize = 4.2f;
-        [Tooltip("Ortho size the camera zooms to for the shard-hatch nest ceremony " +
-                 "(a gentle push-in, framing the nest + the new baby dino).")]
+        [Tooltip("Ortho size the camera zooms to for the Dino-Matic revival ceremony " +
+                 "(a gentle push-in, framing the machine + the new baby dino).")]
         public float CeremonyOrthoSize = 4.0f;
         public float CameraFollowLerp = 3.0f;
         public Vector2 CameraDeadzone = new Vector2(1.2f, 0.8f);
         public float TransitionSeconds = 0.5f;
 
-        [Header("Egg-shard nest")]
-        [Tooltip("Egg shards required to hatch each successive shard-built egg, indexed by " +
-                 "the number of shard eggs ALREADY hatched (the 1st egg uses entry [0]). " +
-                 "Escalates so the first shard dino comes quickly, then costs more; the last " +
-                 "entry clamps for any further eggs. The nest's assembly sprites scale onto " +
-                 "whichever requirement is current: state = floor(ShardCount / requirement * " +
-                 "(states-1)), e.g. 0/5/10/15/20 at requirement 20, tighter at 5.")]
-        public int[] ShardsPerHatchProgression = { 5, 8, 15, 20 };
+        // THE EGG-SHARD NEST IS RETIRED (save v5, DinoDigger-5ve). Its escalating requirement
+        // curve lived here; it now lives — frozen — as Managers.SaveData.LegacyShardsPerHatch,
+        // because the only thing that still needs it is the one-shot v4->v5 migration that
+        // converts a returning player's leftover shards into banked bones, and a migration must
+        // be reproducible from the save alone rather than from a live design number.
 
         [Header("Dino Town (idle builder)")]
         /// <summary>Build-order index of the Fruit Stand — the second building (price 25),
@@ -428,10 +423,9 @@ namespace DinoDigger.Config
                  "until this many seconds pass (a tap still wiggles for feedback).")]
         public float RockCooldownSeconds = 15f;
 
-        [Tooltip("Chance a smashed rock coughs up an egg SHARD instead of treasure — but " +
-                 "only while shard species remain unhatched; once the nest is complete it " +
-                 "is always treasure (mirrors the dig-loot shard gate).")]
-        public float RockShardChance = 0.1f;
+        // A smashed rock used to roll an egg shard some of the time to keep the nest ticking
+        // over. The nest is retired (save v5) and the fossil species come out of dig sites as
+        // BONES, so a rock is always coins now and the chance knob is gone with the mechanic.
 
         [Header("Berry Patch (garden)")]
         [Tooltip("Seconds a budding sprout takes to swell into a ripe, harvestable berry.")]
@@ -584,25 +578,6 @@ namespace DinoDigger.Config
         }
 
         // ----- Derived helpers -----
-
-        /// <summary>Egg shards needed to hatch the NEXT shard-built egg, given how many
-        /// shard eggs have ALREADY hatched (0 -> the first egg's requirement). Clamps to
-        /// the last progression entry, so the 5th+ egg reuses the final cost.</summary>
-        public int GetShardRequirement(int eggsHatched)
-        {
-            if (ShardsPerHatchProgression == null || ShardsPerHatchProgression.Length == 0)
-            {
-                return 20;
-            }
-
-            int i = Mathf.Clamp(eggsHatched, 0, ShardsPerHatchProgression.Length - 1);
-            return Mathf.Max(1, ShardsPerHatchProgression[i]);
-        }
-
-        /// <summary>Back-compat / editor convenience: the FIRST shard egg's requirement.
-        /// Runtime code should prefer <see cref="GetShardRequirement"/> (via
-        /// GameManager.ShardsPerHatch) for the escalating value.</summary>
-        public int ShardsPerHatch => GetShardRequirement(0);
 
         /// <summary>Coins banked when the treasure <paramref name="variant"/> is collected
         /// (clamped). An out-of-range or unconfigured variant safely banks 1.</summary>

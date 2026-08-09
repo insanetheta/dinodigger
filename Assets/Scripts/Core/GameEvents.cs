@@ -33,7 +33,14 @@ namespace DinoDigger.Core
         public static event Action<DinoType> EggHatched;
         public static event Action<DinoType, GrowthStage> DinoGrew;
         public static event Action<int> TreasureCollected;   // new running total
-        public static event Action<int> ShardCollected;      // new running shard total (flies to nest)
+
+        /// <summary>A fossil bone was banked toward a skeleton (species, BoneType ordinal) —
+        /// the beat the skeleton board fills a slot on and the Dino-Matic's excavation is
+        /// first triggered by. Raised only for bones that actually BANKED: a duplicate dug
+        /// after every skeleton has been revived pays out as treasure instead and raises
+        /// <see cref="TreasureCollected"/> like any other coin.</summary>
+        public static event Action<DinoType, int> BoneBanked;
+
         public static event Action DigModeEntered;
         public static event Action DigModeExited;
         public static event Action DinoTapped;
@@ -49,10 +56,11 @@ namespace DinoDigger.Core
         public static event Action<int> BuildingFinished;       // building index that just completed
 
         /// <summary>
-        /// Where a dug egg shard should fly to. Set by the nest system (bl6.4) once
-        /// a nest exists in the meadow; when null, shard collection falls back to a
-        /// safe target (meadow center, else the treasure counter corner). Kept as a
-        /// provider rather than an event so the shard can retarget every flight.
+        /// Where the meadow's nest prop stands. Registered by <see cref="NestController"/>.
+        /// The egg-shard flight it was built for is retired (save v5), but the nest is still
+        /// the meadow's landmark, so this stays as the "point at the nest" provider for
+        /// camera framing and for anything that wants the meadow's focal point without
+        /// reaching into the meadow itself. Null-tolerant on both sides.
         /// </summary>
         public static Func<Vector3?> NestTargetProvider;
 
@@ -61,7 +69,8 @@ namespace DinoDigger.Core
         public static void RaiseEggHatched(DinoType t) => EggHatched?.Invoke(t);
         public static void RaiseDinoGrew(DinoType t, GrowthStage s) => DinoGrew?.Invoke(t, s);
         public static void RaiseTreasureCollected(int total) => TreasureCollected?.Invoke(total);
-        public static void RaiseShardCollected(int total) => ShardCollected?.Invoke(total);
+        public static void RaiseBoneBanked(DinoType species, int boneIndex) =>
+            BoneBanked?.Invoke(species, boneIndex);
         public static void RaiseDigModeEntered() => DigModeEntered?.Invoke();
         public static void RaiseDigModeExited() => DigModeExited?.Invoke();
         public static void RaiseDinoTapped() => DinoTapped?.Invoke();
@@ -86,7 +95,7 @@ namespace DinoDigger.Core
             EggHatched = null;
             DinoGrew = null;
             TreasureCollected = null;
-            ShardCollected = null;
+            BoneBanked = null;
             NestTargetProvider = null;
             DigModeEntered = null;
             DigModeExited = null;

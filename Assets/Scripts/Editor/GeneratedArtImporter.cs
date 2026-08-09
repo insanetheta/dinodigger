@@ -159,6 +159,46 @@ namespace DinoDigger.EditorTools
         // it just needs a sane import scale like the other particles.
         private const string DustPuffRel = "dig/dust_thump";
 
+        // FOSSIL BONES (DinoDigger-0z5), sliced to Generated/dig/bones/. Indexed by BoneType
+        // (0 SmallBone, 1 Femur, 2 Rib, 3 Skull) — the enum is a stable contract the save keys
+        // off, so this table's ORDER matters and must never be shuffled. The generated set has
+        // more bones than the game models (claw, horn, jaw, pelvis, toe, tooth); those are
+        // spare art for a future skeleton, and picking the vertebra as the "small bone" keeps
+        // the 1x2 stub reading as a piece of spine rather than a mystery lump.
+        //
+        // Sized like a dig toy — LARGER dimension fitted to one grid cell — because the pop
+        // prop scales a bone up from its own aspect (see DigModeController.SpawnBoneProp) and
+        // the skeleton board draws them into fixed UI rects with preserveAspect, so a
+        // consistent one-cell base is what makes every bone read at a comparable size.
+        private static readonly string[] BoneRels =
+        {
+            "dig/bones/bone_vertebra", // 0 SmallBone — the 1x2 stub
+            "dig/bones/bone_femur",    // 1 Femur
+            "dig/bones/bone_rib",      // 2 Rib
+            "dig/bones/bone_skull",    // 3 Skull
+        };
+
+        // SKELETON BOARD SILHOUETTES (DinoDigger-5ve), one per fossil species in
+        // Config.SkeletonPlan.Species order. Drawn in the HUD (where PPU does not matter) and
+        // ALSO as the ghost that floats into the Dino-Matic during a revival (where it does),
+        // so they import by HEIGHT to the character target — the ghost is meant to read as a
+        // whole dinosaur skeleton standing next to the machine.
+        private static readonly string[] SkeletonBoardRels =
+        {
+            "dig/boards/board_pteranodon",
+            "dig/boards/board_ankylosaurus",
+            "dig/boards/board_spinosaurus",
+            "dig/boards/board_parasaurolophus",
+            "dig/boards/board_velociraptor",
+        };
+
+        // THE DINO-MATIC (DinoDigger-3rz): an excavation, not a construction, but mechanically
+        // the same five-state ladder as a town building (s0 = the buried mound with the dome
+        // glint, s1..s3 = the crew digging it out, done = the working machine), so it imports
+        // on exactly the town's terms — width-normalised with a bottom-center pivot — and
+        // BuildingController drives it unchanged.
+        private const string DinoMaticSlug = "dinomatic";
+
         // Dig-mode background is sized by WIDTH so it covers the whole camera view.
         // During dig the camera uses GameConfig.DigOrthoSize (3.2) => visible width at
         // 16:10 is 2 * 3.2 * 1.6 = 10.24 world units; the dig grid is 7 columns wide.
@@ -342,6 +382,29 @@ namespace DinoDigger.EditorTools
             ConfigureCellFit(PinataPotRel, missing);
             ConfigureCellFit(PinataPotCrackedRel, missing);
             ConfigureEach(new[] { DustPuffRel }, ParticleTargetH, missing);
+
+            // Fossil bones + skeleton-board silhouettes (DinoDigger-0z5 / -5ve).
+            foreach (string rel in BoneRels)
+            {
+                ConfigureCellFit(rel, missing);
+            }
+
+            ConfigureEach(SkeletonBoardRels, CharTargetH, missing);
+
+            // The Dino-Matic's five excavation states, on the town's building terms.
+            foreach (string rel in BuildingStatePaths(DinoMaticSlug))
+            {
+                string dp = GenPath(rel);
+                int dw = SourceWidth(dp);
+                if (dw > 0)
+                {
+                    ConfigureBuilding(dp, dw / BuildingTargetW, missing);
+                }
+                else
+                {
+                    missing.Add(dp + " (no readable source texture)");
+                }
+            }
 
             // Full-bleed dig backdrop: PPU from WIDTH so it covers the camera view.
             const string digBgRel = "digbg/dig_background";
@@ -645,6 +708,54 @@ namespace DinoDigger.EditorTools
                 lib.DustPuff = LoadSpriteTracked(DustPuffRel, missing);
                 wired.Add($"Library: dig toys crystal x{DigCrystalRels.Length} + geode + pot " +
                           $"(whole/cracked) + dust puff (each fits a {DirtTargetH}-unit grid cell)");
+
+                // Fossil bones, indexed by BoneType (see BoneRels). A null slot falls back at
+                // runtime to the treasure bone and then a white silhouette, so a bone ALWAYS
+                // pops something visible and the board still fills.
+                lib.BoneSprites = LoadArray(BoneRels, missing);
+
+                // Skeleton-board silhouettes, indexed by SkeletonPlan.Species order. Loaded
+                // WITHOUT tracking — the pass above already reported anything missing, and the
+                // board degrades to a plain dark card rather than blanking out.
+                var boards = new Sprite[SkeletonBoardRels.Length];
+                int boardsFound = 0;
+                for (int i = 0; i < SkeletonBoardRels.Length; i++)
+                {
+                    boards[i] = LoadSprite(GenPath(SkeletonBoardRels[i]));
+                    if (boards[i] != null)
+                    {
+                        boardsFound++;
+                    }
+                }
+
+                lib.SkeletonBoards = boards;
+                // The HUD bone button reuses the SKULL: it is the most immediately
+                // "dinosaur bones" shape in the set and needs no art of its own.
+                lib.BoneButtonIcon = lib.Bone((int)DinoDigger.Config.BoneType.Skull);
+                wired.Add($"Library: fossil bones x{BoneRels.Length} + skeleton boards " +
+                          $"{boardsFound}/{SkeletonBoardRels.Length} (bone button = skull)");
+
+                // The Dino-Matic's excavation states, same shape as a town building's set.
+                if (lib.DinoMaticArt == null)
+                {
+                    lib.DinoMaticArt = new BuildingArt();
+                }
+
+                string[] dinoMaticRels = BuildingStatePaths(DinoMaticSlug);
+                var dinoMaticStates = new Sprite[dinoMaticRels.Length];
+                int dinoMaticFound = 0;
+                for (int i = 0; i < dinoMaticRels.Length; i++)
+                {
+                    dinoMaticStates[i] = LoadSprite(GenPath(dinoMaticRels[i]));
+                    if (dinoMaticStates[i] != null)
+                    {
+                        dinoMaticFound++;
+                    }
+                }
+
+                lib.DinoMaticArt.States = dinoMaticStates;
+                wired.Add($"Library.DinoMaticArt: {dinoMaticFound}/{dinoMaticRels.Length} " +
+                          "excavation states (missing ones fall back to the generic placeholder)");
 
                 lib.StarParticle = LoadSpriteTracked(particles[0], missing);
                 lib.HeartParticle = LoadSpriteTracked(particles[1], missing);

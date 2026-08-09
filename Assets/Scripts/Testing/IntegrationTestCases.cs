@@ -42,9 +42,13 @@ namespace DinoDigger.Testing
                 new TestCase("TileHardness",         25f, Case_TileHardness),
                 new TestCase("EggHatch",             20f, Case_EggHatch),
                 new TestCase("UniqueDinoNoDupes",    20f, Case_UniqueDinoNoDupes),
-                new TestCase("ShardDropRate",        20f, Case_ShardDropRate),
-                new TestCase("NestAssembly",         30f, Case_NestAssembly),
-                new TestCase("ShardHatchCeremony",   40f, Case_ShardHatchCeremony),
+                // Replaces the retired ShardDropRate: the egg nerf still collapses egg drops
+                // once every species is owned, but the freed weight is treasure now and the
+                // late-game COLLECTION is the buried fossil bone. NestAssembly and
+                // ShardHatchCeremony retired WITH their systems (the egg-shard nest and its
+                // hatch); their behaviour lives on as SkeletonBoardFills and
+                // ReviveCeremonyJoins below.
+                new TestCase("BoneDropRate",         25f, Case_BoneDropRate),
                 new TestCase("FruitPunchNoCompound", 20f, Case_FruitPunchNoCompound),
                 new TestCase("FeedAndGrow",          25f, Case_FeedAndGrow),
                 new TestCase("GrowthStageArt",       15f, Case_GrowthStageArt),
@@ -121,6 +125,15 @@ namespace DinoDigger.Testing
                 // four egg species (which changes the loot table for anything after it until the
                 // next reset) and a bone pop is a reward beat.
                 new TestCase("BoneSpansCells",       60f, Case_BoneSpansCells),
+                // The fossil finale (DinoDigger-5ve / -3rz). Late for the same reasons as
+                // BoneSpansCells — they own every egg species and bank coins — and in
+                // dependency order: the board fills, the machine is dug out, the ceremony
+                // runs, and only then can a bone be a duplicate. Bodies live in
+                // IntegrationTestCasesFossil.cs.
+                new TestCase("SkeletonBoardFills",   60f, Case_SkeletonBoardFills),
+                new TestCase("MachineExcavates",     90f, Case_MachineExcavates),
+                new TestCase("ReviveCeremonyJoins",  90f, Case_ReviveCeremonyJoins),
+                new TestCase("DuplicateBonePaysOut", 45f, Case_DuplicateBonePaysOut),
                 // Dig-arm V2 live swap (DinoDigger-rrn): digs full tiles, so it can
                 // finish a round and bank treasure — late, like the cases above. Body
                 // lives in IntegrationTestCasesDigArm.cs.
@@ -1360,13 +1373,15 @@ namespace DinoDigger.Testing
             ctx.Assert(partialEggs > 0, "no eggs rolled while unowned species remained");
             ctx.Assert(partialShards == 0, $"{partialShards} shards rolled before all species owned (expected 0)");
 
-            // ---- Full ownership: zero owned-species eggs, shards appear. ----
+            // ---- Full ownership: zero owned-species eggs, and NOT an egg shard in sight.
+            // Shards retired with the nest (save v5) — the freed egg weight is treasure now
+            // and the late-game collectible is the fossil bone the SITE buries. ----
             gm.TestSpawnDino(DinoType.Brachiosaurus, GrowthStage.Baby);
             gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Baby);
             yield return ctx.WaitFrames(1);
             ctx.Assert(gm.TestEggSpeciesAllOwned, "all 4 egg species not owned after 4 spawns");
 
-            int eggs = 0, shards = 0, total = 0;
+            int eggs = 0, shards = 0, treasure = 0, total = 0;
             for (int round = 0; round < 50; round++) // renamed: `batch` list above shadows it
             {
                 for (int i = 0; i < 4; i++) // ~a dig site's batch worth of items
@@ -1375,18 +1390,25 @@ namespace DinoDigger.Testing
                     total++;
                     if (info.Type == ItemType.Egg) eggs++;
                     else if (info.Type == ItemType.Shard) shards++;
+                    else if (info.Type == ItemType.Treasure) treasure++;
                 }
             }
 
-            ctx.Assert(eggs == 0, $"{eggs} owned-species eggs rolled after owning all 4 (must convert to shards)");
-            ctx.Assert(shards > 0, "no egg shards appeared after owning every species");
-            ctx.Log($"partial: {partialEggs} eggs (all unowned), 0 shards; full: 0 eggs, {shards}/{total} shards");
+            ctx.Assert(eggs == 0, $"{eggs} owned-species eggs rolled after owning all 4 (must convert to treasure)");
+            ctx.Assert(shards == 0, $"{shards} egg shards rolled — the shard economy is retired (save v5)");
+            ctx.Assert(treasure > 0, "no treasure appeared after owning every species (the freed egg weight)");
+            ctx.Log($"partial: {partialEggs} eggs (all unowned), 0 shards; " +
+                    $"full: 0 eggs, 0 shards, {treasure}/{total} treasure");
             gm.TestReset();
         }
 
-        // Egg-shard nerf: once every egg species is owned, egg items collapse to at
-        // most ~25% of their pre-nerf rate and the freed weight becomes egg shards.
-        private IEnumerator Case_ShardDropRate(TestContext ctx)
+        // THE LATE-GAME REWARD SWAP (replaces the retired ShardDropRate, DinoDigger-5ve).
+        // Once every egg species is owned:
+        //   - egg items still collapse to at most ~25% of their pre-nerf rate (unchanged), but
+        //   - the freed weight is TREASURE, not egg shards: the shard economy is retired,
+        //   - and the thing that actually carries the late game is the multi-cell FOSSIL BONE
+        //     the site buries in its own layer, aimed at the skeleton the board is filling.
+        private IEnumerator Case_BoneDropRate(TestContext ctx)
         {
             GameManager gm = ctx.GM;
             gm.TestReset();
@@ -1396,191 +1418,88 @@ namespace DinoDigger.Testing
             gm.TestSpawnDino(DinoType.Brachiosaurus, GrowthStage.Baby);
             gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Baby);
             yield return ctx.WaitFrames(1);
-            ctx.Assert(gm.TestEggSpeciesAllOwned, "need all egg species owned for the shard nerf");
+            ctx.Assert(gm.TestEggSpeciesAllOwned, "need all egg species owned for the egg nerf");
 
             GameConfig cfg = gm.TestConfig;
             float cfgTotal = Mathf.Max(0.0001f, cfg.EggWeight + cfg.FruitWeight + cfg.TreasureWeight);
             float preNerfEggFrac = cfg.EggWeight / cfgTotal;
+            float preNerfTreasureFrac = cfg.TreasureWeight / cfgTotal;
 
             const int N = 3000;
-            int eggs = 0, shards = 0;
+            int eggs = 0, shards = 0, treasure = 0;
             for (int i = 0; i < N; i++)
             {
                 DugItemInfo info = gm.TestRollDugItem();
                 if (info.Type == ItemType.Egg) eggs++;
                 else if (info.Type == ItemType.Shard) shards++;
+                else if (info.Type == ItemType.Treasure) treasure++;
             }
 
             float eggFrac = eggs / (float)N;
-            float shardFrac = shards / (float)N;
+            float treasureFrac = treasure / (float)N;
 
             ctx.Assert(eggFrac <= 0.25f * preNerfEggFrac + 0.001f,
-                $"egg rate {eggFrac:F3} > 25% of pre-nerf {preNerfEggFrac:F3} after the shard nerf");
-            ctx.Assert(shardFrac >= 0.5f * preNerfEggFrac,
-                $"shard rate {shardFrac:F3} too low (expected ~{preNerfEggFrac:F3} of the freed egg weight)");
-            ctx.Log($"all owned: eggFrac={eggFrac:F3} (<=25% of {preNerfEggFrac:F3}), shardFrac={shardFrac:F3}");
-            gm.TestReset();
-        }
+                $"egg rate {eggFrac:F3} > 25% of pre-nerf {preNerfEggFrac:F3} after the egg nerf");
+            ctx.Assert(shards == 0, $"{shards} egg shards rolled — shards retired with the nest (save v5)");
+            ctx.Assert(treasureFrac >= preNerfTreasureFrac + 0.5f * preNerfEggFrac,
+                $"treasure rate {treasureFrac:F3} did not absorb the freed egg weight " +
+                $"(expected >= {preNerfTreasureFrac + 0.5f * preNerfEggFrac:F3})");
 
-        // Nest egg-assembly: banking shards advances the egg's assembly sprite index, its
-        // thresholds SCALED onto the current shard requirement. For the FIRST shard egg the
-        // requirement is 5 (escalating progression), so the 5 states fall at
-        // state = floor(ShardCount / 5 * 4): 0->0, 2->1, 3->2, 4->3 (5 would hatch). Drives
-        // the REAL collect path via the shard pickup hook; stays below the requirement so
-        // the hatch ceremony never fires.
-        private IEnumerator Case_NestAssembly(TestContext ctx)
-        {
-            GameManager gm = ctx.GM;
-            gm.TestReset();
-            NestController nest = gm.TestNest;
-            ctx.Assert(nest != null, "no NestController in the scene (rebuild via DinoDigger/Build Main Scene)");
-
-            // Fresh save: no shard eggs hatched yet -> the first egg's requirement is 5.
-            int per = gm.ShardsPerHatch;
-            ctx.Assert(per == 5, $"first shard egg requirement {per} != 5 (escalating progression)");
-            int states = nest.TestStateCount;
-            ctx.Assert(states > 1, $"nest assembly needs >1 state, has {states}");
-
-            // Baseline: 0 banked, collect one -> total 1 -> assembly index 0.
-            gm.Save.Data.ShardCount = 0;
-            yield return CollectOneShardTo(ctx, gm, 1);
-            int expect1 = Mathf.Clamp(1 * (states - 1) / per, 0, states - 1);
-            ctx.Assert(nest.TestAssemblyIndex == expect1,
-                $"assembly idx {nest.TestAssemblyIndex} != {expect1} at 1 shard");
-            Sprite idx0Sprite = nest.TestEggSprite;
-
-            // Bank each count up to just below the requirement: the index must rise
-            // monotonically to match floor(total / requirement * (states-1)).
-            int lastIdx = nest.TestAssemblyIndex;
-            int maxIdx = lastIdx;
-            for (int total = 2; total < per; total++)
+            // ---- ...and the site buries a BONE, aimed at the skeleton the board wants. ----
+            try
             {
-                gm.Save.Data.ShardCount = total - 1;
-                yield return CollectOneShardTo(ctx, gm, total);
-                int expect = Mathf.Clamp(total * (states - 1) / per, 0, states - 1);
-                ctx.Assert(nest.TestAssemblyIndex == expect,
-                    $"assembly idx {nest.TestAssemblyIndex} != {expect} at {total} shards (req {per})");
-                ctx.Assert(nest.TestAssemblyIndex >= lastIdx, "assembly index went backwards");
-                lastIdx = nest.TestAssemblyIndex;
-                maxIdx = Mathf.Max(maxIdx, lastIdx);
+                DigModeController.TestSuppressCrew = true;
+                DigModeController.TestSuppressToys = true;
+
+                DigModeController dm = gm.TestDigMode;
+                dm.TestBuildThemedSite(null);
+                yield return ctx.WaitFrames(1);
+
+                ctx.Assert(dm.TestBoneCount >= 1, "no bone buried at a site with every egg species owned");
+                DinoType buried = dm.TestBoneSpecies(0);
+                ctx.Assert(SkeletonPlan.IsFossilSpecies(buried),
+                    $"the site buried a bone for {buried}, which has no skeleton on the board");
+                ctx.Assert(!gm.TestSkeletonComplete(buried),
+                    $"the site is digging toward {buried}, whose skeleton is already complete");
+                ctx.Assert(!gm.TestSpeciesRevived(buried),
+                    $"the site is digging toward {buried}, which has already been revived — a " +
+                    "revived skeleton must never be a bone target again (a save migrated from " +
+                    "the v4 nest revives species that have no banked bones at all)");
+
+                int bone = dm.TestBoneIndex(0);
+                ctx.Assert(gm.TestBoneCount(buried, bone) < SkeletonPlan.NeedOf(buried, bone),
+                    $"the site buried a {(BoneType)bone} the {buried} skeleton does not still need");
+
+                ctx.Log($"all owned: eggFrac={eggFrac:F3} (<=25% of {preNerfEggFrac:F3}), 0 shards, " +
+                        $"treasureFrac={treasureFrac:F3}; site buried a {buried} {(BoneType)bone}");
+            }
+            finally
+            {
+                DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
             }
 
-            ctx.Assert(maxIdx >= 1, "assembly index never advanced past 0");
-            ctx.Assert(nest.TestEggSprite != idx0Sprite, "egg sprite did not change as shards assembled");
-            ctx.Log($"nest assembly scaled 0..{maxIdx} across {per - 1} banked shards (req {per}, {states} states)");
-
+            gm.TestForceRoam();
             gm.TestReset();
-            gm.Save.Data.ShardCount = 0;
-            gm.TestNest?.RefreshAssembly(0);
         }
 
-        // Full nest -> hatch ceremony: reaching ShardsPerHatch with a shard species still
-        // unowned zooms to the nest, hatches a NEW shard-exclusive baby that waits there,
-        // and tapping it promotes it to a buddy + ends the ceremony. With all 9 owned:
-        // no ceremony and shards stop dropping.
-        private IEnumerator Case_ShardHatchCeremony(TestContext ctx)
-        {
-            GameManager gm = ctx.GM;
-            gm.TestReset();
-            ctx.Assert(gm.TestNest != null, "no NestController (rebuild via DinoDigger/Build Main Scene)");
-
-            // Fresh save: no shard eggs hatched -> the first egg costs 5 (escalating).
-            int per = gm.ShardsPerHatch;
-            ctx.Assert(per == 5, $"first shard egg requirement {per} != 5 (escalating progression)");
-
-            // ---- Run 1: a shard species is unowned -> ceremony fires at 5. ----
-            gm.Save.Data.ShardCount = per - 1; // 4; collecting one more reaches 5 -> ceremony
-            gm.TestNest.RefreshAssembly(gm.Save.Data.ShardCount);
-            ctx.Assert(gm.TestAnyShardSpeciesUnowned, "no shard species unowned at test start");
-
-            // Collect the final shard -> reaches `per` -> ceremony begins.
-            Vector3 pos = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position);
-            gm.TestSpawnItem(ItemType.Shard, DinoType.TRex, 0, pos);
-
-            yield return ctx.WaitUntil(() => gm.State.Is(GameState.Ceremony));
-            ctx.Assert(gm.TestCeremonyActive, "ceremony flag not set");
-
-            // A new dino appears at the nest: shard-exclusive species, resident (not buddy).
-            yield return ctx.WaitUntil(() => gm.TestCeremonyDino != null);
-            DinoController baby = gm.TestCeremonyDino;
-            ctx.Assert(baby != null, "no ceremony dino spawned");
-            ctx.Assert(!DinoSpecies.IsEggHatchable(baby.Type),
-                $"ceremony hatched a non-shard species {baby.Type}");
-            ctx.Assert(!baby.IsBuddy, "ceremony dino should wait as a resident, not a buddy");
-
-            // Shards consumed, remainder kept: (per-1) + 1 - per = 0.
-            ctx.Assert(gm.Save.Data.ShardCount == 0,
-                $"shard count {gm.Save.Data.ShardCount} not reduced to remainder 0 after the hatch");
-
-            // The escalating progression now costs MORE for the second shard egg: one shard
-            // species is owned, so ShardEggsHatched == 1 and the next requirement is 8.
-            ctx.Assert(gm.ShardEggsHatched == 1,
-                $"shard eggs hatched {gm.ShardEggsHatched} != 1 after the first hatch");
-            ctx.Assert(gm.ShardsPerHatch == 8,
-                $"second shard egg requirement {gm.ShardsPerHatch} != 8 after the first hatch");
-
-            // Tap the baby: it joins the team, and the ceremony ends (camera back, Roam).
-            DinoType hatched = baby.Type;
-            Physics2D.SyncTransforms();
-            gm.TestTapWorldRouted(baby.transform.position);
-            yield return ctx.WaitUntil(() => baby.IsBuddy);
-            yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam));
-            ctx.Assert(!gm.TestCeremonyActive, "ceremony did not end after tap-to-join");
-
-            // ---- Run 2: own all 9 species -> no ceremony, no shard drops. ----
-            gm.TestReset();
-            DinoType[] all =
-            {
-                DinoType.TRex, DinoType.Triceratops, DinoType.Brachiosaurus, DinoType.Stegosaurus,
-                DinoType.Pteranodon, DinoType.Ankylosaurus, DinoType.Spinosaurus,
-                DinoType.Parasaurolophus, DinoType.Velociraptor
-            };
-            for (int i = 0; i < all.Length; i++)
-            {
-                gm.TestSpawnDino(all[i], GrowthStage.Baby);
-            }
-
-            yield return ctx.WaitFrames(1);
-            ctx.Assert(!gm.TestAnyShardSpeciesUnowned, "still reports a shard species unowned with all 9 owned");
-
-            // Shards stop dropping: no rolled item resolves to a shard.
-            int shardRolls = 0;
-            for (int i = 0; i < 400; i++)
-            {
-                if (gm.TestRollDugItem().Type == ItemType.Shard)
-                {
-                    shardRolls++;
-                }
-            }
-
-            ctx.Assert(shardRolls == 0, $"{shardRolls} shards still rolled after owning every species");
-
-            // With all shard eggs hatched the requirement clamps to the last progression
-            // entry. Even a forced shard collection up to it must NOT start a ceremony.
-            int perAll = gm.ShardsPerHatch;
-            gm.Save.Data.ShardCount = perAll - 1;
-            Vector3 pos2 = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position);
-            gm.TestSpawnItem(ItemType.Shard, DinoType.TRex, 0, pos2);
-            yield return ctx.WaitUntil(() => gm.Save.Data.ShardCount >= perAll);
-            yield return ctx.WaitFrames(3);
-            ctx.Assert(!gm.TestCeremonyActive && !gm.State.Is(GameState.Ceremony),
-                "ceremony fired even though every shard species is owned");
-
-            ctx.Log($"run1: {hatched} hatched at the nest + tap-joined; " +
-                    $"run2 (all 9 owned): {shardRolls} shard rolls, no ceremony");
-            gm.TestReset();
-            gm.Save.Data.ShardCount = 0;
-            gm.TestNest?.RefreshAssembly(0);
-        }
-
-        /// <summary>Spawn a shard pickup near the backhoe and wait until it flies to the
-        /// nest and banks the count up to <paramref name="expectedTotal"/>.</summary>
-        private IEnumerator CollectOneShardTo(TestContext ctx, GameManager gm, int expectedTotal)
-        {
-            Vector3 pos = WalkableNear(gm.TestMap, gm.TestBackhoe.transform.position);
-            gm.TestSpawnItem(ItemType.Shard, DinoType.TRex, 0, pos);
-            yield return ctx.WaitUntil(() => gm.Save.Data.ShardCount >= expectedTotal);
-        }
+        // NOTE. Two cases retired here WITH their systems (DinoDigger-5ve):
+        //
+        //   NestAssembly       certified the nest egg's five assembly sprites advancing as
+        //                      shards banked. The nest no longer assembles anything — it is
+        //                      scenery that echoes a banked bone — and the progress display
+        //                      it stood for is now the skeleton board, certified by
+        //                      SkeletonBoardFills (slots fill, species completes, the drawn
+        //                      picture matches the bank, and it survives a save roundtrip).
+        //   ShardHatchCeremony certified a full nest zooming the camera, hatching a new
+        //                      shard-exclusive baby, and that baby tap-joining the team. Every
+        //                      one of those behaviours still exists, at the Dino-Matic instead
+        //                      of the nest, and is certified by ReviveCeremonyJoins — which
+        //                      drives the SAME ceremony/join code paths this case did.
+        //
+        // Nothing that still exists lost coverage; only the shard bookkeeping the two cases
+        // also asserted (requirement curves, remainder carry-over) went away, because the
+        // shard economy did.
 
         private IEnumerator Case_FruitPunchNoCompound(TestContext ctx)
         {
@@ -2243,6 +2162,15 @@ namespace DinoDigger.Testing
                 // MoundToDig...) still dig sites with the toy roller live.
                 DigModeController.TestSuppressToys = true;
 
+                // No fossil bones either (DinoDigger-0z5/-5ve), for the third time for the same
+                // reason: a bone spans 2-4 cells that then refuse to hold an item, so a bone
+                // layer silently shrinks the pool of clean vertical pairs this case builds its
+                // fall out of — and a bone cell clearing is its own beat (BoneSpansCells owns
+                // it), not "what does ONE clear do". Bones are gated on owning every egg species
+                // so a reset board would not roll one anyway; pinning it says so out loud and
+                // keeps that true if the gate ever moves.
+                DigModeController.TestSuppressBones = true;
+
                 yield return EnterDig(ctx);
                 DigModeController dm = gm.TestDigMode;
                 ctx.Assert(dm.TestRows >= 3, $"grid is only {dm.TestRows} rows — too shallow to drop a tile");
@@ -2280,23 +2208,57 @@ namespace DinoDigger.Testing
                     "re-settling a settled board moved something (the settle is not idempotent)");
 
                 // ---- Items fall WITH their tile: a peek is never orphaned ----
-                DirtTile buriedFaller = null;
-                for (int i = 0; i < buriedBefore.Count && buriedFaller == null; i++)
-                {
-                    DirtTile b = buriedBefore[i];
-                    if (b == null || b.IsDestroyed || b.Row + 1 >= dm.TestRows)
-                    {
-                        continue;
-                    }
+                //
+                // BUILT, NOT FOUND. This used to scan the generated site for a buried tile that
+                // happened to be sitting on a clearable plain one, which made the case a bet on
+                // the layout the RNG dealt: every site-generation change upstream (toys, then the
+                // fossil bone layer, then simply a different point in the random stream because
+                // an earlier case rolled more) re-rolls that bet, and it eventually comes up
+                // empty — "no buried tile sitting on a clearable plain tile" is the case failing
+                // to SET ITSELF UP, not the cascade being broken. So the configuration is now
+                // constructed: find a clean vertical pair of plain tiles and bury an item on the
+                // upper one through the same bookkeeping generation uses (TestBuryItemAt refuses
+                // any cell generation would refuse, so the board stays one a real site could
+                // produce). The behaviour under test — an item riding its tile down — is
+                // unchanged; only the setup stopped being a lottery.
+                ctx.Assert(dm.IsOpen,
+                    "the first clear collected the site's last buried item and finished the " +
+                    "round, so there is no board left to drop a buried tile through");
 
-                    DirtTile under = dm.TestTileAt(b.Row + 1, b.Col);
-                    if (under != null && !under.HasItem && !under.IsSurprise && !b.IsSurprise)
+                DirtTile buriedFaller = null;
+                for (int r = dm.TestRows - 2; r >= 1 && buriedFaller == null; r--)
+                {
+                    for (int c = 0; c < dm.TestCols && buriedFaller == null; c++)
                     {
-                        buriedFaller = b;
+                        DirtTile upper = dm.TestTileAt(r, c);
+                        DirtTile under = dm.TestTileAt(r + 1, c);
+                        if (upper == null || under == null || upper.IsDestroyed || under.IsDestroyed)
+                        {
+                            continue;
+                        }
+
+                        // The tile BELOW must be an ordinary clearable one: an item/pocket/bone
+                        // cell below would make the clear mean something other than "make a hole".
+                        if (under.HasItem || under.IsSurprise || under.CoversBone ||
+                            under.Kind != DigTileKind.Dirt || upper.IsSurprise)
+                        {
+                            continue;
+                        }
+
+                        // Reuse a naturally buried upper tile when there is one, else bury our
+                        // own. Either way the assertions below are about the SAME mechanism.
+                        if (upper.HasItem || dm.TestBuryItemAt(r, c, ItemType.Treasure, 0))
+                        {
+                            buriedFaller = upper;
+                        }
                     }
                 }
 
-                ctx.Assert(buriedFaller != null, "no buried tile sitting on a clearable plain tile");
+                ctx.Assert(buriedFaller != null,
+                    "could not build a buried tile sitting on a clearable plain tile (no clean " +
+                    "vertical pair of plain dirt cells left on the board)");
+                ctx.Assert(dm.TestBuriedTiles().Contains(buriedFaller),
+                    "the tile chosen to fall is not registered as buried");
                 int buriedRow = buriedFaller.Row;
                 int buriedCol = buriedFaller.Col;
                 ItemType buriedType = dm.TestBuriedType(buriedFaller);
@@ -2371,6 +2333,7 @@ namespace DinoDigger.Testing
             {
                 DigModeController.TestSuppressCrew = false;
                 DigModeController.TestSuppressToys = false;
+                DigModeController.TestSuppressBones = false;
             }
 
             gm.TestForceRoam();
@@ -3246,7 +3209,6 @@ namespace DinoDigger.Testing
             {
                 var sm = new SaveManager();
                 sm.Data.TreasureCount = 4242;
-                sm.Data.ShardCount = 77;
                 sm.Data.Dinos.Clear();
                 sm.Data.Dinos.Add(new DinoSave { Type = DinoType.Stegosaurus, Stage = GrowthStage.Kid, FruitEaten = 3 });
                 // v4 Dino Town: 1 finished building + 1 mid-build site at state 1.
@@ -3254,19 +3216,34 @@ namespace DinoDigger.Testing
                 sm.Data.TownBuildings.Clear();
                 sm.Data.TownBuildings.Add(new TownBuildingSave { Finished = true, State = 4 });
                 sm.Data.TownBuildings.Add(new TownBuildingSave { Finished = false, State = 1, Worked = 2.5f });
+                // v5 fossil finale: a part-filled skeleton, a revived one, a half-dug machine.
+                sm.Data.Bones.Clear();
+                sm.Data.Bones.Add(new BoneSave
+                {
+                    Species = DinoType.Velociraptor, BoneIndex = (int)BoneType.Rib, Count = 2,
+                });
+                sm.Data.RevivedSpecies.Clear();
+                sm.Data.RevivedSpecies.Add(DinoType.Pteranodon);
+                sm.Data.DinoMaticFound = true;
+                sm.Data.DinoMaticState = 2;
+                sm.Data.DinoMaticWorked = 3.25f;
                 sm.Save();
 
                 // Mutate in memory, then reload from disk.
                 sm.Data.TreasureCount = 0;
-                sm.Data.ShardCount = 0;
                 sm.Data.Dinos.Clear();
                 sm.Data.TownNextIndex = 0;
                 sm.Data.TownBuildings.Clear();
+                sm.Data.Bones.Clear();
+                sm.Data.RevivedSpecies.Clear();
+                sm.Data.DinoMaticFound = false;
+                sm.Data.DinoMaticState = 0;
+                sm.Data.DinoMaticWorked = 0f;
                 sm.Load();
 
                 ctx.Assert(sm.Data.TreasureCount == 4242, $"treasure not restored ({sm.Data.TreasureCount})");
-                ctx.Assert(sm.Data.ShardCount == 77, $"shard count not restored ({sm.Data.ShardCount})");
                 ctx.Assert(sm.Data.Version == SaveData.CurrentVersion, $"save version {sm.Data.Version} != {SaveData.CurrentVersion}");
+                ctx.Assert(SaveData.CurrentVersion == 5, $"CurrentVersion is {SaveData.CurrentVersion}, expected the v5 bump");
                 ctx.Assert(sm.Data.Dinos.Count == 1, $"dino count {sm.Data.Dinos.Count} != 1");
                 DinoSave d = sm.Data.Dinos[0];
                 ctx.Assert(d.Type == DinoType.Stegosaurus && d.Stage == GrowthStage.Kid && d.FruitEaten == 3,
@@ -3281,20 +3258,97 @@ namespace DinoDigger.Testing
                            Mathf.Approximately(sm.Data.TownBuildings[1].Worked, 2.5f),
                     "in-progress town building fields not restored");
 
-                // v2 -> v4 migration: a save written before ShardCount/NestSpeciesQueue and
-                // before the town fields must load cleanly with all of them at their defaults.
+                // v5 fossil fields survive it too — and a v5 save must NOT be re-migrated
+                // (a second conversion would double-count leftover shards).
+                ctx.Assert(sm.Data.Bones.Count == 1, $"bone row count {sm.Data.Bones.Count} != 1");
+                ctx.Assert(sm.Data.Bones[0].Species == DinoType.Velociraptor &&
+                           sm.Data.Bones[0].BoneIndex == (int)BoneType.Rib &&
+                           sm.Data.Bones[0].Count == 2,
+                    "banked bone row not restored");
+                ctx.Assert(sm.Data.RevivedSpecies.Count == 1 &&
+                           sm.Data.RevivedSpecies[0] == DinoType.Pteranodon,
+                    "revived species not restored");
+                ctx.Assert(sm.Data.DinoMaticFound && sm.Data.DinoMaticState == 2 &&
+                           Mathf.Approximately(sm.Data.DinoMaticWorked, 3.25f),
+                    "Dino-Matic excavation state not restored");
+
+                // v2 -> v5 migration: a save written before ShardCount/NestSpeciesQueue, before
+                // the town fields and before the fossil fields must load cleanly with all of
+                // them at their defaults, and be stamped at the current version.
                 File.WriteAllText(path,
                     "{\"Version\":2,\"TreasureCount\":11,\"Dinos\":[],\"ParadeDone\":true}");
                 sm.Load();
                 ctx.Assert(sm.Data.TreasureCount == 11 && sm.Data.ParadeDone,
                     "v2 fields lost on migration");
+                ctx.Assert(sm.Data.Version == SaveData.CurrentVersion,
+                    $"migrated v2 save left at version {sm.Data.Version}");
                 ctx.Assert(sm.Data.ShardCount == 0, $"migrated v2 save should default ShardCount=0 (got {sm.Data.ShardCount})");
                 ctx.Assert(sm.Data.NestSpeciesQueue != null, "migrated v2 save left NestSpeciesQueue null");
                 ctx.Assert(sm.Data.TownNextIndex == 0, $"migrated save should default TownNextIndex=0 (got {sm.Data.TownNextIndex})");
                 ctx.Assert(sm.Data.TownBuildings != null && sm.Data.TownBuildings.Count == 0,
                     "migrated save should default TownBuildings to empty (an empty town)");
-                ctx.Log("save roundtrip (treasure=4242, shards=77, town 1 done + 1 building, v4) + " +
-                        "old save migrates with town defaulting to empty");
+                ctx.Assert(sm.Data.Bones != null && sm.Data.Bones.Count == 0,
+                    "migrated save should default the bone bank to empty");
+                ctx.Assert(sm.Data.RevivedSpecies != null && sm.Data.RevivedSpecies.Count == 0,
+                    "migrated save should default the revived set to empty");
+                ctx.Assert(!sm.Data.DinoMaticFound,
+                    "migrated save should not have found the Dino-Matic (no bone has been banked)");
+
+                // ---- v4 -> v5, THE REAL ONE: shards become bones, nothing owed is lost. ----
+                //
+                // A returning player who had hatched Pteranodon from the nest and was partway
+                // to their SECOND shard egg. The formula (SaveManager.MigrateToV5):
+                //   revivedCount = 1 (Pteranodon is in Dinos)   -> req = LegacyShardsPerHatch[1] = 8
+                //   target       = Velociraptor (first unrevived in SkeletonPlan.FocusOrder)
+                //   slots        = 3 (a small skeleton)
+                //   bones        = floor(6 * 3 / 8) = 2
+                // ...filling the target's first two slots in board order (skull, then rib).
+                File.WriteAllText(path,
+                    "{\"Version\":4,\"TreasureCount\":50,\"ShardCount\":6," +
+                    "\"Dinos\":[{\"Type\":4,\"Stage\":0,\"FruitEaten\":0,\"IsBuddy\":false}]," +
+                    "\"NestSpeciesQueue\":[4]}");
+                sm.Load();
+
+                ctx.Assert(sm.Data.Version == SaveData.CurrentVersion,
+                    $"v4 save not migrated to v{SaveData.CurrentVersion} (got {sm.Data.Version})");
+                ctx.Assert(sm.Data.TreasureCount == 50, "v4 treasure lost in the v5 migration");
+                ctx.Assert(sm.Data.Dinos.Count == 1 && sm.Data.Dinos[0].Type == DinoType.Pteranodon,
+                    "HATCHED STAYS HATCHED: the v4 Pteranodon vanished in the migration");
+                ctx.Assert(sm.Data.RevivedSpecies.Contains(DinoType.Pteranodon),
+                    "an already-hatched fossil species must migrate as REVIVED (its skeleton is done)");
+                ctx.Assert(sm.Data.ShardCount == 0,
+                    $"shards not consumed by the migration ({sm.Data.ShardCount} left — it would convert twice)");
+                ctx.Assert(sm.Data.NestSpeciesQueue.Count == 0, "the nest queue must drain to empty");
+
+                int migratedBones = 0;
+                for (int i = 0; i < sm.Data.Bones.Count; i++)
+                {
+                    ctx.Assert(sm.Data.Bones[i].Species == DinoType.Velociraptor,
+                        $"converted shards landed on {sm.Data.Bones[i].Species}, not the next unrevived skeleton");
+                    migratedBones += sm.Data.Bones[i].Count;
+                }
+
+                int expectBones = 6 * SkeletonPlan.SlotCount(DinoType.Velociraptor) /
+                                  SaveData.LegacyShardsPerHatch[1];
+                ctx.Assert(migratedBones == expectBones,
+                    $"6 shards converted to {migratedBones} bones (floor formula expects {expectBones})");
+
+                // Idempotent: reloading the now-v5 file must not convert anything a second time.
+                sm.Save();
+                sm.Load();
+                int reloadedBones = 0;
+                for (int i = 0; i < sm.Data.Bones.Count; i++)
+                {
+                    reloadedBones += sm.Data.Bones[i].Count;
+                }
+
+                ctx.Assert(reloadedBones == migratedBones && sm.Data.ShardCount == 0,
+                    $"a second load re-ran the migration ({migratedBones} -> {reloadedBones} bones)");
+
+                ctx.Log($"v5 roundtrip (treasure=4242, 1 bone row, 1 revived, machine s2+3.25s); " +
+                        $"v2 migrates to defaults; v4 (6 shards, hatched Pteranodon) -> " +
+                        $"{migratedBones} Velociraptor bones, shards zeroed, nest queue drained, " +
+                        "and re-loading converts nothing twice");
             }
             finally
             {
@@ -4196,10 +4250,13 @@ namespace DinoDigger.Testing
             yield return ctx.WaitSecondsScaled(0.8f);
             ctx.Assert(gm.TestRockSmashPayouts == 1, "rock paid out a second time while on cooldown");
 
-            // 4) Shard gate: while shard species remain unowned, some rock rolls can be
-            // shards; once every shard species is owned they never are (always treasure).
+            // 4) A rock is ALWAYS coins. It used to roll an egg shard some of the time to keep
+            // the nest ticking over; the nest retired with save v5 (DinoDigger-5ve) and the
+            // fossil species come out of dig sites as bones now, so every payout — with
+            // nothing owned OR with the whole roster owned — must be treasure and never a
+            // shard. Asserted at BOTH ends of the game because the old behaviour was gated on
+            // ownership, and a leftover gate would only show up at one of them.
             gm.TestReset();
-            ctx.Assert(gm.TestAnyShardSpeciesUnowned, "expected unowned shard species at fresh reset");
 
             int shardRolls = 0;
             int treasureRolls = 0;
@@ -4216,8 +4273,8 @@ namespace DinoDigger.Testing
                 }
             }
 
-            ctx.Assert(shardRolls > 0, "no rock roll produced a shard while shard species remain unowned");
-            ctx.Assert(treasureRolls > 0, "no rock roll produced treasure");
+            ctx.Assert(shardRolls == 0, $"{shardRolls} rock rolls produced an egg shard (shards are retired)");
+            ctx.Assert(treasureRolls == 400, $"only {treasureRolls}/400 rock rolls were treasure");
 
             DinoType[] all =
             {
@@ -4231,7 +4288,6 @@ namespace DinoDigger.Testing
             }
 
             yield return ctx.WaitFrames(1);
-            ctx.Assert(!gm.TestAnyShardSpeciesUnowned, "still reports a shard species unowned with all 9 owned");
 
             int shardsWhenOwned = 0;
             for (int i = 0; i < 400; i++)
@@ -4242,10 +4298,10 @@ namespace DinoDigger.Testing
                 }
             }
 
-            ctx.Assert(shardsWhenOwned == 0, $"{shardsWhenOwned} shard rolls leaked after every shard species was owned");
+            ctx.Assert(shardsWhenOwned == 0, $"{shardsWhenOwned} shard rolls leaked with every species owned");
 
             ctx.Log($"smashed rock at {rockCell}: payout fired once, cooldown held; " +
-                    $"shard gate {shardRolls}/400 unowned vs {shardsWhenOwned}/400 owned");
+                    $"payouts always treasure ({treasureRolls}/400 fresh, 0 shards either end)");
             gm.TestReset();
         }
 
@@ -4779,16 +4835,40 @@ namespace DinoDigger.Testing
         /// setup. Sweeps 8 headings at growing radii and takes the first that qualifies;
         /// returns <paramref name="start"/> only when the backhoe is genuinely boxed in (the
         /// caller asserts on that).</summary>
+        /// <summary>A walkable spot at least <paramref name="minDist"/> from <paramref name="start"/>
+        /// that a tap-to-move can actually be AIMED at.
+        ///
+        /// THE TARGET MUST BE EMPTY GROUND, and that is the whole subtlety. GameManager routes
+        /// every tap to a collider FIRST (FindTappable) and only drives the backhoe when nothing
+        /// answered — so a target with anything tappable standing on it produces a tap that does
+        /// something else entirely and a backhoe that never moves. The old version only avoided
+        /// active dig MOUNDS, which left every other tappable in the game free to sit on the
+        /// answer: a dino (collider radius 0.6, and it OUTRANKS everything a move-tap could have
+        /// meant), a duck drifting past, a machine, a pickup, a building. That is exactly the
+        /// shape of the "tap-to-move did not move the backhoe" failure — the case's own buddy
+        /// parks in its follow slot ~1.4u from the backhoe, and the first candidate ring is at
+        /// 2.0u — and it was only ever a matter of which layout the random stream dealt.
+        ///
+        /// So candidates are now REJECTED WHEN A TAP THERE WOULD BE SWALLOWED, probed through
+        /// the same resolution the tap itself will use. The candidate set is widened at the same
+        /// time so the stricter filter cannot exhaust it on a busy island.</summary>
         private Vector3 FindMoveTarget(OverworldMap map, Vector3 start, float minDist)
         {
             GameManager gm = GameManager.Instance;
             float minSq = minDist * minDist;
-            float[] radii = { 2f, 3f, 4f, 5f, 7f, 9f, 12f }; // grows past minDist for far parks
+            float[] radii = { 2f, 2.5f, 3f, 4f, 5f, 6f, 7f, 9f, 12f }; // grows past minDist for far parks
             Vector2[] dirs =
             {
                 new Vector2(1f, 0f), new Vector2(0f, 1f), new Vector2(-1f, 0f), new Vector2(0f, -1f),
                 new Vector2(1f, 1f), new Vector2(-1f, 1f), new Vector2(-1f, -1f), new Vector2(1f, -1f),
+                new Vector2(2f, 1f), new Vector2(-2f, 1f), new Vector2(2f, -1f), new Vector2(-2f, -1f),
+                new Vector2(1f, 2f), new Vector2(-1f, 2f), new Vector2(1f, -2f), new Vector2(-1f, -2f),
             };
+
+            // Colliders only catch up with transforms on the physics tick
+            // (Physics2D.autoSyncTransforms is false), so sync ONCE up front — otherwise this
+            // probes a stale world and clears a spot the tap then finds occupied.
+            Physics2D.SyncTransforms();
 
             for (int r = 0; r < radii.Length; r++)
             {
@@ -4797,7 +4877,7 @@ namespace DinoDigger.Testing
                     Vector2 u = dirs[d].normalized * radii[r];
                     Vector3 w = map.NearestWalkable(start + new Vector3(u.x, u.y, 0f), out bool found);
                     if (found && (w - start).sqrMagnitude >= minSq &&
-                        (gm == null || !NearActiveMound(gm, w, 1.2f)))
+                        (gm == null || (!NearActiveMound(gm, w, 1.2f) && !TapWouldBeSwallowed(gm, w))))
                     {
                         return w;
                     }
@@ -4805,6 +4885,15 @@ namespace DinoDigger.Testing
             }
 
             return start;
+        }
+
+        /// <summary>True when a tap at <paramref name="world"/> would resolve to something
+        /// tappable instead of driving the backhoe. Uses the game's OWN tap resolution
+        /// (GameManager.TestFindTappable -> FindTappable), so a helper can never disagree with
+        /// the routing the tap will actually take.</summary>
+        private bool TapWouldBeSwallowed(GameManager gm, Vector3 world)
+        {
+            return gm != null && gm.TestFindTappable(world) != null;
         }
 
         private Vector3 FindDistinctWalkable(OverworldMap map, Vector3 start)

@@ -73,6 +73,22 @@ namespace DinoDigger.Overworld
         private int _nextIndex;
         private BuildingController _activeSite;
         private int _activeIndex = -1;
+
+        // ---- FREE SITE (the Dino-Matic excavation, DinoDigger-3rz) ----
+        // A site that is NOT a town plot and costs NOTHING: an outside system (the Dino-Matic
+        // service) hands one over and the crew digs it out through the same construction
+        // states, with the same drafting rules, the same tap-to-cheer and the same completion
+        // party. Reusing this spine rather than writing a second crew is what keeps "the player
+        // is never drafted" structural — there is still exactly ONE labour source in the game.
+        //
+        // It takes PRIORITY over the paid queue, which is safe in both directions: it can only
+        // ever delay a purchase by the handful of work-seconds an excavation takes (it cannot
+        // spend, cannot occupy a plot, and there is only ever one), and the alternative — the
+        // finale beat queueing behind however many buildings the wallet can afford — would put
+        // a reward the child has already earned behind a paywall of waiting.
+        private BuildingController _freeSite;
+        private Vector3 _freeSiteWorld;
+        private bool _activeIsFree;   // the active site above IS the free site
         private readonly List<DinoController> _builders = new List<DinoController>();
         private float _workPuffTimer;
         // Test-observable build-work accrual (DinoDigger-s90). Both counters advance in the
@@ -281,6 +297,8 @@ namespace DinoDigger.Overworld
 
         internal TownArea TestArea => _area;
         internal BuildingController TestActiveSite => _activeSite;
+        internal BuildingController TestFreeSite => _freeSite;
+        internal bool TestActiveIsFree => _activeIsFree;
         internal int TestNextIndex => _nextIndex;
         internal int TestBuilderCount => _builders.Count;
         internal IReadOnlyList<DinoController> TestBuilders => _builders;
@@ -421,11 +439,34 @@ namespace DinoDigger.Overworld
 
         // ----------------------------------------------------------- build queue
 
+        /// <summary>Hand the crew a ZERO-COST site outside the district (the Dino-Matic
+        /// excavation). It becomes the active site on the next queue poll, ahead of any paid
+        /// building — see the field comment for why that ordering is the safe one. Passing a
+        /// null site (or one that is already finished) simply clears the offer.</summary>
+        public void SetFreeSite(BuildingController site, Vector3 world)
+        {
+            _freeSite = site != null && !site.IsFinished ? site : null;
+            _freeSiteWorld = world;
+        }
+
+        /// <summary>True while a zero-cost site is waiting for, or holding, the crew.</summary>
+        public bool HasFreeSite => _freeSite != null && !_freeSite.IsFinished;
+
         private void TryStartBuild()
         {
             if (_activeSite != null || _area == null || _config == null || TestSuspendBuilds)
             {
                 return;
+            }
+
+            // The free site first: it costs nothing, so there is nothing to wait for.
+            if (_freeSite != null && !_freeSite.IsFinished)
+            {
+                _activeSite = _freeSite;
+                _activeIsFree = true;
+                _activeIndex = -1;
+                _workPuffTimer = 0f;
+                return; // the crew joins over the next few ticks, exactly as for a paid site
             }
 
             GameManager gm = GameManager.Instance;
@@ -452,6 +493,7 @@ namespace DinoDigger.Overworld
 
             _activeSite = CreateBuildingObject(_nextIndex, 0, 0f);
             _activeIndex = _nextIndex;
+            _activeIsFree = false;
             _workPuffTimer = 0f;
             GameEvents.RaiseTownBuildStarted(_activeIndex);
             gm.TownPersist(); // capture the freshly broken-ground site (state 0) in the save
@@ -509,6 +551,16 @@ namespace DinoDigger.Overworld
             GameManager gm = GameManager.Instance;
             if (gm == null || _activeSite == null)
             {
+                return;
+            }
+
+            // Defensive: a site can be completed from OUTSIDE this tick (a test hook forcing an
+            // excavation, a snack banking the last state). Stand the crew down the moment that
+            // is true, or a finished site would hold its builders forever — AddWork returns 0
+            // once finished, so the boundary loop below would never see the transition.
+            if (_activeSite.IsFinished)
+            {
+                FinishSite(gm);
                 return;
             }
 
@@ -686,15 +738,64 @@ namespace DinoDigger.Overworld
 
             float speed = _config != null ? _config.TownBuilderCommuteSpeed : 1.1f;
             int slot = _builders.IndexOf(d);
-            Vector3 stand = _area.StandWorld(_activeIndex, Mathf.Max(0, slot));
-            // Pass the plot center (so the builder holds its mallet toward the structure)
+            Vector3 stand = ActiveStandWorld(Mathf.Max(0, slot));
+            // Pass the site center (so the builder holds its mallet toward the structure)
             // and the art library (so it can "put on" the hard hat). Both null-tolerant.
-            Vector3 building = _area.PlotWorld(_activeIndex);
-            d.GoWork(stand, building, speed, null, _library);
+            d.GoWork(stand, ActiveSiteWorld, speed, null, _library);
+        }
+
+        /// <summary>Where the ACTIVE site stands: its plot for a town building, its own world
+        /// spot for the free site (which is off-district and has no plot index).</summary>
+        private Vector3 ActiveSiteWorld
+        {
+            get
+            {
+                if (_activeIsFree)
+                {
+                    return _activeSite != null ? _activeSite.transform.position : _freeSiteWorld;
+                }
+
+                return _area != null ? _area.PlotWorld(_activeIndex) : transform.position;
+            }
+        }
+
+        /// <summary>A walkable stand-point BESIDE the active site for builder
+        /// <paramref name="slot"/>. A plot delegates to <see cref="TownArea.StandWorld"/>; the
+        /// free site rings its own position with the SAME geometry, so an excavation crew looks
+        /// exactly like a building crew.</summary>
+        private Vector3 ActiveStandWorld(int slot)
+        {
+            if (!_activeIsFree && _area != null)
+            {
+                return _area.StandWorld(_activeIndex, slot);
+            }
+
+            Vector3 p = ActiveSiteWorld;
+            float ang = slot * (Mathf.PI * 2f / 3f) + 0.6f;
+            Vector3 stand = p + new Vector3(Mathf.Cos(ang) * 0.9f, Mathf.Sin(ang) * 0.6f - 0.5f, 0f);
+            stand.z = p.z;
+
+            OverworldMap map = _area != null ? _area.Map : null;
+            if (map != null)
+            {
+                Vector3 w = map.NearestWalkable(stand, out bool found);
+                if (found)
+                {
+                    return w;
+                }
+            }
+
+            return stand;
         }
 
         private void FinishSite(GameManager gm)
         {
+            if (_activeIsFree)
+            {
+                FinishFreeSite(gm);
+                return;
+            }
+
             int finishedIndex = _activeIndex;
             Vector3 sitePos = _activeSite != null
                 ? _activeSite.transform.position
@@ -727,6 +828,35 @@ namespace DinoDigger.Overworld
             // once as a debut. Independent of the crew's walk home — the two overlap, which is
             // the point (the builders wander off while the first customer arrives).
             Tween.After(DebutVisitDelay, () => PlayDebut(finishedIndex));
+        }
+
+        /// <summary>The zero-cost site is done (the Dino-Matic is fully dug out). Same "we did
+        /// it!" beat as a building — confetti, hats in the air, everyone in earshot cheers, the
+        /// crew dances and walks home — but deliberately NOT the town's bookkeeping:
+        ///   - no <see cref="GameEvents.BuildingFinished"/>, because the free site is not a
+        ///     building and that event is a DISCOVERY GATE (it is what summons Doodle). Firing
+        ///     it here would hand the child a machine friend for something they did not do.
+        ///   - no <c>_nextIndex++</c> and no plot consumed: the curated queue is untouched and
+        ///     picks straight back up where it was.
+        /// The finished object stays exactly where it is; it just stops being a work site.</summary>
+        private void FinishFreeSite(GameManager gm)
+        {
+            Vector3 sitePos = _activeSite != null ? _activeSite.transform.position : _freeSiteWorld;
+
+            gm.Audio?.Grow();
+            PlayCompletionChoreography(gm, sitePos);
+
+            for (int i = 0; i < _builders.Count; i++)
+            {
+                _builders[i]?.StopWork(celebrate: true);
+            }
+
+            _builders.Clear();
+            _activeSite = null;
+            _activeIsFree = false;
+            _freeSite = null;
+            _cheerTimer = 0f;  // a cheer never carries over to the next site
+            gm.TownPersist();  // the excavation's finished state lands in the save
         }
 
         // ------------------------------------------------- completion choreography
@@ -1042,8 +1172,10 @@ namespace DinoDigger.Overworld
                 });
             }
 
-            // The one site still under construction (if any) sits at plot _nextIndex.
-            if (_activeSite != null)
+            // The one site still under construction (if any) sits at plot _nextIndex. The FREE
+            // site is deliberately excluded: it owns no plot and persists itself through the
+            // Dino-Matic's own save fields, so writing it here would invent a phantom building.
+            if (_activeSite != null && !_activeIsFree)
             {
                 data.TownBuildings.Add(new TownBuildingSave
                 {
@@ -1117,6 +1249,7 @@ namespace DinoDigger.Overworld
 
             _activeSite = null;
             _activeIndex = -1;
+            _activeIsFree = false;
         }
 
         // ------------------------------------------------------------ test reset
@@ -1163,6 +1296,11 @@ namespace DinoDigger.Overworld
             // Ambient visits are transient too (never saved): send every visitor home, destroy
             // its props, and rewind the life tallies so the next case starts on a quiet plaza.
             _life?.TestResetLife();
+
+            // The free site belongs to the Dino-Matic service, which destroys the object in its
+            // own reset — the town only forgets the OFFER, so a case that never asks for one
+            // starts with a plain plaza.
+            _freeSite = null;
 
             ClearAllSites();
             _nextIndex = 0;

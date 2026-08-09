@@ -65,6 +65,14 @@ namespace DinoDigger.Overworld
         /// <summary>Current construction-state index (0..3), or <see cref="ConstructionStates"/> when done.</summary>
         public int State => _state;
 
+        /// <summary>The site's own renderer, for a subclass that dresses itself (the Dino-Matic
+        /// excavation, DinoDigger-3rz). Read-only on purpose: <see cref="ApplyVisual"/> owns the
+        /// SPRITE, so a subclass may only ever tint or overlay, never swap the state art.</summary>
+        protected SpriteRenderer Renderer => _renderer;
+
+        /// <summary>The owning town service (null for a hand-built site).</summary>
+        protected TownController Town => _town;
+
         /// <summary>True once every construction state has been worked through.</summary>
         public bool IsFinished => _state >= ConstructionStates;
 
@@ -143,18 +151,30 @@ namespace DinoDigger.Overworld
             }
 
             _tapCollider.isTrigger = true;
+            ShapeTapCollider(_tapCollider, _renderer != null ? _renderer.sprite : null);
+        }
 
-            if (_renderer != null && _renderer.sprite != null)
+        /// <summary>Size the tap box. A building's tap target IS its drawn silhouette — that is
+        /// what the child is aiming at — so by default it takes the sprite's bounds outright,
+        /// and a building with no art yet falls back to a 1x1 cell.
+        ///
+        /// Virtual because THE FALLBACK IS ONLY SAFE FOR A BUILDING. A plot is a place nothing
+        /// else stands, so an approximate box there costs nothing; a site placed out in the
+        /// world among mounds and dinos (the Dino-Matic) can steal a tap that was meant for the
+        /// ground next to it, and a box the child cannot SEE is the worst kind to lose a tap to.
+        /// See <see cref="DinoMatic.ShapeTapCollider"/>.</summary>
+        protected virtual void ShapeTapCollider(BoxCollider2D col, Sprite sprite)
+        {
+            if (sprite != null)
             {
-                Bounds b = _renderer.sprite.bounds; // local sprite space (building GO is unscaled)
-                _tapCollider.size = b.size;
-                _tapCollider.offset = b.center;
+                Bounds b = sprite.bounds; // local sprite space (building GO is unscaled)
+                col.size = b.size;
+                col.offset = b.center;
+                return;
             }
-            else
-            {
-                _tapCollider.size = Vector2.one;
-                _tapCollider.offset = Vector2.zero;
-            }
+
+            col.size = Vector2.one;
+            col.offset = Vector2.zero;
         }
 
         /// <summary>Tap on a building, routed by its state — a toddler taps the same shape and
@@ -163,7 +183,7 @@ namespace DinoDigger.Overworld
         ///   under construction -> tap-to-cheer (DinoDigger-5y9): confetti at the site, the crew
         ///                         hops, and their work speeds up for a few seconds.
         /// The building itself decides nothing beyond which service to call.</summary>
-        public void OnTapped(Vector2 worldPoint)
+        public virtual void OnTapped(Vector2 worldPoint)
         {
             if (IsFinished)
             {
@@ -298,17 +318,28 @@ namespace DinoDigger.Overworld
         }
 
         /// <summary>Gentle idle bob for the fruit shop-sign so the finished stand reads as
-        /// "open for business". Only runs once the sign exists (finished stand).</summary>
+        /// "open for business". Only runs once the sign exists (finished stand).
+        ///
+        /// SUBCLASSES OVERRIDE <see cref="Tick"/>, NEVER Update. Unity dispatches a message to
+        /// the MOST DERIVED declaration only, so a subclass that declared its own private
+        /// Update would silently switch this one off — and the bug would look like "the Fruit
+        /// Stand sign stopped bobbing", miles from its cause.</summary>
         private void Update()
         {
-            if (_standSign == null || !_standSign.activeSelf)
+            if (_standSign != null && _standSign.activeSelf)
             {
-                return;
+                _standBobPhase += Time.deltaTime * 2.5f;
+                float y = Mathf.Sin(_standBobPhase) * 0.08f;
+                _standSign.transform.localPosition = StandSignOffset + new Vector3(0f, y, 0f);
             }
 
-            _standBobPhase += Time.deltaTime * 2.5f;
-            float y = Mathf.Sin(_standBobPhase) * 0.08f;
-            _standSign.transform.localPosition = StandSignOffset + new Vector3(0f, y, 0f);
+            Tick(Time.deltaTime);
+        }
+
+        /// <summary>Per-frame hook for a subclass (the Dino-Matic's glint beacon and ready
+        /// glow). Base does nothing.</summary>
+        protected virtual void Tick(float dt)
+        {
         }
 
         /// <summary>Plant the "under construction" barrier sign in front of the site (bottom-center

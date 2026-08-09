@@ -41,6 +41,14 @@ namespace DinoDigger.Core
         [SerializeField] private List<BerrySprout> _sprouts = new List<BerrySprout>();
         [SerializeField] private MachineFriendController _machines;
 
+        // The fossil finale (DinoDigger-5ve / -3rz). Both are OPTIONAL wires: nothing is
+        // pre-placed and neither exists in a scene saved before the finale shipped, so Awake
+        // ENSURES them at boot the same way TownController ensures its life service. That
+        // keeps one construction path (a test drives what a child sees) and means the shipped
+        // scene needs no rebuild.
+        [SerializeField] private SkeletonBoard _skeletonBoard;
+        [SerializeField] private DinoMaticController _dinoMatic;
+
         [Header("Audio sources")]
         [SerializeField] private int _sfxVoices = 6;
 
@@ -53,7 +61,7 @@ namespace DinoDigger.Core
         private const float CourierMinFruitDist = 2.5f;    // fruit farther than this gets fetched
         private const float CourierDropDist = 0.9f;        // set down about here from the backhoe
         private const float ParadeSeconds = 8f;
-        private const float CeremonyLingerSeconds = 3f;    // nest ceremony auto-returns after this
+        private const float CeremonyLingerSeconds = 3f;    // revival ceremony auto-returns after this
         private const float TownTourLingerSeconds = 2.5f;  // idle-attract holds on the town this long
 
         // ---- Fruit Stand (surplus-fruit -> coins) tuning ----
@@ -92,9 +100,9 @@ namespace DinoDigger.Core
         private readonly List<DinoController> _sellers = new List<DinoController>();
         private int _fruitSalesCount;          // transient (not saved) — drives the 5th-sale gem
 
-        // ---- Shard-hatch ceremony state ----
+        // ---- Ceremony state (the Dino-Matic revival; formerly the shard hatch) ----
         private bool _ceremonyActive;
-        private DinoController _ceremonyDino;   // the freshly hatched baby waiting at the nest
+        private DinoController _ceremonyDino;   // the freshly revived baby waiting to be tapped
 
         // ---- Idle-attract town tour (DinoDigger-sbc) ----
         // Once the town has something to show, some idle beats glide the camera over the
@@ -119,33 +127,34 @@ namespace DinoDigger.Core
         private readonly Dictionary<Config.DinoType, int> _reservedEggSpecies =
             new Dictionary<Config.DinoType, int>();
 
-        // ---- Egg-shard nest ----
-        /// <summary>How many shard-built eggs have already hatched. Derived, not stored:
-        /// it equals the number of owned shard-exclusive species (DinoType 4-8), which the
-        /// v3 save already captures via its Dinos list — so no new save field is needed.</summary>
-        public int ShardEggsHatched => CountOwnedShardSpecies();
-
-        /// <summary>Egg shards required for the NEXT shard hatch. Escalates with the number
-        /// of shard eggs already hatched (5 / 8 / 15 / 20, then 20), driving the ceremony
-        /// trigger, the remainder-carryover on hatch, and the nest assembly scaling.</summary>
-        public int ShardsPerHatch =>
-            _config != null ? _config.GetShardRequirement(ShardEggsHatched) : 20;
-        public int ShardCount => Save != null ? Save.Data.ShardCount : 0;
-
-        // ---- Fossil bones (DinoDigger-0z5) ----
+        // ---- Fossil bones + the skeleton board (DinoDigger-0z5 / -5ve) ----
         // Multi-cell bones dug out of the pit bank HERE, not into the treasure wallet: they are
-        // the late-game COLLECTION, the reward layer that takes over from egg shards once every
-        // egg species is owned. D2b (the skeleton board + the Dino-Matic) is what displays and
-        // spends them; this is deliberately just the counter it will read, shaped the way that
-        // board wants it — per species, per bone.
+        // the late-game COLLECTION that took over from egg shards once every egg species is
+        // owned. The bank is a flat count per (species, bone); EVERYTHING else — which slots
+        // the board draws filled, whether a skeleton is complete, what the dig should bury
+        // next, what a leftover v4 shard converts into — is derived from these counts through
+        // Config.SkeletonPlan, so the picture and the truth cannot drift apart.
         //
-        // SESSION-ONLY FOR NOW, ON PURPOSE. D2b owns the save version bump; the row shape it
-        // will persist already exists as Managers.BoneSave, and BoneBankSnapshot below hands
-        // back exactly that list, so turning this into save state is a field plus one loop.
+        // PERSISTED SINCE SAVE v5 as SaveData.Bones (see RestoreFromSave / SaveNow).
         private readonly Dictionary<int, int> _boneBank = new Dictionary<int, int>();
 
-        /// <summary>Total bones banked this session, across every species and bone.</summary>
+        // Fossil species already carried through the Dino-Matic. Persisted as
+        // SaveData.RevivedSpecies AND re-derived from the live dinos on load, so a species the
+        // child can see walking around is always revived whatever the file says.
+        private readonly HashSet<Config.DinoType> _revived = new HashSet<Config.DinoType>();
+
+        // How many coins one DUPLICATE bone pays out once every skeleton has been revived.
+        // Generous on purpose: at that point a bone is the only thing a dig site still buries,
+        // and a reward beat that pays nothing would read as the game breaking.
+        private const int DuplicateBoneCoins = 5;
+
+        /// <summary>Total bones banked, across every species and bone. Save-backed, so a
+        /// returning player's collection is not "empty" until they dig again.</summary>
         public int BonesBanked { get; private set; }
+
+        /// <summary>True once ANY bone has ever been banked — the state the HUD bone button's
+        /// existence is derived from, and the gate that first summons the Dino-Matic.</summary>
+        public bool AnyBoneBanked => BonesBanked > 0;
 
         /// <summary>The last bone banked, as species*<see cref="BoneSpecies.BonesPerSkeleton"/> +
         /// bone index, or -1 before the first one. Cheap breadcrumb for the dig site's own
@@ -154,12 +163,25 @@ namespace DinoDigger.Core
 
         /// <summary>Bank one uncovered fossil bone against <paramref name="species"/>'s skeleton.
         /// <paramref name="boneIndex"/> is a <see cref="BoneType"/> ordinal — a stable contract,
-        /// so a bone banked today still names the same slot after D2b ships the board.</summary>
-        public void BankBone(Config.DinoType species, int boneIndex)
+        /// so a bone banked before the board shipped still names the same slot today.
+        ///
+        /// DUPLICATES PAY OUT. Once every skeleton has been revived there is nothing left to
+        /// collect, so a bone dug after that converts at bank time into a fountain of coins
+        /// instead (<paramref name="worldPoint"/> is only used to decide where the fountain
+        /// reads from; the coins themselves bank through the normal guarded reward path).
+        /// Returns TRUE when the bone went into the collection and false when it paid out —
+        /// which is exactly what the dig site needs to know to pick its flourish.</summary>
+        public bool BankBone(Config.DinoType species, int boneIndex, Vector3? worldPoint = null)
         {
             if (boneIndex < 0 || boneIndex >= BoneSpecies.BonesPerSkeleton)
             {
-                return; // an unknown bone is dropped rather than corrupting the collection
+                return false; // an unknown bone is dropped rather than corrupting the collection
+            }
+
+            if (AllSkeletonsRevived())
+            {
+                PayDuplicateBone(worldPoint);
+                return false;
             }
 
             int key = BoneKey(species, boneIndex);
@@ -167,6 +189,36 @@ namespace DinoDigger.Core
             _boneBank[key] = had + 1;
             BonesBanked++;
             LastBoneBanked = key;
+
+            // The first bone ever banked is the Dino-Matic's discovery gate.
+            _dinoMatic?.NotifyBoneBanked();
+
+            SaveNow();
+            GameEvents.RaiseBoneBanked(species, boneIndex);
+            return true;
+        }
+
+        /// <summary>A duplicate bone, dug once the whole board is revived: a small coin
+        /// fountain, banked one coin at a time through the SAME reward path the pinata pot
+        /// uses, so the counter ticks up instead of jumping and the money and the spectacle
+        /// can never disagree.</summary>
+        private void PayDuplicateBone(Vector3? worldPoint)
+        {
+            Audio?.ItemPop();
+            Vector3 at = worldPoint ?? RewardSpawnPoint;
+            SpawnConfetti(at + new Vector3(0f, 0.4f, 0f));
+
+            for (int i = 0; i < DuplicateBoneCoins; i++)
+            {
+                Tween.After(i * 0.08f, () =>
+                {
+                    GameManager g = Instance;
+                    if (g != null)
+                    {
+                        g.SpawnRewardPickup(ItemType.Treasure, Config.DinoType.TRex, 0, g.RewardSpawnPoint);
+                    }
+                });
+            }
         }
 
         /// <summary>How many of <paramref name="species"/>'s <paramref name="boneIndex"/> bone
@@ -188,8 +240,122 @@ namespace DinoDigger.Core
             return n;
         }
 
-        /// <summary>The bone bank as the serializable rows D2b will persist. Built on demand
-        /// (the bank itself stays a dictionary) so the save bump is a field, not a refactor.</summary>
+        /// <summary>True when every slot of <paramref name="species"/>' skeleton is filled —
+        /// i.e. the bank holds at least as many of each bone as the skeleton needs. This is the
+        /// board's "complete" and the Dino-Matic's "revivable", derived from one place so they
+        /// can never mean different things. Always false for a non-fossil species (the
+        /// egg-hatchable four have no skeleton).</summary>
+        public bool SkeletonComplete(Config.DinoType species)
+        {
+            if (!SkeletonPlan.IsFossilSpecies(species))
+            {
+                return false;
+            }
+
+            for (int bone = 0; bone < BoneSpecies.BonesPerSkeleton; bone++)
+            {
+                if (BoneCount(species, bone) < SkeletonPlan.NeedOf(species, bone))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>Has this species been brought back by the Dino-Matic (or, for a save
+        /// migrated from the nest era, hatched before the machine existed)?</summary>
+        public bool IsSpeciesRevived(Config.DinoType species) => _revived.Contains(species);
+
+        /// <summary>True when a completed skeleton is waiting for the machine. The machine's
+        /// glow, its harder glint while still buried, and whether a tap runs the ceremony are
+        /// all this one predicate.</summary>
+        public bool RevivalPending => TryNextRevivable(out _);
+
+        /// <summary>The next species to bring back: the first in the board's fill order whose
+        /// skeleton is complete and which has not been revived.</summary>
+        private bool TryNextRevivable(out Config.DinoType species)
+        {
+            for (int i = 0; i < SkeletonPlan.FocusOrder.Length; i++)
+            {
+                Config.DinoType s = SkeletonPlan.FocusOrder[i];
+                if (!_revived.Contains(s) && SkeletonComplete(s))
+                {
+                    species = s;
+                    return true;
+                }
+            }
+
+            species = default;
+            return false;
+        }
+
+        /// <summary>The skeleton the dig should be burying bones toward: the first species in
+        /// the board's fill order that is still being collected, plus which of its bones is
+        /// missing. False once there is nothing left worth burying, and the site then buries no
+        /// bone at all — the post-completion answer is NO MORE BONE BURIALS, mirroring the egg
+        /// cutover, not an endless stream of things that can only ever be duplicates.
+        ///
+        /// A species is out of the running once it is complete OR REVIVED, and the revived half
+        /// of that test is load-bearing rather than belt-and-braces. A skeleton can be revived
+        /// while its bone counts say otherwise — a save migrated from the v4 nest revives every
+        /// species the child had already hatched WITHOUT giving it bones it never dug — and
+        /// keying only off the counts would aim every future dig at a dinosaur that is already
+        /// walking around the meadow. (The bank-time duplicate payout in <see cref="BankBone"/>
+        /// stays exactly as it was: it covers extras dug DURING collection, not this.)</summary>
+        public bool TryNextNeededBone(out Config.DinoType species, out int boneIndex)
+        {
+            for (int i = 0; i < SkeletonPlan.FocusOrder.Length; i++)
+            {
+                Config.DinoType s = SkeletonPlan.FocusOrder[i];
+                if (_revived.Contains(s) || SkeletonComplete(s))
+                {
+                    continue;
+                }
+
+                // Among the bones this skeleton still wants, pick one at random so a run of
+                // digs does not deal them out in a fixed, predictable order.
+                var wanted = new List<int>(BoneSpecies.BonesPerSkeleton);
+                for (int bone = 0; bone < BoneSpecies.BonesPerSkeleton; bone++)
+                {
+                    if (BoneCount(s, bone) < SkeletonPlan.NeedOf(s, bone))
+                    {
+                        wanted.Add(bone);
+                    }
+                }
+
+                if (wanted.Count == 0)
+                {
+                    continue; // can't happen (that IS complete), but never hand back a bad bone
+                }
+
+                species = s;
+                boneIndex = wanted[Random.Range(0, wanted.Count)];
+                return true;
+            }
+
+            species = default;
+            boneIndex = -1;
+            return false;
+        }
+
+        /// <summary>True once all five skeletons have been revived: the collection is finished
+        /// and further bones are duplicates.</summary>
+        public bool AllSkeletonsRevived()
+        {
+            for (int i = 0; i < SkeletonPlan.Species.Length; i++)
+            {
+                if (!_revived.Contains(SkeletonPlan.Species[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>The bone bank as the serializable rows the save persists. Built on demand
+        /// (the bank itself stays a dictionary).</summary>
         public List<BoneSave> BoneBankSnapshot()
         {
             var rows = new List<BoneSave>(_boneBank.Count);
@@ -208,6 +374,103 @@ namespace DinoDigger.Core
 
         private static int BoneKey(Config.DinoType species, int boneIndex) =>
             (int)species * BoneSpecies.BonesPerSkeleton + boneIndex;
+
+        /// <summary>Rebuild the live bone bank + revival set from a loaded save (v5). Revival
+        /// is the UNION of what the file says and what actually exists in the meadow: a fossil
+        /// species walking around must read as revived whatever the file claims, which is what
+        /// makes the v4 nest migration lossless without the migration having to be perfect.</summary>
+        private void RestoreBoneCollection(SaveData data)
+        {
+            _boneBank.Clear();
+            _revived.Clear();
+            BonesBanked = 0;
+            LastBoneBanked = -1;
+
+            if (data == null)
+            {
+                return;
+            }
+
+            if (data.Bones != null)
+            {
+                for (int i = 0; i < data.Bones.Count; i++)
+                {
+                    BoneSave row = data.Bones[i];
+                    if (row == null || row.Count <= 0 ||
+                        row.BoneIndex < 0 || row.BoneIndex >= BoneSpecies.BonesPerSkeleton)
+                    {
+                        continue; // a corrupt row is dropped, never allowed to poison the board
+                    }
+
+                    int key = BoneKey(row.Species, row.BoneIndex);
+                    _boneBank.TryGetValue(key, out int had);
+                    _boneBank[key] = had + row.Count;
+                    BonesBanked += row.Count;
+                    LastBoneBanked = key;
+                }
+            }
+
+            if (data.RevivedSpecies != null)
+            {
+                for (int i = 0; i < data.RevivedSpecies.Count; i++)
+                {
+                    Config.DinoType s = data.RevivedSpecies[i];
+                    if (SkeletonPlan.IsFossilSpecies(s))
+                    {
+                        _revived.Add(s);
+                    }
+                }
+            }
+
+            if (data.Dinos != null)
+            {
+                for (int i = 0; i < data.Dinos.Count; i++)
+                {
+                    DinoSave d = data.Dinos[i];
+                    if (d != null && SkeletonPlan.IsFossilSpecies(d.Type))
+                    {
+                        _revived.Add(d.Type);
+                    }
+                }
+            }
+        }
+
+        /// <summary>Write the collection into the save payload (v5).</summary>
+        private void WriteBoneCollection(SaveData data)
+        {
+            if (data == null)
+            {
+                return;
+            }
+
+            data.Bones = BoneBankSnapshot();
+
+            if (data.RevivedSpecies == null)
+            {
+                data.RevivedSpecies = new List<Config.DinoType>();
+            }
+
+            // Belt and braces, matching the restore: a fossil species that is genuinely IN THE
+            // WORLD is revived by definition, whatever the set says. A revived dino can then
+            // never be lost by a bookkeeping slip in either direction.
+            for (int i = 0; i < _dinos.Count; i++)
+            {
+                DinoController d = _dinos[i];
+                if (d != null && SkeletonPlan.IsFossilSpecies(d.Type))
+                {
+                    _revived.Add(d.Type);
+                }
+            }
+
+            data.RevivedSpecies.Clear();
+            for (int i = 0; i < SkeletonPlan.Species.Length; i++)
+            {
+                if (_revived.Contains(SkeletonPlan.Species[i]))
+                {
+                    data.RevivedSpecies.Add(SkeletonPlan.Species[i]);
+                }
+            }
+        }
 
         /// <summary>Remember which FEATURED toy the dig site just led with (DinoDigger-qhy), so
         /// the next site can refuse to repeat it even across an app restart. Stored index+1 so
@@ -259,6 +522,56 @@ namespace DinoDigger.Core
             {
                 _muteButton.Bind(Audio, _config);
             }
+
+            EnsureSkeletonBoard();
+            EnsureDinoMatic();
+        }
+
+        /// <summary>Self-heal the skeleton board (DinoDigger-5ve). A scene serialized before the
+        /// board existed has no wire for it and nothing else builds one, so it is constructed
+        /// here under the existing HUD canvas — the same "nothing is pre-placed, the service
+        /// builds it" choice the machine friends made, and the reason this feature needs no
+        /// scene rebuild. Idempotent: a wired board (or one already in the scene) wins.</summary>
+        private void EnsureSkeletonBoard()
+        {
+            if (_skeletonBoard != null)
+            {
+                return;
+            }
+
+            _skeletonBoard = FindAnyObjectByType<SkeletonBoard>();
+            if (_skeletonBoard != null)
+            {
+                return;
+            }
+
+            Canvas canvas = FindAnyObjectByType<Canvas>();
+            if (canvas != null)
+            {
+                _skeletonBoard = SkeletonBoard.Build(canvas, _library, _config);
+            }
+        }
+
+        /// <summary>Self-heal the Dino-Matic service (DinoDigger-3rz), for the same reason and
+        /// on the same terms as the board above. The SERVICE only — the machine itself is not
+        /// placed until the child banks their first bone.</summary>
+        private void EnsureDinoMatic()
+        {
+            if (_dinoMatic == null)
+            {
+                _dinoMatic = FindAnyObjectByType<DinoMaticController>();
+            }
+
+            if (_dinoMatic == null)
+            {
+                var go = new GameObject("DinoMaticService");
+                go.transform.SetParent(_overworldRoot != null ? _overworldRoot : transform, false);
+                _dinoMatic = go.AddComponent<DinoMaticController>();
+            }
+
+            TownArea townArea = _town != null ? _town.GetComponent<TownArea>() : null;
+            _dinoMatic.Configure(_map, _library, _config, _town, townArea, _machines,
+                _meadow, _garden, _mounds, _overworldRoot);
         }
 
         private void OnEnable()
@@ -365,8 +678,23 @@ namespace DinoDigger.Core
                 _treasureCounter.SetCount(Save.Data.TreasureCount);
             }
 
-            // Show the egg's assembly state for the banked shard count right away.
-            _nest?.RefreshAssembly(Save.Data.ShardCount);
+            // The nest is retired scenery now (save v5): it shows its finished egg and echoes
+            // banked bones. Nothing about it is progress any more.
+            _nest?.ShowFinishedEgg();
+
+            // The fossil collection (save v5): every banked bone and every revived skeleton.
+            // Restored BEFORE the dinos are spawned below, because the revival set is UNION'd
+            // with the SAVE's dino list here and re-checked from the live list on every write.
+            RestoreBoneCollection(Save.Data);
+
+            // The Dino-Matic's discovery + excavation state. The machine itself is not built
+            // here — the service's tick builds it, so "the Dino-Matic appears" has exactly one
+            // code path whether it is arriving or coming back from a save.
+            _dinoMatic?.RestoreFromSave(Save.Data);
+
+            // Draw the board for the restored collection right away, so a returning player's
+            // HUD button and filled slots are correct on frame one without a bank event.
+            _skeletonBoard?.Refresh();
 
             // Hand the dig site back the FEATURED toy the last session ended on, so the very
             // first dig after a restart still refuses to repeat it (DinoDigger-qhy). Stored
@@ -424,6 +752,9 @@ namespace DinoDigger.Core
             // Machine Friends: polls the town discovery gate and releases queued arrivals.
             // Owns no dino, blocks nothing, and does nothing at all until a gate trips.
             _machines?.Tick(dt);
+            // The Dino-Matic: same shape, same pacing queue — nothing at all until the first
+            // bone is banked, then an arrival and a hand-off to the town crew.
+            _dinoMatic?.Tick(dt);
         }
 
         private void TickIdleAttract(float dt)
@@ -454,6 +785,10 @@ namespace DinoDigger.Core
             // rotation on its own (MachineFriend.AttractPulse no-ops on an awake machine), so
             // a found friend is never nagged about again.
             _machines?.NearestUndiscovered(from)?.AttractPulse();
+            // ...and the Dino-Matic, while it is still buried or has a finished skeleton
+            // waiting to be collected. It refuses the pulse itself once it has nothing to
+            // offer, so a dug-out machine with an empty board is never nagged about.
+            _dinoMatic?.Site?.AttractPulse();
             GameEvents.RaiseIdleAttract();
             TryTownAttractTour();
         }
@@ -708,6 +1043,12 @@ namespace DinoDigger.Core
                 case Duck _: return 1;
                 case DinoController _: return 2;
                 case MachineFriend _: return 3;
+                // The Dino-Matic is a BuildingController by construction (it reuses the town's
+                // excavation state machine) but it is a MACHINE to the child, so it ranks with
+                // its cousins rather than with the scenery underneath them. Without this it
+                // would fall to 7/8 and a dig mound sitting near it — the belt it is
+                // deliberately placed among — could swallow the tap that starts a revival.
+                case DinoMatic _: return 3;
                 case ItemPickup _: return 4;
                 case BerrySprout _: return 5;
                 case DigMound _: return 6;
@@ -1000,20 +1341,18 @@ namespace DinoDigger.Core
 
         /// <summary>Resolve a freshly dug item into its final overworld identity.
         /// Eggs are reassigned an unowned egg species so a duplicate can never hatch;
-        /// when every egg species is owned the egg becomes an egg SHARD instead. All
-        /// other item types (fruit, treasure, and shards rolled directly by the loot
-        /// nerf) pass through unchanged.</summary>
+        /// when every egg species is owned there is no unique egg left to give, so the
+        /// egg banks as treasure instead (the FOSSIL BONES buried in the site itself are
+        /// what the late game collects — see DigModeController.PlaceBones). All other
+        /// item types pass through unchanged.</summary>
         private DugItemInfo ResolveDugItem(DugItemInfo info)
         {
-            // Shard gate: shards only matter while a shard-exclusive species is still
-            // unowned. Once the nest has produced all five, it is complete forever, so
-            // any shard (rolled directly by the loot nerf) downgrades to treasure —
-            // "shards stop dropping".
+            // SHARDS ARE RETIRED (save v5). Nothing produces one any more, but a stray from an
+            // older code path — or a test spawning one by hand — must still be worth something
+            // rather than banking into a counter nobody reads, so it downgrades to treasure.
             if (info.Type == ItemType.Shard)
             {
-                return AnyShardSpeciesUnowned()
-                    ? info
-                    : new DugItemInfo(ItemType.Treasure, info.DinoType, info.Variant, info.OriginWorld);
+                return new DugItemInfo(ItemType.Treasure, info.DinoType, info.Variant, info.OriginWorld);
             }
 
             // FRUIT GLUT GUARD: fruit is 40% of drops but demand is finite (a Big dino is
@@ -1053,20 +1392,20 @@ namespace DinoDigger.Core
 
             // No UNIQUE egg species is available right now. Two distinct cases:
             //
-            //  (a) Every egg species is genuinely OWNED — the egg-shard nerf is in
-            //      effect. Feed the nest while it still wants shards; once every shard
-            //      species is also owned there is nothing to build, so bank treasure.
+            //  (a) Every egg species is genuinely OWNED — the egg nerf is in effect and there
+            //      is no dinosaur left for an egg to contain. It banks as TREASURE. (Before
+            //      save v5 it became an egg shard for the nest; the nest is retired and the
+            //      fossil species now come out of the ground as BONES, which the dig site
+            //      buries directly rather than routing through the loot table.)
             //
             //  (b) Egg species remain unowned in the WORLD but are all RESERVED by
             //      other un-hatched eggs (e.g. a second egg in this same dig batch).
-            //      Shards must never drop before every egg species is owned, so we do
-            //      NOT leak an early shard here — spill a FRUIT instead. The reserved
-            //      species frees up again once its sibling egg hatches or is cleared.
+            //      Spill a FRUIT instead — the reserved species frees up again once its
+            //      sibling egg hatches or is cleared, and a treasure here would quietly
+            //      cheat the child out of a dinosaur they are one dig away from.
             if (EggSpeciesAllOwned())
             {
-                return AnyShardSpeciesUnowned()
-                    ? new DugItemInfo(ItemType.Shard, info.DinoType, info.Variant, info.OriginWorld)
-                    : new DugItemInfo(ItemType.Treasure, info.DinoType, info.Variant, info.OriginWorld);
+                return new DugItemInfo(ItemType.Treasure, info.DinoType, info.Variant, info.OriginWorld);
             }
 
             int fruitVariants = _config != null ? Mathf.Max(1, _config.FruitVariants) : 1;
@@ -1210,6 +1549,17 @@ namespace DinoDigger.Core
             dino.AttachParticles(sr, hearts, poof);
 
             _dinos.Add(dino);
+
+            // OWNING A FOSSIL DINO IS BEING REVIVED. Whether it came out of the Dino-Matic, out
+            // of a v4 nest save, or out of a test hook, a fossil species standing in the world
+            // means its skeleton is done — so the board colours it in and the machine never
+            // offers it again. Keeping the invariant HERE (one place every dino is born) is
+            // what makes the save's revived list a cache rather than a second source of truth.
+            if (SkeletonPlan.IsFossilSpecies(type))
+            {
+                _revived.Add(type);
+            }
+
             dino.Init(def, _config, _backhoe != null ? _backhoe.transform : null,
                 SlotOffset(0), stage, fruitEaten);
             dino.ConfigureWorld(_map, _meadow);
@@ -1657,7 +2007,7 @@ namespace DinoDigger.Core
         }
 
         /// <summary>The Anky tail-clubbed the rock: a big crumb burst, a pop, and a
-        /// treasure (or gated egg shard) spilling out in a happy arc.</summary>
+        /// treasure spilling out in a happy arc.</summary>
         private void SmashRockLoot(Vector3 rockWorld)
         {
             RockBurst(rockWorld);
@@ -1665,8 +2015,8 @@ namespace DinoDigger.Core
 
             DugItemInfo payout = RollRockPayout(rockWorld);
             // Same spawn path as dug loot: SpawnRewardPickup clamps the landing to a
-            // walkable cell (the rock's own cell is unwalkable) and, for a shard, the
-            // pickup flies to the nest; treasure flies to the counter.
+            // walkable cell (the rock's own cell is unwalkable) and the treasure then
+            // flies to the corner counter.
             SpawnRewardPickup(payout.Type, payout.DinoType, payout.Variant, rockWorld);
             _rockSmashPayouts++;
         }
@@ -1692,18 +2042,13 @@ namespace DinoDigger.Core
             });
         }
 
-        /// <summary>Decide what a smashed rock coughs up: a random-denomination treasure,
-        /// or — at <see cref="Config.GameConfig.RockShardChance"/>, and ONLY while the nest
-        /// still wants them — an egg shard instead. Mirrors the dig-loot shard gate: once
-        /// every shard species is owned, shards stop dropping and it is always treasure.</summary>
+        /// <summary>Decide what a smashed rock coughs up: ALWAYS a random-denomination
+        /// treasure. It used to roll an egg shard some of the time to keep the nest ticking
+        /// over; the nest is retired (save v5) and the fossil species come out of dig sites as
+        /// bones now, so a rock is pure coins — which is also what a rock has always looked
+        /// like it should give.</summary>
         private DugItemInfo RollRockPayout(Vector3 world)
         {
-            float shardChance = _config != null ? _config.RockShardChance : 0.1f;
-            if (Random.value < shardChance && AnyShardSpeciesUnowned())
-            {
-                return new DugItemInfo(ItemType.Shard, Config.DinoType.TRex, 0, world);
-            }
-
             int variants = _config != null ? Mathf.Max(1, _config.TreasureVariants) : 1;
             return new DugItemInfo(ItemType.Treasure, Config.DinoType.TRex,
                 Random.Range(0, variants), world);
@@ -2379,6 +2724,10 @@ namespace DinoDigger.Core
         /// the child found is never re-buried and progress toward the next one is never lost.</summary>
         internal void MachinePersist() => SaveNow();
 
+        /// <summary>The Dino-Matic was found, or its excavation moved on: persist it, for
+        /// exactly the same reason.</summary>
+        internal void DinoMaticPersist() => SaveNow();
+
         /// <summary>A duck was caught (<see cref="Duck.OnTapped"/>): trip Tuggy's discovery
         /// gate. Idempotent — only the FIRST catch means anything.</summary>
         public void NotifyDuckCaught() => _machines?.NotifyDuckCaught();
@@ -2472,144 +2821,85 @@ namespace DinoDigger.Core
             });
         }
 
-        // -------------------------------------------------------------- shards
+        // ------------------------------------------------- the revival ceremony
+        // Save v5 retired the egg-shard nest and its hatch ceremony. What replaces it is the
+        // SAME ceremony, re-pointed: same _ceremonyActive guard, same GameState.Ceremony, same
+        // CameraFollow.EnterFocus/ExitFocus, same "a baby waits to be tapped, and the tap both
+        // joins it and ends the ceremony" (NotifyDinoTapped, untouched). Only the trigger and
+        // the middle beat changed — a completed skeleton and the Dino-Matic, instead of a full
+        // nest and a cracking egg — which is exactly the amount of this that WAS about shards.
 
-        /// <summary>An egg shard was dug up: fly it to the nest (or a graceful
-        /// fallback while no nest exists), bank it in <see cref="SaveData.ShardCount"/>,
-        /// and announce it via <see cref="GameEvents.ShardCollected"/>. The nest visual
-        /// itself lands in a later pass (bl6.4); this only emits the event + routes the
-        /// flight, so it degrades cleanly on a scene with no nest yet.</summary>
-        public void CollectShard(ItemPickup shard)
+        /// <summary>The Dino-Matic was tapped while dug out. If a skeleton is finished, run the
+        /// revival; if not, the machine gives its wordless "not yet" wobble — a tap always does
+        /// something. Guarded so it can never re-enter.</summary>
+        internal void RequestRevival(DinoMatic machine)
         {
-            if (shard == null)
+            if (machine == null || !machine.IsExcavated)
             {
                 return;
             }
 
-            Vector3 target = ResolveShardTarget(shard.transform.position);
-
-            Tween.MoveArc(shard.transform, shard.transform.position, target, 1.2f, 0.6f, () =>
-            {
-                // Same guard as CollectTreasure: a shard destroyed mid-flight (TestReset /
-                // teardown, never real play) must not phantom-bank a stray count or kick
-                // off a ceremony from a later frame.
-                if (shard == null)
-                {
-                    return;
-                }
-
-                Save.Data.ShardCount++;
-                Audio?.Chime();
-                GameEvents.RaiseShardCollected(Save.Data.ShardCount); // nest advances its assembly sprite
-                SaveNow();
-                Destroy(shard.gameObject);
-
-                // A full nest hatches a new shard-exclusive species (if any remain).
-                TryBeginCeremony();
-            });
-        }
-
-        /// <summary>Where a dug shard flies: the nest provider if one is registered
-        /// (bl6.4), else the meadow center (the nest's future home), else the treasure
-        /// counter corner, else straight up. Never throws on a partially-wired scene.</summary>
-        private Vector3 ResolveShardTarget(Vector3 from)
-        {
-            if (GameEvents.NestTargetProvider != null)
-            {
-                Vector3? nest = GameEvents.NestTargetProvider();
-                if (nest.HasValue)
-                {
-                    return nest.Value;
-                }
-            }
-
-            if (_meadow != null)
-            {
-                return _meadow.Center;
-            }
-
-            if (_treasureCounter != null)
-            {
-                return _treasureCounter.GetWorldTarget(_mainCamera);
-            }
-
-            return from + Vector3.up * 3f;
-        }
-
-        // --------------------------------------------------- shard-hatch ceremony
-
-        /// <summary>The nest reached <see cref="ShardsPerHatch"/>: if a shard-exclusive
-        /// species is still unowned, run the hatch ceremony (camera to the nest, egg
-        /// wobble + crack + confetti, a new baby that waits to be tapped). Guarded so
-        /// it can never re-enter or fire when the roster is complete.</summary>
-        private void TryBeginCeremony()
-        {
-            if (_ceremonyActive || Save == null || State == null)
+            if (_ceremonyActive || State == null)
             {
                 return;
             }
 
-            if (Save.Data.ShardCount < ShardsPerHatch)
+            if (!TryNextRevivable(out Config.DinoType species))
             {
+                machine.NotReadyWobble();
                 return;
-            }
-
-            if (!TryRollUnownedShardSpecies(out Config.DinoType species))
-            {
-                return; // roster complete — nothing left to hatch (shards already stopped dropping)
             }
 
             _ceremonyActive = true;
             State.Set(GameState.Ceremony); // blocks dig entry + backhoe move during the zoom
 
-            Vector3 nestPos = NestFocusPoint();
+            Vector3 at = machine.PadWorld;
             if (_cameraFollow != null)
             {
-                _cameraFollow.EnterFocus(nestPos, () => PlayCeremonyHatch(species, nestPos));
+                _cameraFollow.EnterFocus(at, () => PlayRevival(machine, species, at));
             }
             else
             {
-                PlayCeremonyHatch(species, nestPos);
+                PlayRevival(machine, species, at);
             }
         }
 
-        private void PlayCeremonyHatch(Config.DinoType species, Vector3 nestPos)
+        private void PlayRevival(DinoMatic machine, Config.DinoType species, Vector3 at)
         {
-            Audio?.Hatch();
-            SpawnConfetti(nestPos + new Vector3(0f, 0.4f, 0f));
+            SpawnConfetti(at + new Vector3(0f, 0.4f, 0f));
 
-            if (_nest != null)
-            {
-                _nest.PlayHatch(() => FinishCeremonyHatch(species, nestPos));
-            }
-            else
-            {
-                FinishCeremonyHatch(species, nestPos);
-            }
+            // The skeleton the child assembled floats in as the board's own silhouette, so the
+            // thing going into the machine is visibly the thing they filled in.
+            Sprite skeleton = _library != null
+                ? _library.SkeletonBoard(SkeletonPlan.BoardIndex(species))
+                : null;
+
+            machine.PlayRevival(skeleton, () => FinishRevival(machine, species, at));
         }
 
-        private void FinishCeremonyHatch(Config.DinoType species, Vector3 nestPos)
+        private void FinishRevival(DinoMatic machine, Config.DinoType species, Vector3 at)
         {
-            Audio?.Roar();
+            // Mark it revived BEFORE spawning: SpawnDino persists, and a save written between
+            // the two would show a dino whose skeleton was still "waiting for the machine".
+            _revived.Add(species);
 
-            // Consume one nest's worth of shards, keeping any remainder toward the next.
-            // Capture the requirement BEFORE spawning the new dino below: the species is
-            // not yet owned here, so ShardsPerHatch still reflects the egg hatching NOW.
-            if (Save != null)
+            // The baby lands on the pad IN FRONT of the machine (screen-south, where the
+            // ceremony camera is already looking), Baby stage, forced RESIDENT — it waits to be
+            // tapped, and that tap promotes it to buddy AND ends the ceremony, exactly as the
+            // hatch ceremony always worked (see NotifyDinoTapped). The forward offset keeps it
+            // off the machine's own silhouette so the child can see what they just made.
+            Vector3 spawnPos = at + new Vector3(0f, -0.6f, 0f);
+            if (_map != null)
             {
-                int req = ShardsPerHatch;
-                Save.Data.ShardCount = Mathf.Max(0, Save.Data.ShardCount - req);
+                spawnPos = _map.NearestWalkable(spawnPos, out _);
             }
 
-            // Spawn AT the nest, Baby stage, forced RESIDENT: it waits in the meadow
-            // until tapped (the tap promotes it to buddy via NotifyDinoTapped). Use the
-            // meadow's nest cell center so the baby lands squarely inside the interior.
-            Vector3 spawnPos = _meadow != null ? _meadow.NestWorld : nestPos;
             _ceremonyDino = SpawnDino(species, GrowthStage.Baby, 0, spawnPos, persist: true, wantsBuddy: false);
             _ceremonyDino?.Dance();
 
+            // The same "a new dinosaur joined the island" beat an egg hatch raises, so anything
+            // listening for a new dino (the parade check, future systems) sees one code path.
             GameEvents.RaiseEggHatched(species);
-            _nest?.RefreshAssembly(Save != null ? Save.Data.ShardCount : 0);
 
             // Ease back to the backhoe after a few beats (a tap on the baby ends it early).
             Tween.After(CeremonyLingerSeconds, EndCeremony);
@@ -2641,103 +2931,6 @@ namespace DinoDigger.Core
             {
                 State.Set(GameState.Roam);
             }
-        }
-
-        /// <summary>Nest focus point for the camera + hatch spawn: the registered nest
-        /// target, else the meadow's nest corner, else the backhoe.</summary>
-        private Vector3 NestFocusPoint()
-        {
-            if (GameEvents.NestTargetProvider != null)
-            {
-                Vector3? n = GameEvents.NestTargetProvider();
-                if (n.HasValue)
-                {
-                    return n.Value;
-                }
-            }
-
-            if (_meadow != null)
-            {
-                return _meadow.NestWorld;
-            }
-
-            return _backhoe != null ? _backhoe.transform.position : Vector3.zero;
-        }
-
-        /// <summary>Ownership of the five shard-exclusive species (DinoType 4-8),
-        /// indexed 0-based from the first shard species.</summary>
-        private bool[] OwnedShardSpecies()
-        {
-            int count = Config.DinoSpecies.TotalCount - Config.DinoSpecies.EggHatchableCount;
-            var owned = new bool[count];
-            for (int i = 0; i < _dinos.Count; i++)
-            {
-                DinoController d = _dinos[i];
-                if (d != null && !Config.DinoSpecies.IsEggHatchable(d.Type))
-                {
-                    owned[(int)d.Type - Config.DinoSpecies.EggHatchableCount] = true;
-                }
-            }
-
-            return owned;
-        }
-
-        /// <summary>How many shard-exclusive species are owned == shard eggs hatched.</summary>
-        private int CountOwnedShardSpecies()
-        {
-            bool[] owned = OwnedShardSpecies();
-            int n = 0;
-            for (int i = 0; i < owned.Length; i++)
-            {
-                if (owned[i])
-                {
-                    n++;
-                }
-            }
-
-            return n;
-        }
-
-        /// <summary>Pick a uniformly random shard-exclusive species that is NOT yet
-        /// owned. Returns false once all five are owned.</summary>
-        private bool TryRollUnownedShardSpecies(out Config.DinoType species)
-        {
-            bool[] owned = OwnedShardSpecies();
-            var unowned = new int[owned.Length];
-            int n = 0;
-            for (int i = 0; i < owned.Length; i++)
-            {
-                if (!owned[i])
-                {
-                    unowned[n++] = i;
-                }
-            }
-
-            if (n == 0)
-            {
-                species = default;
-                return false;
-            }
-
-            int pick = unowned[Random.Range(0, n)];
-            species = (Config.DinoType)(Config.DinoSpecies.EggHatchableCount + pick);
-            return true;
-        }
-
-        /// <summary>True while any shard-exclusive species remains unowned. Gates the
-        /// shard drop (see ResolveDugItem) and whether the nest can still hatch.</summary>
-        internal bool AnyShardSpeciesUnowned()
-        {
-            bool[] owned = OwnedShardSpecies();
-            for (int i = 0; i < owned.Length; i++)
-            {
-                if (!owned[i])
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         // ----------------------------------------------------------- utilities
@@ -2913,6 +3106,11 @@ namespace DinoDigger.Core
             // ignores them and a newer build reading an older save finds none earned.
             _machines?.WriteSave(Save.Data);
 
+            // The fossil finale (save v5): the bone bank, which skeletons have been revived,
+            // and how far the crew has got with the Dino-Matic.
+            WriteBoneCollection(Save.Data);
+            _dinoMatic?.WriteSave(Save.Data);
+
             Save.Save();
         }
 
@@ -2951,12 +3149,42 @@ namespace DinoDigger.Core
         internal bool TestTownTourActive => _townTourActive;
         internal int TestTownTours => _townTours;
         internal PlaceholderLibrary TestLibrary => _library;
-        internal int TestShardCount => Save != null ? Save.Data.ShardCount : 0;
         internal bool TestEggSpeciesAllOwned => EggSpeciesAllOwned();
         internal int TestBonesBanked => BonesBanked;
         internal int TestBoneCount(Config.DinoType species, int boneIndex) => BoneCount(species, boneIndex);
         internal int TestBoneRowCount => BoneBankSnapshot().Count;
-        internal bool TestAnyShardSpeciesUnowned => AnyShardSpeciesUnowned();
+
+        // ---- Fossil finale (DinoDigger-5ve / -3rz) ----
+        internal SkeletonBoard TestSkeletonBoard => _skeletonBoard;
+        internal DinoMaticController TestDinoMatic => _dinoMatic;
+        internal bool TestRevivalPending => RevivalPending;
+        internal bool TestAllSkeletonsRevived => AllSkeletonsRevived();
+        internal int TestDuplicateBoneCoins => DuplicateBoneCoins;
+        internal bool TestSkeletonComplete(Config.DinoType s) => SkeletonComplete(s);
+        internal bool TestSpeciesRevived(Config.DinoType s) => IsSpeciesRevived(s);
+
+        /// <summary>TEST HOOK. Bank exactly the bones a species' skeleton still needs, through
+        /// the REAL <see cref="BankBone"/> path (so the save, the board, the nest echo and the
+        /// Dino-Matic gate all fire as they would in play). Returns how many were banked.</summary>
+        internal int TestCompleteSkeleton(Config.DinoType species)
+        {
+            int banked = 0;
+            for (int bone = 0; bone < BoneSpecies.BonesPerSkeleton; bone++)
+            {
+                int need = SkeletonPlan.NeedOf(species, bone);
+                while (BoneCount(species, bone) < need)
+                {
+                    if (!BankBone(species, bone))
+                    {
+                        return banked; // the board is fully revived: further bones pay out
+                    }
+
+                    banked++;
+                }
+            }
+
+            return banked;
+        }
         internal int TestReservedEggSpeciesCount => _reservedEggSpecies.Count;
         internal bool TestFruitStandFinished => FruitStandFinished;
         internal int TestFruitSalesCount => _fruitSalesCount;
@@ -3255,12 +3483,21 @@ namespace DinoDigger.Core
             // wipes the live scene.
             _machines?.TestResetMachines();
 
-            // Fossil bones are session state, so a case starts with an empty collection —
-            // otherwise a bank delta asserted late in the suite would be measured against
-            // whatever an earlier case happened to dig up.
+            // The Dino-Matic: destroy the machine and forget the gate, so each case starts from
+            // day zero and earns the arrival it cares about. Like the town and the machines,
+            // the caller owns Save.Data — this only wipes the live scene.
+            _dinoMatic?.TestResetDinoMatic();
+
+            // The fossil collection is wiped between cases — otherwise a bank delta asserted
+            // late in the suite would be measured against whatever an earlier case dug up, and
+            // a case that revived a species would leave the board finished for everything
+            // after it. Same convention as the town/machines: the SAVE is the caller's.
             _boneBank.Clear();
+            _revived.Clear();
             BonesBanked = 0;
             LastBoneBanked = -1;
+            _skeletonBoard?.Close();
+            _skeletonBoard?.Refresh();
 
             // Re-bud every Berry Sprout (staggered) so a case that force-ripened one starts
             // the next case from a clean, all-budding garden.

@@ -147,6 +147,27 @@ namespace DinoDigger.Config
                  "silhouette sized to the bone's footprint, so a bone ALWAYS pops visibly.")]
         public Sprite[] BoneSprites = new Sprite[4];
 
+        [Header("Skeleton board (DinoDigger-5ve)")]
+        [Tooltip("Dark skeleton SILHOUETTES for the five fossil species, indexed by " +
+                 "Config.SkeletonPlan.Species order (Pteranodon, Ankylosaurus, Spinosaurus, " +
+                 "Parasaurolophus, Velociraptor). Drawn dark on the collection board and " +
+                 "filled in bone by bone; a completed species swaps to its REAL sprite in full " +
+                 "colour. Any slot left null (art not imported) falls back to a plain dark card " +
+                 "at runtime, so the board still fills and every slot is still tappable.")]
+        public Sprite[] SkeletonBoards = new Sprite[5];
+
+        [Tooltip("The board's own HUD button icon. Falls back to the skull bone sprite, then " +
+                 "the treasure icon, so the button is never invisible.")]
+        public Sprite BoneButtonIcon;
+
+        [Header("The Dino-Matic (DinoDigger-3rz)")]
+        [Tooltip("Excavation states of the left-behind revival machine, in the same order a " +
+                 "town building uses them: 0 = the buried mound with the dome glint the child " +
+                 "first spots, 1..3 = the NPC crew digging it out, 4 = the finished machine. " +
+                 "Missing states fall back to the generic BuildingStates placeholder exactly " +
+                 "as a half-generated town building does.")]
+        public BuildingArt DinoMaticArt = new BuildingArt();
+
         [Header("Items")]
         public Sprite[] FruitSprites = new Sprite[4];
         public Sprite[] TreasureSprites = new Sprite[4];
@@ -237,6 +258,19 @@ namespace DinoDigger.Config
         public Sprite Bone(int boneIndex)
         {
             return Pick(BoneSprites, boneIndex);
+        }
+
+        /// <summary>Skeleton silhouette for a fossil species by its board index (0-4, see
+        /// <c>Config.SkeletonPlan.Species</c>), or null when that art is not imported — the
+        /// board then draws a plain dark card in its place.</summary>
+        public Sprite SkeletonBoard(int boardIndex)
+        {
+            if (SkeletonBoards == null || boardIndex < 0 || boardIndex >= SkeletonBoards.Length)
+            {
+                return null;
+            }
+
+            return SkeletonBoards[boardIndex];
         }
 
         /// <summary>How many crystal colours this library actually carries art for (at least 1,

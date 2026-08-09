@@ -8,8 +8,9 @@ namespace DinoDigger.Core
         Roam = 0,       // isometric overworld, driving the backhoe
         Transition = 1, // camera easing between roam and dig
         Dig = 2,        // side-view dirt digging mini-game
-        Ceremony = 3    // shard-hatch nest ceremony: camera focused on the nest,
-                        // dig entry + backhoe move blocked, taps on the new dino still route
+        Ceremony = 3    // the Dino-Matic revival ceremony (formerly the shard hatch): camera
+                        // focused on the machine, dig entry + backhoe move blocked, taps on
+                        // the new dino still route
     }
 
     /// <summary>

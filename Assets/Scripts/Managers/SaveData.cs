@@ -40,12 +40,7 @@ namespace DinoDigger.Managers
 
     /// <summary>Serializable count of one banked fossil bone (DinoDigger-0z5): which
     /// skeleton it belongs to, which bone of that skeleton, and how many have been dug.
-    ///
-    /// NOT PERSISTED YET, ON PURPOSE. The dig site banks bones into a session dictionary on
-    /// GameManager and this is the shape that dictionary snapshots into; D2b (the skeleton
-    /// board) owns the save version bump that adds the actual <c>List&lt;BoneSave&gt;</c>
-    /// field to <see cref="SaveData"/>. Defining the row here now means that bump is a
-    /// one-line field addition rather than a data-model design.</summary>
+    /// Persisted from save v5 (DinoDigger-5ve) as <see cref="SaveData.Bones"/>.</summary>
     [Serializable]
     public class BoneSave
     {
@@ -73,7 +68,15 @@ namespace DinoDigger.Managers
         // to be reinterpreted (the BuddyFieldVersion situation, where absent != false).
         // Since nothing is reinterpreted, v4 stays v4 and every v1..v4 save loads with
         // three sleeping machines — which is also what a brand-new player sees.
-        public const int CurrentVersion = 4;
+        //
+        // v5 (DinoDigger-5ve) IS a real bump, for exactly the reason v4 was not: an OLD
+        // field is REINTERPRETED. The egg-shard nest retires and the skeleton board takes
+        // over, so a v4 save's ShardCount no longer means "progress toward the next nest
+        // egg" — it has to be converted into banked BONES and then zeroed. "Absent" and
+        // "present but stale" are different states here, so the loader must be able to tell
+        // a converted save from an unconverted one, and that is what the version number is
+        // for. See SaveManager.MigrateToV5 for the conversion formula.
+        public const int CurrentVersion = 5;
 
         // Saves at or above this version carry the real DinoSave.IsBuddy flag; below
         // it (v1) the loader falls back to "first two loaded dinos are buddies".
@@ -86,6 +89,21 @@ namespace DinoDigger.Managers
         // needs "absent != default" semantics, THAT is the change that bumps the version.
         public const int MachinesWokenFieldVersion = 4;
 
+        /// <summary>The version that introduced the skeleton board (<see cref="Bones"/>,
+        /// <see cref="RevivedSpecies"/>, the Dino-Matic fields) and retired the egg-shard
+        /// nest. A save below this version still carries LIVE shard progress and must be run
+        /// through <c>SaveManager.MigrateToV5</c> exactly once.</summary>
+        public const int BoneFieldVersion = 5;
+
+        /// <summary>THE LEGACY SHARD CURVE, frozen. Egg shards required for the 1st/2nd/3rd/…
+        /// nest egg in the retired v3-v4 nest progression (the last entry clamped), copied
+        /// from the shipped GameConfig default that every v3/v4 save was actually played
+        /// under. It lives HERE, as a constant, rather than being read back out of GameConfig
+        /// because a migration must be REPRODUCIBLE from the save alone: re-tuning a live
+        /// design number years later must not retroactively change what an old save converts
+        /// into. Nothing but the migration reads it.</summary>
+        public static readonly int[] LegacyShardsPerHatch = { 5, 8, 15, 20 };
+
         public int Version = 1;
         public int TreasureCount;
         public List<DinoSave> Dinos = new List<DinoSave>();
@@ -93,12 +111,17 @@ namespace DinoDigger.Managers
         // Milestone parade (all four egg species Big) plays exactly once, ever.
         public bool ParadeDone;
 
-        // ---- v3: egg-shard nest progression ----
-        // Banked egg shards dug up once every egg species is owned.
+        // ---- v3: egg-shard nest progression — RETIRED AT v5 ----
+        // Banked egg shards dug up once every egg species is owned. Nothing writes this any
+        // more: the v5 migration converts whatever a v4 save had left into banked bones and
+        // zeroes it (see SaveManager.MigrateToV5). The FIELD stays so an unmigrated save can
+        // still be read, and so a v5 save written by this build is still parseable by an
+        // older build without exploding.
         public int ShardCount;
 
-        // Shard-exclusive species queued for / assembled at the nest. Populated by
-        // the nest system (bl6.4); persisted here so nest state survives a restart.
+        // Shard-exclusive species queued for / assembled at the nest. Drained by the v5
+        // migration (owned entries become revived species, the rest are dropped) and left
+        // empty from then on; kept for the same read-compatibility reason as ShardCount.
         public List<DinoType> NestSpeciesQueue = new List<DinoType>();
 
         // ---- v4: Dino Town persistence ----
@@ -138,5 +161,31 @@ namespace DinoDigger.Managers
         // the session roll anything, which is also what a brand-new player gets — so, like
         // MachinesWoken above, this is purely additive and v4 stays v4.
         public int LastPrimaryToy;
+
+        // ---- v5: the skeleton board + the Dino-Matic (DinoDigger-5ve / -3rz) ----
+
+        // Every bone dug so far, one row per (species, bone) with a count — the exact shape
+        // GameManager.BoneBankSnapshot hands back. This IS the skeleton board: which slots
+        // are filled and which skeletons are complete are both derived from these counts via
+        // Config.SkeletonPlan, so the board can never drift out of sync with the bank.
+        public List<BoneSave> Bones = new List<BoneSave>();
+
+        // Fossil species whose skeleton has been carried through the Dino-Matic and is
+        // walking around as a real dino. Stored as DinoType ordinals (not strings, unlike
+        // MachinesWoken) because the DinoType enum is already a frozen contract — the bone
+        // rows above key off it too, and BoneSave has stored it since D2a. On load this is
+        // UNION'd with "every fossil species that actually exists in Dinos", so a hand-edited
+        // or half-written save can never un-revive a dino the child is looking at.
+        public List<DinoType> RevivedSpecies = new List<DinoType>();
+
+        // The Dino-Matic excavation. Found = the first bone has been banked, so the buried
+        // mound has appeared (or is queued to). State/Worked mirror the town's own
+        // TownBuildingSave shape: construction state 0..3 while the crew digs it out,
+        // == BuildingController.ConstructionStates once it is fully excavated, plus the
+        // banked partial toward the next state. Absent (a v1..v4 save) => not found => the
+        // site appears the first time a bone is banked, exactly as it does for a new player.
+        public bool DinoMaticFound;
+        public int DinoMaticState;
+        public float DinoMaticWorked;
     }
 }
