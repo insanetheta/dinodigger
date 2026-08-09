@@ -899,6 +899,17 @@ namespace DinoDigger.Testing
             // and every toy is a second, deliberate source of coins: a pot cracked open by a
             // falling tile pays 5-8 on its own. Their own cases cover them.
             DigModeController.TestSuppressToys = true;
+
+            // Nothing LOOSE in the pit either (Dig Loop 2.0 D3). Two objects this wave puts in
+            // every dig would otherwise perturb a case that certifies exact spawn counts and aims
+            // taps at exact tiles:
+            //   critters — ambient, coin-paying, and (so a catch is possible at all) they outrank
+            //              a dirt tile for taps, so one sitting on a target tile eats the bite;
+            //   the ladder — a second tappable prop standing in the pit while the last item is
+            //              being dug.
+            // Neither is what this case is about, and both have their own cases.
+            DigModeController.TestSuppressCritters = true;
+            DigModeController.TestSuppressLadder = true;
             try
             {
                 yield return EnterDig(ctx);
@@ -972,8 +983,16 @@ namespace DinoDigger.Testing
                     }, 25f, () => $"dug batch never fully surfaced (pickups peaked at {peakPickups}/{expectedPickups}, " +
                                   $"treasure +{gm.Save.Data.TreasureCount - treasureBefore}/{expectedTreasureGain})");
 
+                    // NAME THE STRAY. An over-count used to report only a number, which left the
+                    // next reader guessing which system had spawned a fruit or an egg into the
+                    // world mid-window (a dug batch is not the only source: a caught duck drops
+                    // fruit half the time, a shaken tree drops several, a sprout harvest drops
+                    // one, and a previous case's staggered spill can still be in the air). The
+                    // breadcrumb lists what is actually lying there, so a recurrence identifies
+                    // its own cause instead of being pinned on the newest feature.
                     ctx.Assert(peakPickups == expectedPickups,
-                        $"{peakPickups} pickups spawned (expected {expectedPickups})");
+                        $"{peakPickups} pickups spawned (expected {expectedPickups}) — live " +
+                        $"non-treasure pickups now: {DescribeOverworldPickups(gm)}");
                     ctx.Assert(gm.Save.Data.TreasureCount == treasureBefore + expectedTreasureGain,
                         $"treasure +{gm.Save.Data.TreasureCount - treasureBefore} (expected +{expectedTreasureGain})");
 
@@ -989,7 +1008,36 @@ namespace DinoDigger.Testing
             finally
             {
                 DigModeController.TestSuppressToys = false;
+                DigModeController.TestSuppressCritters = false;
+                DigModeController.TestSuppressLadder = false;
             }
+        }
+
+        /// <summary>Every live non-treasure pickup in the world, as "Type(variant)" — the
+        /// breadcrumb an exact-count failure prints so the stray names itself instead of leaving
+        /// the next reader to guess which system spawned it.</summary>
+        private string DescribeOverworldPickups(GameManager gm)
+        {
+            Transform root = gm.TestOverworldRoot;
+            if (root == null)
+            {
+                return "(no overworld root)";
+            }
+
+            var parts = new List<string>();
+            ItemPickup[] arr = root.GetComponentsInChildren<ItemPickup>(true);
+            for (int i = 0; i < arr.Length; i++)
+            {
+                ItemPickup p = arr[i];
+                if (p == null || p.IsConsumed || p.Type == ItemType.Treasure)
+                {
+                    continue;
+                }
+
+                parts.Add($"{p.Type}({p.Variant})");
+            }
+
+            return parts.Count == 0 ? "(none)" : string.Join(", ", parts);
         }
 
         // Dig Postcards: themed dig sites. Mounds roll a WEIGHTED theme and tint themselves;

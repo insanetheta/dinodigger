@@ -379,8 +379,14 @@ namespace DinoDigger.Testing
                 dm.TestBuildThemedSite(null);
                 yield return ctx.WaitFrames(1);
 
-                ctx.Assert(FindCleanColumn(dm, 1, 3, out int col),
-                    "no column with three clean, item-free cells to run a gush down");
+                // THE WHOLE COLUMN, not just the three cells this phase plants in. A gush lifts
+                // EVERY item in the column, so a site-generated item sitting below the planted
+                // one would legitimately rise into the cell the planted one vacated — which is
+                // the chain working, but it makes "the origin is empty afterwards" an untrue
+                // assertion. Phase 2 below tests that chain on purpose; phase 1 excludes it so
+                // its own assertions stay exact.
+                ctx.Assert(FindCleanColumn(dm, 1, dm.TestRows - 1, out int col),
+                    "no column clean from row 1 to the pit floor to run a gush down");
 
                 DirtTile below = dm.TestTileAt(2, col);
                 DirtTile bottom = dm.TestTileAt(3, col);
@@ -397,6 +403,8 @@ namespace DinoDigger.Testing
 
                 ctx.Assert(dm.TestSetWater(1, col), $"could not place a water pocket at r1c{col}");
                 ctx.Assert(dm.TestKindAt(1, col) == DigTileKind.Water, "the water pocket did not take");
+
+                int buriedCountBefore = dm.TestBuriedCount;
 
                 // ---- Crack it ----
                 dm.TestClearCell(1, col);
@@ -422,8 +430,18 @@ namespace DinoDigger.Testing
                 List<DirtTile> buriedNow = dm.TestBuriedTiles();
                 ctx.Assert(buriedNow.Contains(below),
                     "the buried item did not float onto the tile above it");
+
+                // A MOVE, NOT A COPY. With the column clean below the planted item there is
+                // nothing that could legitimately rise into the cell it left, so the origin must
+                // be empty on BOTH books — the map and the tile's own flag.
                 ctx.Assert(!buriedNow.Contains(bottom) && !bottom.HasItem,
-                    "the item is still ALSO on the tile it floated off — the bookkeeping split");
+                    $"the item is still ALSO on the tile it floated off — the bookkeeping split " +
+                    $"(origin r{bottom.Row}c{bottom.Col}: map={buriedNow.Contains(bottom)} " +
+                    $"HasItem={bottom.HasItem}; destination r{below.Row}c{below.Col}: " +
+                    $"map={buriedNow.Contains(below)} HasItem={below.HasItem})");
+                ctx.Assert(buriedCountBefore == dm.TestBuriedCount,
+                    $"the gush changed the buried-item count ({buriedCountBefore} -> " +
+                    $"{dm.TestBuriedCount}) — a float relocates loot, it never creates or loses it");
                 ctx.Assert(below.TestPeekEnabled,
                     "the floated item's peek did not travel with it (the hint and the map disagree)");
 
@@ -437,9 +455,72 @@ namespace DinoDigger.Testing
                 ctx.Assert(below.IsDestroyed,
                     "the washed tile survived the bite the wash left it needing");
 
-                ctx.Log($"water pocket at r1c{col}: washed {dm.TestTilesWashed} tiles " +
+                int phase1Washed = dm.TestTilesWashed;
+                int phase1Floated = dm.TestItemsFloated;
+
+                // ================== PHASE 2: A WHOLE COLUMN OF LOOT RISES ==================
+                // The branch that failed a gate run: a second item BELOW the first rises into the
+                // cell the first just left. Nothing is duplicated — each item moves exactly one
+                // row, exactly once — and this proves it by IDENTITY (distinct treasure variants)
+                // rather than by presence, plus the conservation invariant on the map's size.
+                gm.TestForceRoam();
+                yield return ctx.WaitFrames(1);
+                dm.TestBuildThemedSite(null);
+                yield return ctx.WaitFrames(1);
+
+                ctx.Assert(FindCleanColumn(dm, 1, dm.TestRows - 1, out int chainCol),
+                    "no clean column for the chain phase");
+
+                DirtTile top = dm.TestTileAt(2, chainCol);
+                DirtTile mid = dm.TestTileAt(3, chainCol);
+                DirtTile low = dm.TestTileAt(4, chainCol);
+                ctx.Assert(top != null && mid != null && low != null,
+                    "the chain column is not four cells deep");
+
+                const int upperVariant = 0; // coin
+                const int lowerVariant = 1; // gem — a different face, so identity is provable
+                ctx.Assert(dm.TestBuryItemAt(3, chainCol, ItemType.Treasure, upperVariant),
+                    $"could not bury the upper chain item at r3c{chainCol}");
+                ctx.Assert(dm.TestBuryItemAt(4, chainCol, ItemType.Treasure, lowerVariant),
+                    $"could not bury the lower chain item at r4c{chainCol}");
+                ctx.Assert(dm.TestSetWater(1, chainCol),
+                    $"could not place the chain phase's water pocket at r1c{chainCol}");
+
+                int chainBuriedBefore = dm.TestBuriedCount;
+                int floatedBefore = dm.TestItemsFloated;
+
+                dm.TestClearCell(1, chainCol);
+                yield return ctx.WaitFrames(1);
+
+                ctx.Assert(dm.TestItemsFloated - floatedBefore == 2,
+                    $"the gush floated {dm.TestItemsFloated - floatedBefore} items up a column " +
+                    "holding two — every item in the column rises, exactly once");
+                ctx.Assert(dm.TestBuriedCount == chainBuriedBefore,
+                    $"the chain changed the buried-item count ({chainBuriedBefore} -> " +
+                    $"{dm.TestBuriedCount}) — moving a column of loot must conserve it exactly");
+
+                List<DirtTile> chainNow = dm.TestBuriedTiles();
+                ctx.Assert(chainNow.Contains(top) && dm.TestBuriedVariant(top) == upperVariant,
+                    $"the upper item did not land on r{top.Row}c{top.Col} " +
+                    $"(it carries variant {dm.TestBuriedVariant(top)})");
+
+                // THE BRANCH ITSELF: the cell the upper item vacated is refilled from below, and
+                // by the LOWER item specifically — not by a ghost of the one that left.
+                ctx.Assert(chainNow.Contains(mid) && dm.TestBuriedVariant(mid) == lowerVariant,
+                    $"the lower item did not rise into the cell the upper one left " +
+                    $"(r{mid.Row}c{mid.Col} carries variant {dm.TestBuriedVariant(mid)})");
+                ctx.Assert(!chainNow.Contains(low) && !low.HasItem,
+                    $"the bottom cell r{low.Row}c{low.Col} still carries an item after its loot " +
+                    "floated away — the bookkeeping split");
+                ctx.Assert(top.TestPeekEnabled && mid.TestPeekEnabled,
+                    "a risen item's peek did not travel with it");
+
+                ctx.Log($"water pocket at r1c{col}: washed {phase1Washed} tiles " +
                         $"({belowHitsBefore}->1 hits on the one below), floated " +
-                        $"{dm.TestItemsFloated} item(s) up a row, board settled");
+                        $"{phase1Floated} item(s) up a row, board settled. Chain at c{chainCol}: " +
+                        "two stacked items each rose exactly one row (coin then gem, in that " +
+                        "order), the vacated cell refilled from below, and the buried count " +
+                        $"held at {chainBuriedBefore}");
             }
             finally
             {
@@ -620,6 +701,16 @@ namespace DinoDigger.Testing
         /// instead, clearing neighbours; the second bite pops the mushroom. The "no damage" half
         /// is the one that matters most: a bite that appeared to do nothing would be the one beat
         /// in this game that punishes a tap, and the fling is what makes it a gift instead.
+        ///
+        /// FIRST, THOUGH, THE WORLD BOUNCES OFF IT TOO, and that sub-test is here because its
+        /// absence is what made this case go red on the second gate run. A boing flings the
+        /// mushroom's neighbours — including, on some rolls, the tile directly above it — so the
+        /// column then drops ONTO the mushroom, and while a landing crack could pop it the toy
+        /// destroyed itself as a direct consequence of its own gag: one bite, a funny bounce, and
+        /// the promised second bite never came. Falling dirt now bounces off a mushroom exactly
+        /// like the bucket does (no damage, no bounce spent), which is both the fix and the
+        /// obviously right reading of "bouncy". Asserted deterministically by dropping a tile on
+        /// one on purpose.
         /// </summary>
         private IEnumerator Case_MushroomBoings(TestContext ctx)
         {
@@ -640,8 +731,10 @@ namespace DinoDigger.Testing
                 dm.TestBuildThemedSite(null);
                 yield return ctx.WaitFrames(1);
 
-                ctx.Assert(FindCleanRow(dm, 2, 1, out int row, out int col),
-                    "no clean cell to grow a mushroom in");
+                // A cell with two live tiles stacked above it: the sub-test below needs to be
+                // able to drop one ON the mushroom, which means clearing the tile between them.
+                ctx.Assert(FindMushroomCellWithRoofAbove(dm, out int row, out int col),
+                    "no clean cell with two tiles above it to grow a mushroom under");
                 ctx.Assert(dm.TestSetMushroom(row, col), $"could not place a mushroom at r{row}c{col}");
 
                 DirtTile shroom = dm.TestTileAt(row, col);
@@ -649,6 +742,27 @@ namespace DinoDigger.Testing
                     "the mushroom did not take");
                 ctx.Assert(shroom.TestHitsRemaining == 2,
                     $"a fresh mushroom needs {shroom.TestHitsRemaining} bites (expected 2: boing, then pop)");
+
+                // ---- THE WORLD BOUNCES OFF IT: drop the tile above onto the mushroom ----
+                // Clearing r-1 lets the tile at r-2 fall onto the mushroom, which is precisely
+                // the landing that used to pop it.
+                dm.TestClearCell(row - 1, col);
+                yield return ctx.WaitFrames(2);
+
+                ctx.Assert(dm.TestMushroomBounceOffs >= 1,
+                    "a tile landed on the mushroom and did not bounce off it");
+                ctx.Assert(!shroom.IsDestroyed,
+                    "falling dirt DESTROYED the mushroom — the world bounces off it, only a bite pops it");
+                ctx.Assert(shroom.TestDamage == 0,
+                    $"a landing dealt the mushroom {shroom.TestDamage} damage");
+                ctx.Assert(!shroom.TestBounced,
+                    "a falling tile spent the mushroom's bounce — that bounce belongs to the bite");
+                ctx.Assert(shroom.TestHitsRemaining == 2,
+                    $"after being landed on, the mushroom needs {shroom.TestHitsRemaining} bites " +
+                    "(it must still owe the child both)");
+                ctx.Assert(dm.TestMushroomBoings == 0,
+                    $"{dm.TestMushroomBoings} BITE-boings recorded for a landing — the two must " +
+                    "never be counted as the same beat");
 
                 int tilesAlive = AliveTileCount(dm);
 
@@ -687,8 +801,10 @@ namespace DinoDigger.Testing
                 yield return ctx.WaitUntil(() => !dm.IsOpen || dm.TestFloaterReport() == "", 10f,
                     () => $"board never settled after the mushroom: {dm.TestFloaterReport()}");
 
-                ctx.Log($"mushroom at r{row}c{col}: bite 1 boinged (0 damage) and flung " +
-                        $"{dm.TestFlungTiles} neighbour(s), bite 2 popped it, board settled");
+                ctx.Log($"mushroom at r{row}c{col}: {dm.TestMushroomBounceOffs} falling tile(s) " +
+                        $"bounced off it with no damage and no bounce spent; bite 1 boinged " +
+                        $"(0 damage) and flung {dm.TestFlungTiles} neighbour(s); bite 2 popped " +
+                        "it; board settled");
             }
             finally
             {
@@ -1107,6 +1223,32 @@ namespace DinoDigger.Testing
                         col = c;
                         return true;
                     }
+                }
+            }
+
+            row = -1;
+            col = -1;
+            return false;
+        }
+
+        /// <summary>A clean cell with TWO live, item-free dirt tiles stacked directly above it —
+        /// so a case can clear the middle one and drop the top one onto whatever it plants in the
+        /// bottom. Deepest rows first, because a cell near the floor has the most roof over it
+        /// and the least chance of the board rearranging around the test.</summary>
+        private bool FindMushroomCellWithRoofAbove(DigModeController dm, out int row, out int col)
+        {
+            for (int r = dm.TestRows - 1; r >= 2; r--)
+            {
+                for (int c = 0; c < dm.TestCols; c++)
+                {
+                    if (!IsCleanCell(dm, r, c) || !IsCleanCell(dm, r - 1, c) || !IsCleanCell(dm, r - 2, c))
+                    {
+                        continue;
+                    }
+
+                    row = r;
+                    col = c;
+                    return true;
                 }
             }
 

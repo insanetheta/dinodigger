@@ -106,9 +106,22 @@ namespace DinoDigger.Testing
                         }
                     }
 
-                    if (g != null && lib.PathTiles.Contains(g)) { pathTiles.Add(g); }
-                    if (g != null && lib.BedTiles.Contains(g)) { bedTiles.Add(g); }
-                    if (w != null && lib.WaterTiles.Contains(w)) { waterTiles.Add(w); }
+                    // Either painting system counts as "this biome is dressed": flat
+                    // variants (pre-l9g) or connected pieces (current).
+                    if (g != null && (lib.PathTiles.Contains(g) || lib.PathBlobs.Contains(g)))
+                    {
+                        pathTiles.Add(g);
+                    }
+
+                    if (g != null && (lib.BedTiles.Contains(g) || lib.BedBlobs.Contains(g)))
+                    {
+                        bedTiles.Add(g);
+                    }
+
+                    if (w != null && (lib.WaterTiles.Contains(w) || lib.WaterBlobs.Contains(w)))
+                    {
+                        waterTiles.Add(w);
+                    }
 
                     if (g != null && lib.GrassPathEdges.Contains(g)) { pathEdges++; }
                     if (g != null && lib.GrassWaterEdges.Contains(g)) { waterEdges++; }
@@ -127,16 +140,70 @@ namespace DinoDigger.Testing
             ctx.Assert(waterTiles.Count > 1,
                 $"the water paints only {waterTiles.Count} distinct variant(s)");
 
-            // ------------------------------------------------------------- 2) transitions
-            ctx.Assert(pathEdges > 0,
-                "no grass->path transition tiles painted — grass and path still butt up " +
-                "against each other with a hard seam");
-            ctx.Assert(waterEdges > 0,
-                "no grass->water shoreline tiles painted — the pond/stream banks are hard cuts");
-            ctx.Assert(bedTiles.Count > 0,
+            // ------------------------------------------------ 2) transitions / topology
+            // Which system is live? Connected pieces (DinoDigger-l9g) make each biome
+            // carry its OWN bank, so the grass beside them stays plain and there are no
+            // grass-side transition tiles at all. That is the correct, current state; the
+            // grass-side melts are the documented fallback for a checkout without them.
+            bool connected = lib.UsesBlobs(EnvBiome.Water) && lib.UsesBlobs(EnvBiome.Path);
+            ctx.Assert(connected || artOnDisk == false || waterEdges > 0 || pathEdges > 0,
+                "neither the connected pieces nor the grass-side transitions are painted — " +
+                "biomes are butting up against each other with a hard seam");
+
+            if (connected)
+            {
+                // THE REGRESSION GUARD for DinoDigger-l9g. Every water/path/bed cell must
+                // carry the piece its own neighbourhood asks for. If it does not, its body
+                // does not line up with the neighbour's body at the shared diamond edge —
+                // which is the whole bug: colour running off the diamond into the grass,
+                // and runs with no continuity.
+                int checkedTopology = 0, wrongTopology = 0;
+                Vector3Int firstWrong = Vector3Int.zero;
+                for (int x = 0; x < MapCells; x++)
+                {
+                    for (int y = 0; y < MapCells; y++)
+                    {
+                        var cell = new Vector3Int(x, y, 0);
+                        EnvBiome biome = EnvBiomeAt(map, lib, cell);
+                        if (biome == EnvBiome.None || biome == EnvBiome.Grass ||
+                            IsEnvBridgeCell(map, lib, cell) || !lib.UsesBlobs(biome))
+                        {
+                            continue;
+                        }
+
+                        TileBase painted = biome == EnvBiome.Water
+                            ? map.TestWaterTile(cell) : map.TestGroundTile(cell);
+                        int key = EnvDressing.BlobKey(cell, c => EnvSameForBlob(map, lib, c, biome));
+                        checkedTopology++;
+                        if (lib.BlobSet(biome).Piece(key) != painted)
+                        {
+                            if (wrongTopology == 0)
+                            {
+                                firstWrong = cell;
+                            }
+
+                            wrongTopology++;
+                        }
+                    }
+                }
+
+                ctx.Assert(checkedTopology > 100,
+                    $"only {checkedTopology} connected cells found — the island is not " +
+                    "painting topology-keyed water/path at all");
+                ctx.Assert(wrongTopology == 0,
+                    $"{wrongTopology} cell(s) carry a connected piece that does not match " +
+                    $"their own neighbourhood (first: {firstWrong}) — their body cannot " +
+                    "line up with the neighbour's at the shared edge");
+                ctx.Assert(waterEdges == 0 && pathEdges == 0,
+                    $"{waterEdges + pathEdges} grass-side transition tiles are painted " +
+                    "alongside connected pieces — the biome tile already carries its own " +
+                    "bank, so this double-transitions the seam");
+                ctx.Log($"topology: {checkedTopology} connected cells, every one matching " +
+                        "its neighbourhood key");
+            }
+
+            ctx.Assert(bedTiles.Count > 0 || lib.UsesBlobs(EnvBiome.Bed),
                 "the Berry Patch plot is not painted with the tilled garden-bed ground");
-            ctx.Assert(bedEdges > 0,
-                "no grass->bed transition tiles around the Berry Patch plot");
 
             // Every transition tile must carry the RIGHT mask for its neighbours, in the
             // baked art's bit order (bit0 -Y, bit1 +X, bit2 +Y, bit3 -X). A rotation bug
@@ -190,8 +257,12 @@ namespace DinoDigger.Testing
                         continue; // ocean, an un-dressed fallback cell, or a bridge deck
                     }
 
-                    TileBase expected = lib.GroundTileFor(cell, biome, c => EnvBiomeAt(map, lib, c));
-                    TileBase again = lib.GroundTileFor(cell, biome, c => EnvBiomeAt(map, lib, c));
+                    TileBase expected = lib.GroundTileFor(
+                        cell, biome, c => EnvBiomeAt(map, lib, c),
+                        c => EnvSameForBlob(map, lib, c, biome));
+                    TileBase again = lib.GroundTileFor(
+                        cell, biome, c => EnvBiomeAt(map, lib, c),
+                        c => EnvSameForBlob(map, lib, c, biome));
                     if (expected != again)
                     {
                         ctx.Assert(false,
@@ -376,12 +447,12 @@ namespace DinoDigger.Testing
                 return EnvBiome.Water; // a deck over a channel
             }
 
-            if (lib.PathTiles.Contains(g))
+            if (lib.PathTiles.Contains(g) || lib.PathBlobs.Contains(g))
             {
                 return EnvBiome.Path;
             }
 
-            if (lib.BedTiles.Contains(g))
+            if (lib.BedTiles.Contains(g) || lib.BedBlobs.Contains(g))
             {
                 return EnvBiome.Bed;
             }
@@ -393,6 +464,31 @@ namespace DinoDigger.Testing
             }
 
             return EnvBiome.None; // a flat fallback tile: nothing to verify here
+        }
+
+        /// <summary>
+        /// "Does this neighbour count as more of <paramref name="self"/>?", re-derived
+        /// from the PAINTED scene. Must mirror SceneBuilder.SameBiomeAt exactly or the
+        /// topology assertion is checking a different island than the one that was built:
+        /// a bridge deck is both water and path, and the open sea (no ground tile and no
+        /// water tile) is water.
+        /// </summary>
+        private static bool EnvSameForBlob(OverworldMap map, PlaceholderLibrary lib,
+            Vector3Int cell, EnvBiome self)
+        {
+            bool bridge = IsEnvBridgeCell(map, lib, cell);
+            switch (self)
+            {
+                case EnvBiome.Water:
+                    bool sea = map.TestGroundTile(cell) == null && map.TestWaterTile(cell) == null;
+                    return sea || bridge || map.TestWaterTile(cell) != null;
+                case EnvBiome.Path:
+                    return bridge || EnvBiomeAt(map, lib, cell) == EnvBiome.Path;
+                case EnvBiome.Bed:
+                    return EnvBiomeAt(map, lib, cell) == EnvBiome.Bed;
+                default:
+                    return false;
+            }
         }
 
         private static bool IsEnvBridgeTile(PlaceholderLibrary lib, TileBase t)

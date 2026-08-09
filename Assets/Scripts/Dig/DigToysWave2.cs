@@ -52,8 +52,9 @@ namespace DinoDigger.Dig
         private int _veinSegments;   // test-observable: segments popped this site
 
         // ---- Bouncy mushroom ----
-        private int _mushroomBoings; // test-observable: bounces this site
-        private int _flungTiles;     // test-observable: neighbours a boing cleared
+        private int _mushroomBoings;    // test-observable: BITES bounced this site
+        private int _flungTiles;        // test-observable: neighbours a boing cleared
+        private int _mushroomBounceOffs; // test-observable: falling tiles bounced off a mushroom
 
         // ---- Dig critter ----
         private readonly List<DigCritter> _critters = new List<DigCritter>();
@@ -72,6 +73,7 @@ namespace DinoDigger.Dig
             _veinSegments = 0;
             _mushroomBoings = 0;
             _flungTiles = 0;
+            _mushroomBounceOffs = 0;
             _crittersSpawned = 0;
             _crittersCaught = 0;
             _critterHops = 0;
@@ -254,7 +256,11 @@ namespace DinoDigger.Dig
             }
 
             // (2) Float: buried loot rises one row. Walked TOP-DOWN so an item that has just
-            //     moved up is never picked up again by the same pass and carried two rows.
+            //     moved up is never picked up again by the same pass and carried two rows — and
+            //     so a whole COLUMN of loot rises together, each item stepping into the cell the
+            //     one above it has just left. An origin cell being refilled from below is the
+            //     chain working, not a duplicate: every move goes through MoveBuriedItem, which
+            //     conserves the map's size or rolls itself back.
             for (int r = fromRow + 1; r < _rows; r++)
             {
                 if (FloatBuriedUp(r, col))
@@ -287,36 +293,80 @@ namespace DinoDigger.Dig
             }
         }
 
-        /// <summary>Move the buried item at r,c onto the tile one row above, peek and all.
+        /// <summary>Move the buried item at r,c onto the tile one row above.
         ///
-        /// Refuses exactly the cells site generation would refuse to bury in — an occupied tile,
-        /// a toy, the pocket, a bone cell, an empty cell — so a floated item can never end up
-        /// somewhere the generator could not have put it in the first place. The two-step
-        /// bookkeeping (the <c>_buried</c> map AND the tile's own peek) is moved together, which
-        /// is what keeps "the map says this tile hides an egg" and "this tile is glowing egg" the
-        /// same statement.</summary>
+        /// THE COLUMN RISES AS A CHAIN, and that is the whole reason this walks TOP-DOWN. The
+        /// item nearest the surface moves first, into a cell that has already been processed, so
+        /// the one below it can then move into the cell that just emptied. Every item in the
+        /// column ends up exactly one row higher, each having moved exactly once — a cell an item
+        /// floated OFF is expected to be refilled from below, and an empty origin is not the
+        /// invariant. (The invariant is conservation: see <see cref="MoveBuriedItem"/>.)</summary>
         private bool FloatBuriedUp(int row, int col)
         {
-            DirtTile from = TileAt(row, col);
-            if (from == null || from.IsDestroyed || !_buried.TryGetValue(from, out Buried b))
+            return MoveBuriedItem(TileAt(row, col), TileAt(row - 1, col));
+        }
+
+        /// <summary>THE ONE CHOKEPOINT for relocating a buried item, and the only place in the
+        /// dig that writes the buried bookkeeping to two tiles at once.
+        ///
+        /// A buried item is TWO facts kept in step — an entry in the <c>_buried</c> map and the
+        /// tile's own peek/HasItem — and moving it means four writes across two tiles. Done
+        /// inline, any early return between them leaves the item half-moved: showing on one tile
+        /// and banked against another, or worse, counted twice. So the move is a transaction:
+        /// BOTH ends are validated before anything is written, the writes then happen together,
+        /// and a post-check on the map's own SIZE (a move must conserve it exactly) rolls the
+        /// whole thing back if the two ends ever disagree. A refused move changes nothing at all.
+        ///
+        /// The destination bar is exactly the bar site generation holds itself to — alive, plain
+        /// dirt, hiding nothing, not the pocket, not a bone cell — so a moved item can never come
+        /// to rest somewhere the generator could not have buried it in the first place.</summary>
+        private bool MoveBuriedItem(DirtTile from, DirtTile to)
+        {
+            if (from == null || to == null || from == to || from.IsDestroyed)
             {
                 return false;
             }
 
-            DirtTile to = TileAt(row - 1, col);
-            if (to == null || to.IsDestroyed || to.HasItem || to.IsSurprise || to.CoversBone ||
-                to.Kind != DigTileKind.Dirt || _buried.ContainsKey(to))
+            if (!_buried.TryGetValue(from, out Buried b) || !CanHostBuriedItem(to))
             {
                 return false;
             }
+
+            int before = _buried.Count;
 
             _buried.Remove(from);
             from.ClearItem();
-
             _buried[to] = b;
             Sprite peek = PeekSprite(b, out Color tint);
             to.SetPeek(peek, tint);
-            return true;
+
+            // The transaction's own audit. A move relocates one item: the map must hold exactly
+            // as many entries as it did, the destination must now be showing the item, and the
+            // origin must have stopped. If any of that is untrue the move is undone in full
+            // rather than left half-applied — a wrong board the child can still finish beats a
+            // stranded item that makes the round unfinishable.
+            if (_buried.Count == before && to.HasItem && !from.HasItem)
+            {
+                return true;
+            }
+
+            _buried.Remove(to);
+            to.ClearItem();
+            _buried[from] = b;
+            Sprite backPeek = PeekSprite(b, out Color backTint);
+            from.SetPeek(backPeek, backTint);
+            Debug.LogError($"[Dig] buried-item move r{from.Row}c{from.Col} -> r{to.Row}c{to.Col} " +
+                           "did not conserve the bookkeeping; rolled back");
+            return false;
+        }
+
+        /// <summary>A tile that may take over a buried item: alive, plain dirt, hiding nothing of
+        /// its own, not the surprise pocket, not standing on a bone cell, and not already banked
+        /// in the map. The same bar every other layer of site generation holds itself to.</summary>
+        private bool CanHostBuriedItem(DirtTile t)
+        {
+            return t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise && !t.CoversBone &&
+                   t.Kind == DigTileKind.Dirt && !_buried.ContainsKey(t);
         }
 
         // ========================================================== GEM VEIN
@@ -525,6 +575,34 @@ namespace DinoDigger.Dig
             SettleGrid("mushroom boing");
         }
 
+        /// <summary>A falling tile landed on a mushroom: it BOUNCES OFF. A small squash, a puff
+        /// of dirt, and nothing else — no damage, no fling, and above all no spending of the
+        /// mushroom's one bounce, which belongs to the child's bite.
+        ///
+        /// Deliberately NOT the full <see cref="OnMushroomBounced"/> beat. Two reasons, both
+        /// structural: the fling is the payoff for a BITE (a toy that dug for you unprompted is a
+        /// toy that took a turn away), and firing a multi-cell clear from inside the settle loop
+        /// that is calling this would let one mushroom re-enter the cascade on every landing.
+        /// A bounce off the world is scenery; a bounce off the bucket is a gift.</summary>
+        private void BounceOffMushroom(DirtTile mushroom)
+        {
+            if (mushroom == null)
+            {
+                return;
+            }
+
+            _mushroomBounceOffs++;
+
+            float squash = _config != null ? Mathf.Clamp(_config.DigMushroomSquash, 0.05f, 0.9f) : 0.5f;
+            float squashTime = _config != null
+                ? Mathf.Clamp(_config.DigMushroomSquashSeconds, 0.05f, 2f)
+                : 0.4f;
+
+            // Softer than a bite's boing: the world bumping into it, not the bucket hitting it.
+            mushroom.Boing(squash * 0.6f, squashTime);
+            SpawnDust(mushroom.transform.position, 3);
+        }
+
         // ======================================================== DIG CRITTER
 
         /// <summary>A tile just cleared: maybe a glowbug was living under it. Rolled on the
@@ -532,7 +610,7 @@ namespace DinoDigger.Dig
         /// never fills with things competing with the digging itself.</summary>
         private void MaybeSpawnCritter(DirtTile from)
         {
-            if (from == null || !_open || _finished || TestSuppressToys)
+            if (from == null || !_open || _finished || TestSuppressToys || TestSuppressCritters)
             {
                 return;
             }
@@ -556,9 +634,9 @@ namespace DinoDigger.Dig
         /// placement). False only on a site with no tiles at all.</summary>
         private bool SpawnCritterOnBoard()
         {
-            if (_tiles.Count == 0)
+            if (_tiles.Count == 0 || TestSuppressCritters)
             {
-                return false;
+                return false; // the roller walks on to the next roster entry
             }
 
             DirtTile t = _tiles[Random.Range(0, _tiles.Count)];
@@ -705,6 +783,19 @@ namespace DinoDigger.Dig
         /// mushroom. Same refusals as every other hand-placement hook (an item, the pocket, a
         /// bone cell, an existing toy, a dead cell), so a hand-built board is exactly as legal as
         /// a rolled one.</summary>
+        /// <summary>TEST HOOK. Loose NO dig critters at the next site — the ambient half of the
+        /// wave-2 toys, pinned on its own.
+        ///
+        /// Kept separate from TestSuppressToys on purpose, because a critter is not a tile and
+        /// the two pins mean genuinely different things. TestSuppressToys says "build me an exact
+        /// BOARD"; this says "put nothing LOOSE in the pit". A critter is the only thing this
+        /// wave added that MOVES, PAYS COINS and — because catching one has to be possible at all
+        /// — OUTRANKS A DIRT TILE FOR TAPS. Any case that certifies an exact spawn count or aims
+        /// taps at exact tiles wants to be able to say so without also flattening the board.
+        /// (TestSuppressToys still implies it, so every case already pinned stays pinned.)
+        /// Cleared by the runner's between-case backstop.</summary>
+        internal static bool TestSuppressCritters;
+
         internal bool TestSetWater(int r, int c) => TestSetToy(r, c, DigTileKind.Water, 0);
         internal bool TestSetVein(int r, int c) => TestSetToy(r, c, DigTileKind.Vein, 0);
         internal bool TestSetMushroom(int r, int c) => TestSetToy(r, c, DigTileKind.Mushroom, 0);
@@ -716,6 +807,10 @@ namespace DinoDigger.Dig
         internal int TestVeinSegments => _veinSegments;
         internal int TestMushroomBoings => _mushroomBoings;
         internal int TestFlungTiles => _flungTiles;
+
+        /// <summary>TEST HOOK. Falling tiles that BOUNCED OFF a mushroom instead of cracking it —
+        /// the direct evidence that the world cannot pop one.</summary>
+        internal int TestMushroomBounceOffs => _mushroomBounceOffs;
         internal int TestCrittersSpawned => _crittersSpawned;
         internal int TestCrittersCaught => _crittersCaught;
         internal int TestCritterHops => _critterHops;

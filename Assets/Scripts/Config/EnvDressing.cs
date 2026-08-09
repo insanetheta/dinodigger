@@ -188,6 +188,85 @@ namespace DinoDigger.Config
     }
 
     /// <summary>
+    /// One biome's CONNECTED tile set (DinoDigger-l9g): 47 pieces indexed by the
+    /// neighbourhood the cell sits in, rather than interchangeable variants.
+    ///
+    /// This is what replaced the flat-variant painting for water, path and garden bed.
+    /// A variant set can only ever paint the middle of a biome; it has no way to know it
+    /// is a 1-cell stream, so its features ran off the diamond into the grass and its
+    /// runs had no banks. A connected piece carries its own transition: the biome body
+    /// only reaches the edges it actually connects across, and everywhere else the tile
+    /// paints grass — which is why any two biomes meet through grass and no pairwise
+    /// tile is ever needed.
+    /// </summary>
+    [Serializable]
+    public class EnvBlobSet
+    {
+        [Tooltip("The 47 connected pieces, in EnvDressing's canonical key order " +
+                 "(ascending normalised key). Empty = this biome has no connected art " +
+                 "and the painter falls back to flat variants + grass-side transitions.")]
+        public TileBase[] Pieces = new TileBase[EnvDressing.BlobPieceCount];
+
+        public int Count
+        {
+            get
+            {
+                if (Pieces == null)
+                {
+                    return 0;
+                }
+
+                int n = 0;
+                for (int i = 0; i < Pieces.Length; i++)
+                {
+                    if (Pieces[i] != null)
+                    {
+                        n++;
+                    }
+                }
+
+                return n;
+            }
+        }
+
+        /// <summary>True only when the set is COMPLETE. A partial connected set is worse
+        /// than none — the missing neighbourhoods would fall back to a flat variant that
+        /// runs its colour off the diamond, i.e. the exact bug this replaced — so the
+        /// painter uses this set all-or-nothing.</summary>
+        public bool HasAll => Count == EnvDressing.BlobPieceCount;
+
+        /// <summary>The piece for a raw or normalised 8-neighbour key.</summary>
+        public TileBase Piece(int key)
+        {
+            if (Pieces == null || Pieces.Length == 0)
+            {
+                return null;
+            }
+
+            int slot = EnvDressing.BlobSlot(key);
+            return slot >= 0 && slot < Pieces.Length ? Pieces[slot] : null;
+        }
+
+        public bool Contains(TileBase tile)
+        {
+            if (tile == null || Pieces == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < Pieces.Length; i++)
+            {
+                if (Pieces[i] == tile)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
     /// The DETERMINISTIC rules of the environment dressing pass (DinoDigger-y1g), kept in
     /// the runtime assembly on purpose: SceneBuilder (editor) paints with them and the
     /// EnvDressingApplied integration case (runtime) re-derives the expected paint with the
@@ -277,6 +356,136 @@ namespace DinoDigger.Config
                 case EnvBiome.Bed: return SaltBed;
                 default: return SaltGrass;
             }
+        }
+
+        // ===================== CONNECTED (blob) TILING — DinoDigger-l9g
+        //
+        // Water, path and garden bed no longer paint an interchangeable variant per cell.
+        // Each one paints the piece that matches its NEIGHBOURHOOD, so a run has banks
+        // along it and a body that meets its neighbours' bodies exactly at the shared
+        // diamond edge. See the long proof in Tools/generate_env.py: two same-biome cells
+        // always agree about the edge between them, and the DIAGONALS in the key are what
+        // make the perpendicular bank agree too.
+        //
+        // Key layout (same bit order as the transition masks, which is the baked art's):
+        //   bits 0-3  cardinals  -Y, +X, +Y, -X
+        //   bits 4-7  diagonals, where diagonal i is the cell between cardinals i and
+        //             (i+1)%4:  (+X,-Y), (+X,+Y), (-X,+Y), (-X,-Y)
+        // A diagonal only changes the tile when BOTH its cardinals are same-biome (that
+        // is the only time a corner gets carved), so the 256 raw neighbourhoods collapse
+        // onto exactly 47 pieces.
+
+        /// <summary>Diagonal offsets, in the key's bit order (bits 4..7).</summary>
+        public static readonly Vector3Int[] DiagonalOffsets =
+        {
+            new Vector3Int(1, -1, 0),  // bit4: between -Y and +X
+            new Vector3Int(1, 1, 0),   // bit5: between +X and +Y
+            new Vector3Int(-1, 1, 0),  // bit6: between +Y and -X
+            new Vector3Int(-1, -1, 0), // bit7: between -X and -Y
+        };
+
+        /// <summary>How many distinct connected pieces one biome ships.</summary>
+        public const int BlobPieceCount = 47;
+
+        // key -> piece slot (or -1), and slot -> key. Built once, identically to
+        // Tools/generate_env.py's blob_keys(): the canonical keys ASCENDING. That order
+        // is the contract between the baker, the importer and this lookup.
+        private static readonly int[] _blobSlot = new int[256];
+        private static readonly int[] _blobKeys;
+
+        static EnvDressing()
+        {
+            var seen = new System.Collections.Generic.List<int>();
+            var known = new bool[256];
+            for (int k = 0; k < 256; k++)
+            {
+                int n = BlobNormalise(k);
+                if (!known[n])
+                {
+                    known[n] = true;
+                    seen.Add(n);
+                }
+            }
+
+            seen.Sort();
+            _blobKeys = seen.ToArray();
+
+            var slotOfKey = new int[256];
+            for (int i = 0; i < _blobKeys.Length; i++)
+            {
+                slotOfKey[_blobKeys[i]] = i;
+            }
+
+            for (int k = 0; k < 256; k++)
+            {
+                _blobSlot[k] = slotOfKey[BlobNormalise(k)];
+            }
+        }
+
+        /// <summary>The canonical key for piece <paramref name="slot"/> (0..46) — how the
+        /// importer knows which baked file feeds which slot.</summary>
+        public static int BlobKeyAt(int slot) =>
+            slot >= 0 && slot < _blobKeys.Length ? _blobKeys[slot] : 255;
+
+        /// <summary>Collapse a raw 8-neighbour key onto the canonical one: a diagonal bit
+        /// only survives when both its cardinals are set, otherwise it is pinned to 1
+        /// (no corner to carve).</summary>
+        public static int BlobNormalise(int key)
+        {
+            int outKey = key & 0x0F;
+            for (int i = 0; i < 4; i++)
+            {
+                bool both = ((key >> i) & 1) != 0 && ((key >> ((i + 1) & 3)) & 1) != 0;
+                outKey |= both ? (key & (1 << (4 + i))) : (1 << (4 + i));
+            }
+
+            return outKey;
+        }
+
+        /// <summary>Piece slot (0..46) for any raw or normalised key.</summary>
+        public static int BlobSlot(int key)
+        {
+            if (key < 0 || key > 255)
+            {
+                return _blobSlot[255];
+            }
+
+            return _blobSlot[key];
+        }
+
+        /// <summary>
+        /// The 8-neighbour key for a cell, over whatever <paramref name="sameBiome"/>
+        /// counts as "more of me". The caller owns that decision because it is not the
+        /// same question per biome: open sea and a bridge deck both read as WATER (a grass
+        /// bank in the middle of the ocean is nonsense, and a channel continues under a
+        /// deck), while for a PATH only a bridge does — a path that runs out at the coast
+        /// should end in a grass shoulder, and it does.
+        /// </summary>
+        public static int BlobKey(Vector3Int cell, Func<Vector3Int, bool> sameBiome)
+        {
+            if (sameBiome == null)
+            {
+                return 255;
+            }
+
+            int key = 0;
+            for (int i = 0; i < 4; i++)
+            {
+                if (sameBiome(cell + EdgeOffsets[i]))
+                {
+                    key |= 1 << i;
+                }
+            }
+
+            for (int i = 0; i < 4; i++)
+            {
+                if (sameBiome(cell + DiagonalOffsets[i]))
+                {
+                    key |= 1 << (4 + i);
+                }
+            }
+
+            return BlobNormalise(key);
         }
 
         /// <summary>

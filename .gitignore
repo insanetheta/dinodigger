@@ -43,3 +43,11 @@ Tools/venv/
 .DS_Store
 .playwright-mcp/
 Tools/__pycache__/
+
+# ===== ENV connectivity renders (DinoDigger-l9g) =====
+# Tools/render_env_scene.py composes the REAL island out of Main.unity's cell data so the
+# tile JOINS can be reviewed in context (verify sheets show tiles in isolation, which is
+# how the connectivity bug got signed off in the first place). The per-view PNGs are big
+# and reproducible in ~2s — only the stacked review sheet is worth keeping in the repo.
+Tools/render/*
+!Tools/render/connectivity_review.png

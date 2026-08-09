@@ -3787,6 +3787,10 @@ namespace DinoDigger.Dig
         /// cracked it — the wiggle would simply vanish mid-cascade, which is the opposite of the
         /// "find the mystery tile" beat. It still takes its thump and dust, just no damage.
         ///
+        /// A BOUNCY MUSHROOM is exempt in the most literal sense available: falling dirt bounces
+        /// OFF it (see the branch below). Its one bounce belongs to the child's bite, and nothing
+        /// the world drops on it may spend that or pop it.
+        ///
         /// CRYSTALS are exempt too, for the mirror-image reason: a crystal is 1-hardness, so a
         /// single landing would shatter it — the child would watch a colour they were lining up
         /// get crushed by falling dirt, and it would leave the pit through a path that pays no
@@ -3814,6 +3818,21 @@ namespace DinoDigger.Dig
                 if (victim == null || victim.IsDestroyed || victim.IsSurprise ||
                     victim.Kind == DigTileKind.Crystal || victim.IsWashed)
                 {
+                    continue;
+                }
+
+                // A BOUNCY MUSHROOM does what it says: the falling tile BOUNCES OFF IT. No
+                // damage, no bounce spent, just a squash and a puff of dirt (DinoDigger-u47).
+                //
+                // This is the toddler-honest rule and it is also the only one that survives the
+                // mushroom's own gag: a boing flings its neighbours, the column above then drops
+                // onto the mushroom, and under the old "any hit is the hit" reading that landing
+                // popped it — the child bit once, watched the funny bounce, and the toy vanished
+                // before the second bite it had just been promised. Bounces are for the world;
+                // only a BITE (or a deliberate clear, which hammers the cell twice) pops it.
+                if (victim.Kind == DigTileKind.Mushroom)
+                {
+                    BounceOffMushroom(victim);
                     continue;
                 }
 

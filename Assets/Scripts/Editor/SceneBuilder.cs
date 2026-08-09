@@ -722,8 +722,31 @@ namespace DinoDigger.EditorTools
 
             System.Func<Vector3Int, EnvBiome> edgeLookup = EdgeBiomeAt;
 
-            // The dressed tile for a cell: a grass->X transition where grass meets another
-            // biome, else a hashed base variant, else the flat placeholder.
+            // Membership for the CONNECTED key (DinoDigger-l9g) — "does this neighbour
+            // count as more of me?". It is a different question per biome and getting it
+            // wrong is visible from orbit:
+            //   * a BRIDGE is both. The channel runs on under the deck and the path runs
+            //     on over it, so a stream connects toward a bridge and so does a path.
+            //   * the OPEN SEA ('~', and everything off the grid) is water. Without this
+            //     every coastal water cell decides it borders land and grows a grass bank
+            //     with a sand rim — a bright green-and-cream ribbon floating in the middle
+            //     of the ocean, all the way round the island. It is NOT path or bed: a
+            //     path that runs out at the coast should end in a grass shoulder.
+            bool SameBiomeAt(Vector3Int c, EnvBiome self)
+            {
+                bool outside = c.x < 0 || c.y < 0 || c.x >= N || c.y >= N;
+                char ch = outside ? '~' : m[c.x, c.y];
+                switch (self)
+                {
+                    case EnvBiome.Water: return ch == 'W' || ch == 'S' || ch == 'B' || ch == '~';
+                    case EnvBiome.Path: return ch == 'P' || ch == 'B';
+                    case EnvBiome.Bed: return ch == 'A';
+                    default: return false;
+                }
+            }
+
+            // The dressed tile for a cell: a connected piece where the biome ships one,
+            // else a grass->X transition, else a hashed base variant, else the flat tile.
             TileBase Dressed(Vector3Int cell, EnvBiome biome)
             {
                 if (lib == null)
@@ -731,7 +754,12 @@ namespace DinoDigger.EditorTools
                     return null;
                 }
 
-                return dress ? lib.GroundTileFor(cell, biome, edgeLookup) : lib.FlatTile(biome);
+                if (!dress)
+                {
+                    return lib.FlatTile(biome);
+                }
+
+                return lib.GroundTileFor(cell, biome, edgeLookup, c => SameBiomeAt(c, biome));
             }
 
             for (int x = 0; x < N; x++)
@@ -880,6 +908,17 @@ namespace DinoDigger.EditorTools
                     }
 
                     EnvBiome biome = GroundBiomeOf(t);
+
+                    // A lily belongs on OPEN water. On a 1-cell stream the cell is mostly
+                    // bank, so a pad dropped at the centre sits half on the shore — the
+                    // "lily pads cut off" half of DinoDigger-l9g, from the other side.
+                    // Only scatter on water whose whole neighbourhood is water.
+                    if (biome == EnvBiome.Water && lib.UsesBlobs(EnvBiome.Water) &&
+                        WaterBlobKey(m, x, y) != FullyEnclosedKey)
+                    {
+                        continue;
+                    }
+
                     float chance = config != null
                         ? config.EnvDecalChance(biome)
                         : DefaultDecalChance(biome);
@@ -894,6 +933,25 @@ namespace DinoDigger.EditorTools
             }
 
             return painted;
+        }
+
+        /// <summary>The key whose whole 8-neighbourhood is the same biome — open water,
+        /// the middle of a plaza, and the only place a floating decal has room.</summary>
+        private const int FullyEnclosedKey = 255;
+
+        /// <summary>The connected key a water cell would paint with, computed straight off
+        /// the char map (same membership rule PaintMap uses: stream, pond, bridge deck and
+        /// the open sea all count as water).</summary>
+        private static int WaterBlobKey(char[,] m, int x, int y)
+        {
+            bool Wet(Vector3Int c)
+            {
+                bool outside = c.x < 0 || c.y < 0 || c.x >= N || c.y >= N;
+                char ch = outside ? '~' : m[c.x, c.y];
+                return ch == 'W' || ch == 'S' || ch == 'B' || ch == '~';
+            }
+
+            return EnvDressing.BlobKey(new Vector3Int(x, y, 0), Wet);
         }
 
         private static float DefaultDecalChance(EnvBiome biome)

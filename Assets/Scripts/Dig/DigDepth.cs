@@ -285,8 +285,12 @@ namespace DinoDigger.Dig
                 go.transform.localScale = new Vector3(k, k, 1f);
             }
 
+            // The tap target stays INSIDE the ladder's own (empty) cell, even though the art
+            // deliberately overhangs it: the ladder outranks a dirt tile for taps, so a collider
+            // that spilled into a neighbouring cell would be a prop that can eat a bite aimed at
+            // dirt. A full cell is a generous toddler target on its own.
             var box = go.AddComponent<BoxCollider2D>();
-            box.size = new Vector2(1.1f, 1.4f);
+            box.size = new Vector2(1f, 1f);
             box.isTrigger = true;
 
             _ladder = go.AddComponent<DigLadder>();

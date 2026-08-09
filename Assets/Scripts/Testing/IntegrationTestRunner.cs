@@ -322,6 +322,7 @@ namespace DinoDigger.Testing
             // alphas passing for the wrong reason.
             DigModeController.TestSuppressLadder = false;
             DigModeController.TestSuppressGlow = false;
+            DigModeController.TestSuppressCritters = false;
 
             // The toy roller's no-repeat history (DinoDigger-qhy) is static AND mirrored into the
             // save, so a feature rolled by one case would steer the next case's first site. Wiped

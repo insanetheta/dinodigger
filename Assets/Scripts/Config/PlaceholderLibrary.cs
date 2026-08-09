@@ -99,6 +99,19 @@ namespace DinoDigger.Config
                  "plain grass, exactly as before.")]
         public EnvTileSet BedTiles = new EnvTileSet();
 
+        [Header("ENV connected sets (DinoDigger-l9g)")]
+        [Tooltip("Water's 47 topology-keyed pieces. These SUPERSEDE WaterTiles + " +
+                 "GrassWaterEdges: a connected piece carries its own bank, so the grass " +
+                 "next door stays plain grass. Incomplete = the painter falls back to the " +
+                 "flat variants and grass-side transitions.")]
+        public EnvBlobSet WaterBlobs = new EnvBlobSet();
+        [Tooltip("The dirt path's 47 topology-keyed pieces (supersede PathTiles + " +
+                 "GrassPathEdges).")]
+        public EnvBlobSet PathBlobs = new EnvBlobSet();
+        [Tooltip("The garden bed's 47 topology-keyed pieces (supersede BedTiles + " +
+                 "GrassBedEdges).")]
+        public EnvBlobSet BedBlobs = new EnvBlobSet();
+
         [Tooltip("Grass->path transition tiles keyed by the 4-bit neighbour mask.")]
         public EnvEdgeSet GrassPathEdges = new EnvEdgeSet();
         [Tooltip("Grass->water shoreline tiles keyed by the 4-bit neighbour mask.")]
@@ -443,22 +456,67 @@ namespace DinoDigger.Config
             }
         }
 
-        /// <summary>The ground tile this library would paint at <paramref name="cell"/> for
-        /// <paramref name="biome"/>, given a neighbour lookup: a grass-to-X transition where
-        /// the cell borders another biome, else a hashed base variant, else the flat
-        /// placeholder. PURE — same inputs always give the same tile, which is what makes
-        /// the painted island reproducible across rebuilds.</summary>
-        public TileBase GroundTileFor(Vector3Int cell, EnvBiome biome,
-            System.Func<Vector3Int, EnvBiome> biomeAt)
+        /// <summary>The connected (topology-keyed) set for a biome, or null for grass —
+        /// grass is the universal background every other biome banks into, so it never
+        /// needs pieces of its own.</summary>
+        public EnvBlobSet BlobSet(EnvBiome biome)
         {
+            switch (biome)
+            {
+                case EnvBiome.Water: return WaterBlobs;
+                case EnvBiome.Path: return PathBlobs;
+                case EnvBiome.Bed: return BedBlobs;
+                default: return null;
+            }
+        }
+
+        /// <summary>True when a biome paints CONNECTED pieces (and therefore owns its own
+        /// transition, so the grass beside it must stay plain).</summary>
+        public bool UsesBlobs(EnvBiome biome)
+        {
+            EnvBlobSet set = BlobSet(biome);
+            return set != null && set.HasAll;
+        }
+
+        /// <summary>
+        /// The ground tile this library would paint at <paramref name="cell"/>. PURE —
+        /// same inputs always give the same tile, which is what makes the painted island
+        /// reproducible across rebuilds AND lets a test predict every cell.
+        ///
+        /// Three tiers, in order:
+        ///   1. CONNECTED piece, keyed by the 8-neighbourhood <paramref name="sameForBlob"/>
+        ///      describes. This is what water/path/bed use now (DinoDigger-l9g).
+        ///   2. Grass-side transition tile, for a grass cell bordering a biome that is NOT
+        ///      painting connected pieces — the pre-l9g behaviour, kept as the fallback.
+        ///      Deliberately NOT applied next to a connected biome: that tile already
+        ///      paints its own grass bank, and melting water into the grass as well would
+        ///      put blue on one side of a seam and sand on the other.
+        ///   3. A hashed flat variant, then the flat placeholder.
+        /// </summary>
+        public TileBase GroundTileFor(Vector3Int cell, EnvBiome biome,
+            System.Func<Vector3Int, EnvBiome> biomeAt,
+            System.Func<Vector3Int, bool> sameForBlob)
+        {
+            if (sameForBlob != null && UsesBlobs(biome))
+            {
+                TileBase piece = BlobSet(biome).Piece(EnvDressing.BlobKey(cell, sameForBlob));
+                if (piece != null)
+                {
+                    return piece;
+                }
+            }
+
             if (biome == EnvBiome.Grass && biomeAt != null)
             {
                 int mask = EnvDressing.EdgeMask(cell, biomeAt, out EnvBiome other);
-                EnvEdgeSet edges = EdgeSet(other);
-                TileBase edge = edges != null ? edges.Edge(mask) : null;
-                if (edge != null)
+                if (!UsesBlobs(other))
                 {
-                    return edge;
+                    EnvEdgeSet edges = EdgeSet(other);
+                    TileBase edge = edges != null ? edges.Edge(mask) : null;
+                    if (edge != null)
+                    {
+                        return edge;
+                    }
                 }
             }
 
@@ -502,7 +560,8 @@ namespace DinoDigger.Config
         /// tells SceneBuilder there is something to dress with at all.</summary>
         public bool HasEnvGround =>
             GroundSet(EnvBiome.Grass).HasAny || GroundSet(EnvBiome.Path).HasAny ||
-            GroundSet(EnvBiome.Water).HasAny || GroundSet(EnvBiome.Bed).HasAny;
+            GroundSet(EnvBiome.Water).HasAny || GroundSet(EnvBiome.Bed).HasAny ||
+            UsesBlobs(EnvBiome.Water) || UsesBlobs(EnvBiome.Path) || UsesBlobs(EnvBiome.Bed);
 
         /// <summary>True when any decal bucket is imported.</summary>
         public bool HasEnvDecals =>

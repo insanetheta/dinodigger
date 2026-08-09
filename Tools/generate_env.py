@@ -37,6 +37,16 @@ The follow-up importer just has to set the PPU in the last column.
  sprite uses (x 0..133, y 315..450 for _E / y 377..511 for _N), so SceneBuilder's
  "scale to sprite.bounds.size.x == 1 cell" maths lands the piece in the identical spot.
 
+ ground/water_b<key>.png, path_b<key>.png, bed_b<key>.png   256x128  (47 each, PPU 256)
+   The CONNECTED sets (DinoDigger-l9g). These are what the painter actually paints for
+   water / path / garden bed; the 16 flat variants and the 45 edge_grass_* transitions
+   above are kept as the documented FALLBACK for a checkout without them. A connected
+   piece carries its own transition — the biome body only reaches the diamond edges it
+   actually connects across, and everywhere else the tile paints GRASS — so a tile can
+   never run its own colour off its diamond into the grass next door, and any two biomes
+   meet through grass on both sides of the seam. <key> is the canonical 8-neighbour blob
+   key, ascending; see bake_connected() for the seam proof and the three defects it fixes.
+
  ground/plate_*.png are the 1024^2 PIPELINE MASTERS. They are NOT shipped sprites —
  they exist so tiles can be re-sliced without re-generating. Everything shipped is <=256 px
  (the pitch's WebGL sprite budget).
@@ -642,6 +652,292 @@ def bake_edges(base_sq: Image.Image, over_sq: Image.Image, prefix: str,
     return n
 
 
+# =====================================================================================
+#  CONNECTED GROUND — topology-keyed blob tiles (DinoDigger-l9g)
+# =====================================================================================
+# THE BUG THIS SECTION EXISTS FOR (Greg, live screenshot, P0):
+#   "blue water highlight streaks overshooting the tile diamond into grass, brown path
+#    fragments sticking into green, lily pads cut off at tile borders, stream runs with
+#    zero continuity."
+#
+# ROOT CAUSE, three defects stacked:
+#   1. SPILL. to_tile() gives every tile a 3px DILATED alpha skirt so that neighbouring
+#      diamonds overlap opaquely instead of leaving a dark lattice. That is right for
+#      grass-on-grass and WRONG the moment two different biomes meet: a water tile's
+#      skirt paints 3px of blue over the grass tile next door, and because the Water
+#      tilemap sorts above Ground it always wins. Path does the same on its own layer.
+#      -> the "sticks into green" / "overshoots into grass" fringe.
+#   2. CUT FEATURES. The 16 variants per biome are 4x4 slices of ONE plate, hash-placed.
+#      A lily pad or ripple band that straddled a slice line is cut in half, and its
+#      other half is in a tile that is somewhere else entirely (or nowhere). Verified
+#      SOLO on the verify sheets, broken in adjacency — exactly as diagnosed.
+#   3. NO TOPOLOGY. A 1-cell stream is a chain of independent full diamonds. Nothing in
+#      the art knows a stream HAS a direction, so there are no banks running along the
+#      run and no flow: "zero continuity".
+#
+# THE FIX — one construction that answers all three. Every water/path/bed tile now
+# paints its OWN transition: the biome body fills the diamond only where it connects,
+# and everywhere else the tile paints GRASS. Consequences:
+#   * a tile can no longer spill its own colour past its diamond, because its own colour
+#     is not at the diamond edge on any side that borders land (defect 1 dies — the 3px
+#     skirt now carries grass, which is invisible over the grass next door);
+#   * grass is the UNIVERSAL BACKGROUND, so ANY two biomes meet through grass on both
+#     sides of the seam and no biome-PAIR keying is ever needed (water beside path:
+#     water's tile shows grass there, path's tile shows grass there — seamless);
+#   * the body is keyed by neighbour topology, so a run has banks along it (defect 3);
+#   * all texture is low-passed and pinned to the plate mean at the borders, so nothing
+#     sharp can be cut by a cell edge (defect 2). Lilies/pebbles now come from the DECAL
+#     layer, which places them at cell centres where they cannot be cut.
+#
+# WHY THE SEAMS ARE EXACT, not merely "close". Two adjacent same-biome cells always
+# agree about the edge they share (if A says +X is biome then B says -X is biome), so
+# neither carves a bank there and both are full-bodied at the seam. The subtle case is
+# the bank that runs PERPENDICULAR to that seam — its depth at the seam depends on a
+# cell each tile sees differently (A's -Y neighbour is U, B's -Y neighbour is V, and U
+# and V are the two cells diagonal to the seam). That is why the key carries DIAGONALS:
+#
+#   body = PROD over land cardinals b of        ramp(d_b)
+#        * PROD over carved corners (a,c) of    1 - (1 - ramp(d_a)) * (1 - ramp(d_c))
+#
+#   with ramp(0) == 0 exactly, the corner term collapses to ramp(d_a) when d_c == 0.
+#   Enumerating the seam's two diagonal cells U, V:
+#     U land,  V land   ->  A: cardinal ramp(d0)   B: cardinal ramp(d0)     equal
+#     U water, V water  ->  A: 1                   B: 1                     equal
+#     U water, V land   ->  A: corner -> ramp(d0)  B: cardinal ramp(d0)     equal
+#     U land,  V water  ->  A: cardinal ramp(d0)   B: corner  -> ramp(d0)   equal
+#   All four cases agree EXACTLY, so the bodies meet to the pixel. This is the standard
+#   47-piece "blob" key (a diagonal only matters when both its cardinals are set), and
+#   47 is exactly what the enumeration below produces.
+#
+# THE WOBBLE IS MULTIPLICATIVE, AND THAT IS LOAD-BEARING. The bank boundary is displaced
+# by a noise field so it never reads as a ruled diamond outline (rule 1: a hard straight
+# colour boundary IS an outline to a 2-year-old). Two requirements:
+#   * the field must be CELL-PERIODIC, else n(0,v) != n(CELL,v) and the seam proof above
+#     breaks -> built from integer-frequency sinusoids, which are periodic by definition;
+#   * the displacement must be MULTIPLICATIVE (d * (1 + w*n)), not additive. An additive
+#     wobble makes ramp(0) > 0 wherever the noise is positive, i.e. it lets the biome
+#     leak right up to and past the diamond edge again — defect 1, reintroduced by the
+#     fix for defect 3. Multiplicative keeps ramp(0) == 0 identically.
+#
+# COST: $0. Everything here is procedural over the plates already paid for in c7m.
+
+BLOB_BANK = 0.20      # bank depth, fraction of the cell (map space). A straight run
+                      # keeps ~60% of the cell as body, with a bank down each side.
+# WOBBLE, MEASURED TWICE. The bank boundary is displaced so it never reads as a ruled
+# diamond outline. But the field has to be cell-PERIODIC for the seam proof, and a
+# cell-periodic field necessarily repeats every cell — so along a straight pond shore a
+# big wobble bakes a scalloped edge that repeats with a one-cell period, which is a
+# textbook rule-3 "obvious repeat" (the first render of this fix showed exactly that: a
+# regular sawtooth all down the pond). Small wobble + a WIDE soft waterline reads as an
+# organic shore without any repeating silhouette, and the softness is what keeps it from
+# reading as a line. Do not raise this without re-rendering the pond.
+BLOB_WOBBLE = 0.34
+BLOB_CALM = 0.14      # fraction of the cell blended to the plate mean at EVERY border
+BLOB_MOTTLE = 0.028   # amplitude of the (periodic, therefore seamless) body mottle
+
+# Waterline: where in `body` the bank becomes biome, and the pale sand beach that reads
+# "not walkable" once the hard blue diamond edge is gone (the c7m mitigation, kept).
+#
+# THE SPAN IS WIDE ON PURPOSE. A shoreline on a 4-connected iso grid is a STAIRCASE —
+# the land/water boundary genuinely steps a whole cell at a time — and a crisp waterline
+# traces that staircase into a row of identical sharp teeth that reads as the tile grid
+# itself (measured: the first low-wobble render). It cannot be fixed by wobbling harder,
+# because the wobble field has to be cell-periodic for the seams and therefore repeats
+# every cell. It IS fixed by making the transition a broad soft beach: over ~half the
+# bank depth the eye has no crisp contour to lock onto, so the staircase dissolves.
+BLOB_SHORE = (0.26, 0.52)
+SAND_RGB = (218, 206, 176)
+
+# Rule 6's water exception: water is a hard walkability boundary and has to READ as
+# water at toddler glance-speed. The plate MEAN alone does not — averaging the pale
+# ripple bands into the blue gives a washed-out sky-ish tone that vanishes against the
+# camera's sky-blue clear colour (measured on the first flat-base render). Pull the
+# body colour back toward the shipped flat water tile so the pond is unmistakably wet.
+WATER_READ_RGB = (80, 150, 230)
+WATER_READ_AMT = 0.45
+
+
+def _side_dist() -> list:
+    """Normalised 0..1 distance INTO the cell from each of the four map-space edges,
+    indexed by the same bit order the edge tiles use: 0 = -Y (v == 0), 1 = +X
+    (u == CELL), 2 = +Y (v == CELL), 3 = -X (u == 0). Rows are v, columns are u —
+    see _iso_affine."""
+    t = np.linspace(0.0, 1.0, CELL, dtype=np.float32)
+    ones = np.ones((CELL, CELL), np.float32)
+    dv = t[:, None] * ones          # distance from v == 0
+    du = t[None, :] * ones          # distance from u == 0
+    return [dv, 1.0 - du, 1.0 - dv, du]
+
+
+def _periodic_noise(seed: int, harmonics: int = 4) -> np.ndarray:
+    """Low-frequency noise in [-1, 1] that is EXACTLY periodic across the cell.
+
+    Periodicity is not cosmetic: the bank boundary is displaced by this field, and two
+    adjacent tiles only agree at their shared edge if n(u=0, v) == n(u=CELL, v). Integer
+    frequencies guarantee that by construction; a blurred random field (what _noise does
+    for the transition tiles, where it never touches a seam) would not."""
+    rng = np.random.default_rng(seed)
+    t = np.linspace(0.0, 1.0, CELL, endpoint=False, dtype=np.float32)
+    u, v = np.meshgrid(t, t)                       # u = column, v = row
+    out = np.zeros((CELL, CELL), np.float32)
+    total = 0.0
+    for ku in range(harmonics + 1):
+        for kv in range(harmonics + 1):
+            if (ku == 0 and kv == 0) or ku * ku + kv * kv > harmonics * harmonics:
+                continue
+            amp = 1.0 / float(ku * ku + kv * kv)
+            out += amp * np.sin(2.0 * np.pi * (ku * u + kv * v) + rng.random() * 6.2832)
+            total += amp
+    return out / max(total, 1e-6)
+
+
+def _blob_ramp(d: np.ndarray, wob: np.ndarray) -> np.ndarray:
+    """0 EXACTLY at the cell edge, 1 at BLOB_BANK deep, wobbling in between."""
+    x = np.clip(d * (1.0 + BLOB_WOBBLE * wob) / BLOB_BANK, 0.0, 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def blob_normalise(key: int) -> int:
+    """Canonical 8-bit blob key: bits 0-3 are the cardinals (-Y, +X, +Y, -X) and bits
+    4-7 the diagonals, where diagonal i sits between cardinals i and (i+1)%4. A diagonal
+    only changes the tile when BOTH its cardinals are same-biome (that is the only time
+    a corner gets carved), so every other diagonal bit is pinned to 1. Collapses the 256
+    raw neighbourhoods onto the 47 pieces actually baked."""
+    out = key & 0x0F
+    for i in range(4):
+        both = ((key >> i) & 1) and ((key >> ((i + 1) % 4)) & 1)
+        out |= (key & (1 << (4 + i))) if both else (1 << (4 + i))
+    return out
+
+
+def blob_keys() -> list:
+    """The 47 canonical keys, ascending. Order is the contract with the C# importer."""
+    return sorted({blob_normalise(k) for k in range(256)})
+
+
+def _blob_body(key: int, wob: np.ndarray) -> np.ndarray:
+    """Coverage (0..1) of the biome inside this cell for one canonical key."""
+    d = _side_dist()
+    ramp = [_blob_ramp(d[b], wob) for b in range(4)]
+    body = np.ones((CELL, CELL), np.float32)
+    for b in range(4):
+        if not (key >> b) & 1:
+            body = body * ramp[b]                       # land cardinal: bank it
+    for i in range(4):
+        a, c = i, (i + 1) % 4
+        if ((key >> a) & 1) and ((key >> c) & 1) and not ((key >> (4 + i)) & 1):
+            # Both cardinals are biome but the diagonal between them is not: round the
+            # corner off. Collapses to the neighbour's cardinal ramp at either seam.
+            body = body * (1.0 - (1.0 - ramp[a]) * (1.0 - ramp[c]))
+    return body
+
+
+def _calm_to_mean(rgb: np.ndarray, mean: np.ndarray,
+                  margin: float = BLOB_CALM) -> np.ndarray:
+    """Pull the texture onto the plate mean within `margin` of EVERY cell edge.
+
+    This is what lets any two tiles of a biome abut with no step, whatever variant or
+    topology they are: every tile is the same colour at its border. It is also the
+    edge-safe margin the grass/bed variants were missing — a feature that reaches the
+    border gets flattened away before it can be cut in half by the diamond."""
+    d = _side_dist()
+    m = np.minimum(np.minimum(d[0], d[1]), np.minimum(d[2], d[3]))
+    x = np.clip(m / margin, 0.0, 1.0)
+    w = (x * x * (3.0 - 2.0 * x))[..., None]
+    return rgb * w + mean.reshape(1, 1, 3) * (1.0 - w)
+
+
+def _blob_base(mean: np.ndarray, mottle: np.ndarray) -> np.ndarray:
+    """The biome's fill colour inside a connected piece: the PLATE MEAN, plus a low
+    amplitude cell-periodic mottle.
+
+    It is deliberately NOT a slice of the plate. A plate block is a soft gradient, and
+    once every tile is also pinned to the mean at its border (which the seams require),
+    each tile becomes mean-edge / block-centre / mean-edge — i.e. a vignette — and a map
+    of them is a glaring diamond LATTICE. The first render of this fix had one right
+    across the pond. The mottle below is built from the same integer-frequency field the
+    wobble uses, so it is continuous across every seam and can never lattice."""
+    return mean.reshape(1, 1, 3) * (1.0 + BLOB_MOTTLE * mottle)[..., None]
+
+
+def _flow_shade(body: np.ndarray) -> np.ndarray:
+    """Soft lighter bands at fixed depths from the bank, driven by `body` itself.
+
+    Driving them off the body (which is seam-exact, see the proof above) is what makes a
+    highlight run ALONG a channel and continue into the next cell instead of stopping
+    dead at the diamond edge — the "streaks follow the stream" requirement. Along a
+    straight run the body is constant in the flow direction, so the bands are perfectly
+    parallel to the banks; around a corner they curve with it; in a pond interior the
+    body is flat 1 and they vanish, which is correct."""
+    s = np.ones_like(body)
+    for centre, width, amp in ((0.50, 0.13, 0.055), (0.82, 0.17, 0.028)):
+        s = s * (1.0 + amp * np.exp(-((body - centre) / width) ** 2))
+    return s
+
+
+def _blob_tile(body: np.ndarray, biome_rgb: np.ndarray, bank_rgb: np.ndarray,
+               shore: bool) -> Image.Image:
+    """Composite one connected tile: `bank_rgb` where the body is absent, `biome_rgb`
+    where it is present, with a soft waterline between them."""
+    lo, span = BLOB_SHORE
+    t = np.clip((body - lo) / span, 0.0, 1.0)
+    t = (t * t * (3.0 - 2.0 * t))[..., None]
+    comp = bank_rgb * (1.0 - t) + biome_rgb * t
+    if shore:
+        # A broad two-sided beach, NOT a fixed-width rim following the contour: a rim is
+        # a line, and a line on terrain is an outline (the c7m water scar).
+        band = np.exp(-((body - lo) / (span * 0.85)) ** 2)
+        band = np.asarray(Image.fromarray((band * 255).astype(np.uint8), "L")
+                          .filter(ImageFilter.GaussianBlur(5)), np.float32) / 255.0
+        sand = np.asarray(SAND_RGB, np.float32).reshape(1, 1, 3)
+        k = (band * 0.62)[..., None]
+        comp = comp * (1.0 - k) + sand * k
+    return to_tile(Image.fromarray(np.clip(comp, 0, 255).astype(np.uint8), "RGB"))
+
+
+def bake_connected(plates: dict) -> int:
+    """The 47-piece connected set for every biome that owns its own transition."""
+    if "grass" not in plates:
+        print("[skip] connected: no grass plate (the universal bank material)")
+        return 0
+
+    def block(img, cells, ij):
+        step = PLATE // cells
+        i, j = ij
+        return img.crop((i * step, j * step, (i + 1) * step, (j + 1) * step))
+
+    gmean = np.asarray(plates["grass"].convert("RGB"), np.float32).mean(axis=(0, 1))
+    wob = _periodic_noise(20250809)
+    mottle = _periodic_noise(760551, harmonics=3)
+    # GRASS IS THE UNIVERSAL BANK, and it is the plate MEAN for the same anti-lattice
+    # reason as the body: every grass variant is pinned to this exact colour at its own
+    # border, so a bank that is this colour joins any grass tile invisibly — and joins
+    # any OTHER biome's bank invisibly too, which is why water-beside-path needs no
+    # biome-pair tile.
+    bank = _blob_base(gmean, mottle)
+    keys = blob_keys()
+    n = 0
+    # `amp` scales the body-driven shading: water gets real ripple bands, a dirt path
+    # only a hint of wear toward its shoulders, a garden bed almost nothing.
+    for biome, shore, cells, amp in (("water", True, 4, 1.0),
+                                     ("path", False, 4, 0.45),
+                                     ("bed", False, 2, 0.30)):
+        if biome not in plates:
+            continue
+        mean = np.asarray(plates[biome].convert("RGB"), np.float32).mean(axis=(0, 1))
+        if shore:
+            mean = mean + (np.asarray(WATER_READ_RGB, np.float32) - mean) * WATER_READ_AMT
+        body_rgb = _blob_base(mean, mottle)
+        for key in keys:
+            b = _blob_body(key, wob)
+            rgb = body_rgb * (1.0 + (_flow_shade(b) - 1.0) * amp)[..., None]
+            _blob_tile(b, rgb, bank, shore).save(
+                os.path.join(GROUND, f"{biome}_b{key:03d}.png"))
+            n += 1
+        print(f"       {biome}_b*.png  x{len(keys)} connected pieces  ({TILE_W}x{TILE_H})")
+    return n
+
+
 # --- gen ----------------------------------------------------------------------------
 
 def gen(name: str, force: bool = False) -> bool:
@@ -734,7 +1030,22 @@ def bake_ground() -> int:
             for i in range(cells):
                 sq = p.crop((i * step, j * step, (i + 1) * step, (j + 1) * step))
                 idx = j * cells + i
-                to_tile(mean_match(sq, pmean)).save(
+                # EDGE-SAFE MARGIN (DinoDigger-l9g): mean_match already kills the
+                # tile-to-tile mean jump, but it leaves whatever FEATURE happened to
+                # straddle a slice line sitting on the border, where the diamond cuts it
+                # in half and the neighbouring variant has no matching half. Pinning the
+                # border to the plate mean flattens those away, so any two variants of a
+                # biome abut with no cut and no step.
+                # amt 0.97, not the 0.85 the transition squares use. 0.85 deliberately
+                # leaves 15% of each slice's tonal drift in "so the variants are not
+                # clones" — but that drift is a WHOLE-TILE tone offset, and 16 of them
+                # hash-scattered over the island is a visible green CHECKERBOARD (first
+                # render of this fix, plainly). Variety is supposed to come from the
+                # internal mottle, which mean_match leaves completely untouched.
+                a = np.asarray(mean_match(sq, pmean, amt=0.97).convert("RGB")
+                               .resize((CELL, CELL), Image.LANCZOS), np.float32)
+                a = _calm_to_mean(a, pmean)
+                to_tile(Image.fromarray(np.clip(a, 0, 255).astype(np.uint8), "RGB")).save(
                     os.path.join(GROUND, f"tile_{biome}_{idx:02d}.png"))
                 n += 1
         print(f"       tile_{biome}_00..{cells*cells-1:02d}  ({TILE_W}x{TILE_H})")
@@ -761,6 +1072,14 @@ def bake_ground() -> int:
             osq = _blk(plates[biome], cells, *EDGE_BLOCK[biome])
             n += bake_edges(gsq, osq, f"edge_grass_{biome}", shore=shore, seed0=seed0)
             print(f"       edge_grass_{biome}_1..15  ({TILE_W}x{TILE_H})")
+
+    # The connected (topology-keyed) set — the one the painter actually uses now. The
+    # edge_grass_* transitions above stay baked as the documented FALLBACK for a
+    # checkout without the connected pieces; they are not painted alongside them,
+    # because a connected tile already carries its own grass bank and melting more
+    # water into the grass next door would put blue on one side of a seam and sand on
+    # the other.
+    n += bake_connected(plates)
     return n
 
 
@@ -917,6 +1236,14 @@ def verify() -> None:
         ("verify_edges_path", _ls(GROUND, "edge_grass_path_*.png"), 5, (256, 128)),
         ("verify_edges_water", _ls(GROUND, "edge_grass_water_*.png"), 5, (256, 128)),
         ("verify_edges_bed", _ls(GROUND, "edge_grass_bed_*.png"), 5, (256, 128)),
+        # The connected sets (DinoDigger-l9g). NOTE these sheets show each piece ALONE,
+        # which is precisely the review that let the connectivity bug through in the
+        # first place — they are here to spot a mis-baked piece, NOT to sign off on the
+        # joins. The joins are reviewed by Tools/render_env_scene.py, which composes the
+        # REAL island out of Main.unity's own cell data.
+        ("verify_conn_water", _ls(GROUND, "water_b*.png"), 8, (256, 128)),
+        ("verify_conn_path", _ls(GROUND, "path_b*.png"), 8, (256, 128)),
+        ("verify_conn_bed", _ls(GROUND, "bed_b*.png"), 8, (256, 128)),
         ("verify_decals", _ls(DECAL, "decal_*.png"), 4, (256, 256)),
         ("verify_props", _ls(PROP, "*.png"), 4, (256, 256)),
         ("verify_decor", _ls(DECOR, "*.png"), 3, (300, 300)),
@@ -1188,6 +1515,7 @@ def sheet() -> str:
     n = sum(len(_ls(x, y)) for x, y in ((PROP, "*.png"), (DECAL, "decal_*.png")))
     n += len([p for p in _ls(DECOR, "*.png") if "plate" not in p])
     n += len(_ls(GROUND, "tile_*.png")) + len(_ls(GROUND, "edge_*.png"))
+    n += sum(len(_ls(GROUND, f"{b}_b*.png")) for b in ("water", "path", "bed"))
     d.text((pad, 58), f"{n} shipped sprites, all <=256 px. Terrain, decals and decor "
            f"carry NO outlines; only tappable props do — that gap is the whole "
            f"interaction language.", font=_font(16), fill=DIM)

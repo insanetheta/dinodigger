@@ -1107,6 +1107,11 @@ namespace DinoDigger.EditorTools
             edges += ConfigureEnvEdges("water");
             edges += ConfigureEnvEdges("bed");
 
+            int blobs = 0;
+            blobs += ConfigureEnvBlobs("water");
+            blobs += ConfigureEnvBlobs("path");
+            blobs += ConfigureEnvBlobs("bed");
+
             int decals = ConfigureEnvDecals(EnvGrassDecalArt) +
                          ConfigureEnvDecals(EnvPathDecalArt) +
                          ConfigureEnvDecals(EnvWaterDecalArt) +
@@ -1137,16 +1142,17 @@ namespace DinoDigger.EditorTools
             decor += ConfigureEnv(EnvDecorPath(EnvNestArt), EnvNestWorldW) ? 1 : 0;
 
             wired.Add($"ENV textures: {ground} ground variants + {edges} transitions + " +
-                      $"{decals} decals + {props} props + {decor} decor " +
-                      "(PPU = sourceWidth / target world width, CENTER pivots — every " +
-                      "footprint identical to the placeholder it replaces)");
+                      $"{blobs} connected pieces + {decals} decals + {props} props + " +
+                      $"{decor} decor (PPU = sourceWidth / target world width, CENTER " +
+                      "pivots — every footprint identical to the placeholder it replaces)");
 
             int expected = EnvTileVariants * 3 + EnvBedVariants + (EnvEdgeMasks - 1) * 3 +
+                           EnvDressing.BlobPieceCount * 3 +
                            EnvGrassDecalArt.Length + EnvPathDecalArt.Length +
                            EnvWaterDecalArt.Length + EnvAccentDecalArt.Length +
                            EnvTreeArt.Length + 1 + EnvRockArt.Length + 1 +
                            EnvBridgeArt.Length + 3;
-            int got = ground + edges + decals + props + decor;
+            int got = ground + edges + blobs + decals + props + decor;
             if (got != expected)
             {
                 missing.Add($"{EnvDir}: imported {got}/{expected} env sprites — the gaps stay " +
@@ -1163,6 +1169,42 @@ namespace DinoDigger.EditorTools
             }
 
             return n;
+        }
+
+        // Connected (topology-keyed) pieces, DinoDigger-l9g. File name carries the
+        // CANONICAL KEY, not a slot index, so the art and the engine agree even if the
+        // canonical ordering is ever regenerated: <biome>_b<key:000>.png.
+        private static string EnvBlobName(string biome, int key) => $"{biome}_b{key:000}";
+
+        private static int ConfigureEnvBlobs(string biome)
+        {
+            int n = 0;
+            for (int slot = 0; slot < EnvDressing.BlobPieceCount; slot++)
+            {
+                string name = EnvBlobName(biome, EnvDressing.BlobKeyAt(slot));
+                n += ConfigureEnv(EnvGroundPath(name), EnvCellWorldW) ? 1 : 0;
+            }
+
+            return n;
+        }
+
+        /// <summary>Fill one biome's connected set, in canonical slot order.</summary>
+        private static int WireEnvBlobs(EnvBlobSet set, string biome)
+        {
+            var tiles = new TileBase[EnvDressing.BlobPieceCount];
+            int found = 0;
+            for (int slot = 0; slot < tiles.Length; slot++)
+            {
+                string name = EnvBlobName(biome, EnvDressing.BlobKeyAt(slot));
+                tiles[slot] = EnsureEnvTile(name, EnvGroundPath(name));
+                if (tiles[slot] != null)
+                {
+                    found++;
+                }
+            }
+
+            set.Pieces = tiles;
+            return found;
         }
 
         private static int ConfigureEnvEdges(string other)
@@ -1425,6 +1467,24 @@ namespace DinoDigger.EditorTools
             wired.Add($"Library ENV ground: grass {g}/{EnvTileVariants}, path {p}/{EnvTileVariants}, " +
                       $"water {w}/{EnvTileVariants}, bed {b}/{EnvBedVariants} variants " +
                       "(empty sets fall back to the flat tiles)");
+
+            // Connected sets first — when they are COMPLETE the painter uses them and the
+            // grass-side transitions below become the documented fallback (a connected
+            // piece already carries its own bank; melting the biome into the grass next
+            // door as well would contradict it at the seam).
+            if (lib.WaterBlobs == null) { lib.WaterBlobs = new EnvBlobSet(); }
+            if (lib.PathBlobs == null) { lib.PathBlobs = new EnvBlobSet(); }
+            if (lib.BedBlobs == null) { lib.BedBlobs = new EnvBlobSet(); }
+            int bw = WireEnvBlobs(lib.WaterBlobs, "water");
+            int bp = WireEnvBlobs(lib.PathBlobs, "path");
+            int bb = WireEnvBlobs(lib.BedBlobs, "bed");
+            int all = EnvDressing.BlobPieceCount;
+            wired.Add($"Library ENV connected: water {bw}/{all}, path {bp}/{all}, " +
+                      $"bed {bb}/{all} pieces — " +
+                      (lib.UsesBlobs(EnvBiome.Water) && lib.UsesBlobs(EnvBiome.Path) &&
+                       lib.UsesBlobs(EnvBiome.Bed)
+                          ? "topology-keyed painting ACTIVE (DinoDigger-l9g)"
+                          : "INCOMPLETE, painter falls back to flat variants + edges"));
 
             int ep = WireEnvEdges(lib.GrassPathEdges, "path");
             int ew = WireEnvEdges(lib.GrassWaterEdges, "water");
