@@ -89,7 +89,11 @@ namespace DinoDigger.Overworld
             }
 
             // --- the tune ---
+            // A crank sting, then the music-box vamp starts looping UNDER the main track (which
+            // ducks rather than stopping) and runs until EndParty. Starting a party while one is
+            // already going re-cranks it without restarting the loop.
             GameManager.Instance?.Audio?.Chime();
+            GameManager.Instance?.Audio?.StartDanceLoop();
             Sparkle(12);
             EmitNotes();
 
@@ -153,6 +157,19 @@ namespace DinoDigger.Overworld
         {
             _partyRemaining = 0f;
             _dancers.Clear();
+            GameManager.Instance?.Audio?.StopDanceLoop();   // and un-duck the main track
+        }
+
+        /// <summary>Safety net for the one thing a looping sound must never do: outlive the
+        /// thing that started it. EndParty is the normal exit and TestResetMachine the test one,
+        /// but a Doodle switched off mid-party (scene teardown, a future pooling pass) would
+        /// otherwise leave the vamp looping under a plaza with no machine in it.</summary>
+        private void OnDisable()
+        {
+            if (_partyRemaining > 0f)
+            {
+                GameManager.Instance?.Audio?.StopDanceLoop();
+            }
         }
 
         private void GatherDancers()

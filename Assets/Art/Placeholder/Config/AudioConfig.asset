@@ -13,10 +13,11 @@ MonoBehaviour:
   m_Name: AudioConfig
   m_EditorClassIdentifier: 
   Music: {fileID: 8300000, guid: 1c60ecabd86c94d06adcb97bc6ac44aa, type: 3}
+  DanceLoop: {fileID: 8300000, guid: 846a5d6fe7458490782ac425e88b0c71, type: 3}
   Tap: {fileID: 8300000, guid: 24fce8fc23fb94051bac4e8c3539fe2b, type: 3}
   Move: {fileID: 8300000, guid: ed2af839437804d66893f8e3a27551f8, type: 3}
   Dig: {fileID: 8300000, guid: 3eaf60f25d66348bc834eeed00202e91, type: 3}
-  Crumble: {fileID: 8300000, guid: e40c3576e873b4115a59f631a52c69b5, type: 3}
+  Crumble: {fileID: 8300000, guid: 003282635a8fa4c0f9d856cef944680b, type: 3}
   ItemPop: {fileID: 8300000, guid: 6e86074e9b6954c43bf282bf3866698a, type: 3}
   Chime: {fileID: 8300000, guid: d7e34e5fc88a244f4b52f5d5000a9e4b, type: 3}
   Hatch: {fileID: 8300000, guid: ae88cdfb68a59450cb36b1852f7c579c, type: 3}
@@ -26,5 +27,33 @@ MonoBehaviour:
   TreasureCollect: {fileID: 8300000, guid: 88e3e571cec874e9d9186865f7d092b6, type: 3}
   Honk: {fileID: 8300000, guid: ac5bef01c0d414a7ebb28d33fb1621bd, type: 3}
   Heart: {fileID: 8300000, guid: 4ce8ba2a94bed4c719c6a088e7f44192, type: 3}
+  TileCrackA: {fileID: 8300000, guid: 3c2783caf8c5449dbb9b6f92906e4663, type: 3}
+  TileCrackB: {fileID: 8300000, guid: 20b17f99eaf3743f9bde6b55439bc97f, type: 3}
+  TileCrackC: {fileID: 8300000, guid: 08ac795e882204847bbc8109c46ced5e, type: 3}
+  LandingThump: {fileID: 8300000, guid: a49e1be89e71a4fd78e4fca0e1d869eb, type: 3}
+  CrystalPop: {fileID: 8300000, guid: 49489bf8b0de54b73950ccbdd9c36d32, type: 3}
+  CrystalPopBig: {fileID: 8300000, guid: 85a54cc94005b4482b865e2f6c10d951, type: 3}
+  FuseSizzle: {fileID: 8300000, guid: 79ffdd23d5166403aa09b4879d6703f0, type: 3}
+  Whumph: {fileID: 8300000, guid: 6e2402b9a188c474bb591dcc2766babe, type: 3}
+  PotCrack: {fileID: 8300000, guid: 7a76c2e6e472f4273b5a044ee80f0cda, type: 3}
+  CoinSpray: {fileID: 8300000, guid: 38fe337240ce14ddd88705d1cc33699a, type: 3}
+  BoneRattle: {fileID: 8300000, guid: 3156d9e375d944fefa656b70bdae7a25, type: 3}
+  BonePop: {fileID: 8300000, guid: c9e6f08cd6b7c44bdb42e4210753212e, type: 3}
+  CeremonyPoof: {fileID: 8300000, guid: c82230b6178d94664ad3e9f6c75c5f69, type: 3}
+  MachineWake: {fileID: 8300000, guid: 44f417e9c766d4b4eb30f5a46247dc43, type: 3}
+  Gurgle: {fileID: 8300000, guid: 28ced0c02ab6b489cb27586823489480, type: 3}
+  Toot: {fileID: 8300000, guid: 1f0008af7ffa04150a4fb691c8563079, type: 3}
+  Giggle: {fileID: 8300000, guid: 190326fa912714afcb9b8673241f239d, type: 3}
+  WaterGush: {fileID: 8300000, guid: d0e2d6cee4a2a4e26b916de9770c5276, type: 3}
+  LadderDing: {fileID: 8300000, guid: 0d16e6f19841f47eeb3607223149bb82, type: 3}
+  SparkZap: {fileID: 8300000, guid: b30620d0f3870407da2754ca8cc0e34d, type: 3}
+  Boing: {fileID: 8300000, guid: 3ae51da132448417a8ad5caad2886b54, type: 3}
   MusicVolume: 0.5
   SfxVolume: 0.9
+  DigVolume: 0.75
+  RewardVolume: 0.9
+  MachineVolume: 0.8
+  CreatureVolume: 0.85
+  UiVolume: 0.7
+  DanceLoopVolume: 0.35
+  PitchJitter: 0.05

@@ -50,8 +50,17 @@ namespace DinoDigger.Overworld
         // gates tripping on the same frame always resolve the same way.
         private static readonly MachineKind[] Roster =
         {
-            MachineKind.Doodle, MachineKind.Sprinkles, MachineKind.Tuggy
+            MachineKind.Doodle, MachineKind.Sprinkles, MachineKind.Tuggy, MachineKind.Glow
         };
+
+        /// <summary>Machines this service PLACES IN THE WORLD. Glow is deliberately not one of
+        /// them (DinoDigger-6tc): it lives inside the dig site, which builds it, positions it and
+        /// tears it down with the pit. What this service still owns for Glow — and the only
+        /// things it needs to — are its discovery GATE and its WOKEN flag, i.e. the two facts
+        /// that have to outlive a single dig and reach the save file. Keeping it out of the
+        /// arrival queue is also what stops a lantern the child has not met from parking itself
+        /// in the pacing guard and holding up an overworld friend that CAN be found.</summary>
+        private static bool IsOverworldMachine(MachineKind kind) => kind != MachineKind.Glow;
 
         // Fallback body tints when a machine's real art has not been imported. The mound
         // sprite under one of these is never mistaken for a mound, and — crucially — the
@@ -132,6 +141,15 @@ namespace DinoDigger.Overworld
         /// first frame without needing an event to have fired this session.</summary>
         public void NotifyBuildingFinished() => TripGate(MachineKind.Doodle);
 
+        /// <summary>GATE: the child took the ladder down into a dark stratum (DinoDigger-dv1).
+        /// Glow has been waiting in the deep for exactly this. Idempotent, like every gate —
+        /// only the first descent means anything.
+        ///
+        /// The gate is "reached the dark", NOT "woke the lantern": tripping it makes Glow
+        /// eligible to be hiding behind a tile down there, and the WAKE is still the child's own
+        /// discovery, exactly as it is for the three overworld sleepers.</summary>
+        public void NotifyDeepDigReached() => TripGate(MachineKind.Glow);
+
         private void TripGate(MachineKind kind)
         {
             if (!_gated.Add(kind))
@@ -195,6 +213,16 @@ namespace DinoDigger.Overworld
             }
         }
 
+        /// <summary>Has this machine's discovery gate tripped — i.e. has the child done the thing
+        /// that earns it? Public because a machine this service does not PLACE (Glow, which the
+        /// dig site builds) still has to ask.</summary>
+        public bool IsGated(MachineKind kind) => _gated.Contains(kind);
+
+        /// <summary>Has the child already woken this machine (in any session)? The one fact a
+        /// dig-dwelling friend needs on every site build: a woken Glow is rebuilt awake, a
+        /// sleeping one is re-hidden behind a tile.</summary>
+        public bool IsWoken(MachineKind kind) => _woken.Contains(kind);
+
         /// <summary>True while a machine is standing in the world dormant and un-tapped.</summary>
         public bool HasUndiscoveredMachine()
         {
@@ -211,6 +239,11 @@ namespace DinoDigger.Overworld
 
         private void Enqueue(MachineKind kind)
         {
+            if (!IsOverworldMachine(kind))
+            {
+                return; // a dig-dwelling friend is not an arrival this service stages
+            }
+
             if (_live.ContainsKey(kind) || _queue.Contains(kind))
             {
                 return;

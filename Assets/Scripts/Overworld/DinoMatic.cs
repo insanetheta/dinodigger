@@ -314,7 +314,7 @@ namespace DinoDigger.Overworld
         {
             Jiggle(0.12f, 0.35f);
             Tween.ShakeRotation(transform, 5f, 0.4f, 2);
-            GameManager.Instance?.Audio?.Honk();
+            GameManager.Instance?.Audio?.Gurgle();   // the machine's "not yet", shared with MachineFriend
         }
 
         // ------------------------------------------------------------- ceremony
@@ -428,7 +428,11 @@ namespace DinoDigger.Overworld
             Sparkle(22);
             Jiggle(0.3f, 0.4f);
             GameManager.Instance?.TownSpawnConfetti(PadWorld + new Vector3(0f, 0.4f, 0f));
-            GameManager.Instance?.Audio?.Roar();
+
+            // Poof first, then the new dino's roar on the tail — the machine's puff and the
+            // creature's voice are two events and blur into one noise if they fire together.
+            GameManager.Instance?.Audio?.CeremonyPoof();
+            Tween.After(0.16f, () => GameManager.Instance?.Audio?.Roar());
 
             Action done = _revivalDone;
             _revivalDone = null;

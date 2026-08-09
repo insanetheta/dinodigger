@@ -17,6 +17,23 @@ namespace DinoDigger.Overworld
 
         public bool IsActive { get; private set; } = true;
 
+        /// <summary>MEGA-FOSSIL SITE (DinoDigger-84f). This mound wears a skull marker and opens
+        /// the big 7x9 pit with a whole remaining skeleton buried in it. Rolled by
+        /// <see cref="GameManager.RollMegaFossilMound"/> whenever the mound (re)rolls its
+        /// flavour, so the promise is made in the OVERWORLD — the child chooses to accept it —
+        /// and the dig simply delivers on it.
+        ///
+        /// Session state on the live mound, deliberately not saved: a mound that has not been dug
+        /// stays in the world exactly like any other, and a restart re-rolls flavours from
+        /// scratch, which costs the child nothing (the bones a mega site would have buried are
+        /// still the bones their board is missing).</summary>
+        public bool IsMegaFossil { get; private set; }
+
+        // The skull overlay: a child renderer built on demand, shown only while this mound is a
+        // mega-fossil site. State-derived, never toggled at a call site — the same discipline
+        // MachineFriend's overlays are held to, and for the same reason.
+        private SpriteRenderer _skullMarker;
+
         /// <summary>Index into GameConfig.EffectiveThemes for this mound's rolled dig
         /// postcard. Drives the dig site's tint + loot skew, and this mound's own colour.</summary>
         public int ThemeIndex { get; private set; }
@@ -52,7 +69,51 @@ namespace DinoDigger.Overworld
 
             ThemeIndex = config.PickThemeIndex();
             ApplyThemeTint(config.GetTheme(ThemeIndex));
+
+            // ...and, rarely, the skull. Asked here rather than decided here: the roll needs the
+            // skeleton board, the session's pity counter and the bones gate, none of which a
+            // mound has any business knowing about.
+            GameManager.Instance?.RollMegaFossilMound(this);
         }
+
+        /// <summary>Mark (or un-mark) this mound as a mega-fossil site and show its skull.
+        /// <paramref name="marker"/> is the skull sprite the dig itself uses for a skull bone —
+        /// passed in rather than looked up, because a mound has no art library of its own. A null
+        /// marker still marks the mound (the dig is what matters); it just shows no overlay.</summary>
+        public void SetMegaFossil(bool mega, Sprite marker)
+        {
+            IsMegaFossil = mega;
+
+            if (mega && marker != null && _skullMarker == null)
+            {
+                var go = new GameObject("SkullMarker");
+                go.transform.SetParent(transform, false);
+                go.transform.localPosition = new Vector3(0f, 0.45f, 0f);
+
+                _skullMarker = go.AddComponent<SpriteRenderer>();
+                _skullMarker.sprite = marker;
+                _skullMarker.color = new Color(0.98f, 0.96f, 0.88f);
+                if (_renderer != null)
+                {
+                    _skullMarker.sortingLayerID = _renderer.sortingLayerID;
+                    _skullMarker.sortingOrder = _renderer.sortingOrder + 1;
+                }
+
+                if (marker.bounds.size.y > 0.001f)
+                {
+                    float k = 0.55f / marker.bounds.size.y;
+                    go.transform.localScale = new Vector3(k, k, 1f);
+                }
+            }
+
+            if (_skullMarker != null)
+            {
+                _skullMarker.enabled = mega && IsActive;
+            }
+        }
+
+        /// <summary>TEST HOOK. Is the skull actually being drawn (not merely recorded)?</summary>
+        internal bool TestSkullVisible => _skullMarker != null && _skullMarker.enabled;
 
         private void ApplyThemeTint(DigTheme theme)
         {
@@ -112,6 +173,13 @@ namespace DinoDigger.Overworld
             if (_renderer != null)
             {
                 _renderer.enabled = active;
+            }
+
+            // The skull is part of the mound's body: a consumed mound takes its marker with it,
+            // so a dug-out site can never leave a floating skull behind.
+            if (_skullMarker != null)
+            {
+                _skullMarker.enabled = active && IsMegaFossil;
             }
 
             var col = GetComponent<Collider2D>();

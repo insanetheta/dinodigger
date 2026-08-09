@@ -668,7 +668,16 @@ namespace DinoDigger.Core
             music.playOnAwake = false;
             music.spatialBlend = 0f;
 
-            Audio.Init(_audioConfig, sfx, music);
+            // Second music voice: Doodle's party vamp loops here UNDER the main track (which
+            // ducks rather than stopping), so a party layers onto the score instead of
+            // interrupting it.
+            var danceGo = new GameObject("DanceLoop");
+            danceGo.transform.SetParent(transform, false);
+            var dance = danceGo.AddComponent<AudioSource>();
+            dance.playOnAwake = false;
+            dance.spatialBlend = 0f;
+
+            Audio.Init(_audioConfig, sfx, music, dance);
         }
 
         private void RestoreFromSave()
@@ -1039,6 +1048,15 @@ namespace DinoDigger.Core
         {
             switch (t)
             {
+                // THE TWO THINGS IN THE PIT THAT ARE NOT DIRT (Dig Loop 2.0 D3) outrank the
+                // tiles, and both are safe to do so because both are SMALL and TRANSIENT. A dig
+                // critter (DinoDigger-u47) is a third of a cell wide and gone in ten seconds; the
+                // ladder (DinoDigger-dv1) stands in an EMPTY cell, so there is no tile under it
+                // for it to steal a tap from in the first place. Ranking them below the tiles
+                // would make the critter uncatchable the moment it scurried over dirt, which is
+                // its whole verb.
+                case DigCritter _: return -2;
+                case DigLadder _: return -1;
                 case DirtTile _: return 0;
                 case Duck _: return 1;
                 case DinoController _: return 2;
@@ -1057,7 +1075,147 @@ namespace DinoDigger.Core
             }
         }
 
+        // -------------------------------------------------- mega-fossil mounds (84f)
+        // Session-scoped, deliberately NOT saved. A mega-fossil site is an EVENT, and an event
+        // the child is owed is one the next session can hand them just as well: the bones a mega
+        // site would have buried are still exactly the bones their board is missing. Persisting
+        // it would buy nothing and add a save field that can go stale.
+
+        private bool _megaFossilSeenThisSession;
+        private int _moundsRolledThisSession;
+
+        /// <summary>A mound just (re)rolled its flavour: decide whether it is a MEGA-FOSSIL site
+        /// and mark it. Called by <see cref="DigMound.RollTheme"/>, so every mound — baked at boot
+        /// or respawned after a dig — goes through exactly one decision point.
+        ///
+        /// THREE GATES, in order of how much they protect:
+        ///   1. BONES MUST BE UNLOCKED. A mega site is a late-game event that buries a skeleton;
+        ///      before the child owns every egg species there is no skeleton to bury, so the
+        ///      early game never sees one at all.
+        ///   2. THE BOARD MUST STILL WANT BONES. With every skeleton complete there is nothing
+        ///      for the big pit to hold.
+        ///   3. PITY. A rare roll is a thing some children never meet, so once the child has
+        ///      rolled through <c>DigMegaFossilPityMounds</c> mounds this session without seeing
+        ///      one, the next is guaranteed.</summary>
+        internal void RollMegaFossilMound(DigMound mound)
+        {
+            if (mound == null)
+            {
+                return;
+            }
+
+            mound.SetMegaFossil(false, null);
+
+            if (!EggSpeciesAllOwned() || !TryNextNeededBone(out _, out _))
+            {
+                return;
+            }
+
+            _moundsRolledThisSession++;
+
+            float chance = _config != null ? Mathf.Clamp01(_config.DigMegaFossilChance) : 0.12f;
+            int pity = _config != null ? Mathf.Max(1, _config.DigMegaFossilPityMounds) : 6;
+            bool guaranteed = !_megaFossilSeenThisSession && _moundsRolledThisSession >= pity;
+
+            if (!guaranteed && Random.value >= chance)
+            {
+                return;
+            }
+
+            // The marker is the SKULL the pit already uses for a skull bone — the same object the
+            // child will dig out of the ground, promised on the mound before they tap it.
+            Sprite marker = _library != null ? _library.Bone((int)Config.BoneType.Skull) : null;
+            if (marker == null && _library != null)
+            {
+                marker = _library.Treasure(3); // the treasure bone, the pit's own fallback
+            }
+
+            mound.SetMegaFossil(true, marker);
+        }
+
+        /// <summary>TEST HOOK. Force the next mound roll to come up mega (or clear the force),
+        /// so a case can prove the overworld half without grinding respawns.</summary>
+        internal void TestForceMegaFossil(DigMound mound)
+        {
+            Sprite marker = _library != null ? _library.Bone((int)Config.BoneType.Skull) : null;
+            mound?.SetMegaFossil(true, marker);
+        }
+
+        /// <summary>TEST HOOK. Mounds rolled and whether a mega site has been met this session —
+        /// the two numbers the pity rule is made of.</summary>
+        internal int TestMoundsRolled => _moundsRolledThisSession;
+        internal bool TestMegaFossilSeen => _megaFossilSeenThisSession;
+
+        /// <summary>EVERY bone the skeleton currently being filled still needs — the mega-fossil
+        /// site's version of <see cref="TryNextNeededBone"/>, which hands back only one.
+        /// Duplicates are intended: a big skeleton wants two ribs and two femurs, and the pit
+        /// buries a separate shape for each. False (and an untouched list) once the collection is
+        /// finished, and the big pit then simply holds no skeleton.</summary>
+        public bool TryRemainingBones(out Config.DinoType species, List<int> into)
+        {
+            for (int i = 0; i < SkeletonPlan.FocusOrder.Length; i++)
+            {
+                Config.DinoType s = SkeletonPlan.FocusOrder[i];
+                if (_revived.Contains(s) || SkeletonComplete(s))
+                {
+                    continue;
+                }
+
+                species = s;
+                if (into == null)
+                {
+                    return true;
+                }
+
+                for (int bone = 0; bone < BoneSpecies.BonesPerSkeleton; bone++)
+                {
+                    int missing = SkeletonPlan.NeedOf(s, bone) - BoneCount(s, bone);
+                    for (int n = 0; n < missing; n++)
+                    {
+                        into.Add(bone);
+                    }
+                }
+
+                return into.Count > 0;
+            }
+
+            species = default;
+            return false;
+        }
+
         // ------------------------------------------------------------- dig flow
+
+        /// <summary>The child took the ladder down into a dark stratum (DinoDigger-dv1): trip
+        /// GLOW's discovery gate (DinoDigger-6tc). Idempotent — only the first descent, ever,
+        /// means anything. The dig site itself builds the lantern; this is only the fact that has
+        /// to reach the save.</summary>
+        public void NotifyDeepDigLayer(int layer)
+        {
+            if (layer >= 1)
+            {
+                _machines?.NotifyDeepDigReached();
+            }
+        }
+
+        /// <summary>The machine-friends service, for the dig site's own resident machine (Glow):
+        /// it needs the woken flag on every site build and the wake persistence on discovery.
+        /// Null-tolerant everywhere it is used.</summary>
+        public Overworld.MachineFriendController Machines => _machines;
+
+        /// <summary>Dip the dig camera and run <paramref name="onBottom"/> at the bottom of the
+        /// dip — the descent flourish for the depth ladder. With no camera wired (a bare rig, an
+        /// off-screen test build) the callback fires immediately: the descent is never
+        /// conditional on the flourish.</summary>
+        internal void DigDipCamera(float units, float seconds, System.Action onBottom)
+        {
+            if (_cameraFollow == null)
+            {
+                onBottom?.Invoke();
+                return;
+            }
+
+            _cameraFollow.DipDig(units, seconds, onBottom);
+        }
 
         /// <summary>Tapped a mound: drive there, then dig on arrival.</summary>
         public void RequestDig(DigMound mound)
@@ -1088,13 +1246,26 @@ namespace DinoDigger.Core
             Config.DigTheme theme = (_config != null && mound != null)
                 ? _config.GetTheme(mound.ThemeIndex)
                 : null;
+
+            // ...and, rarely, its SKULL MARKER (DinoDigger-84f): a mega-fossil mound opens a much
+            // bigger pit with a whole remaining skeleton in it. Noted as seen the moment the
+            // child commits to digging it, which is what the pity counter is counting toward.
+            bool mega = mound != null && mound.IsMegaFossil;
+            if (mega)
+            {
+                _megaFossilSeenThisSession = true;
+            }
+
             // The whole walk roster (up to two) comes along and staffs the Buddy Dig Crew;
             // each species runs its own automatic dig superpower inside the site.
-            _digMode.Open(theme, BuildDigCrew());
+            _digMode.Open(theme, BuildDigCrew(), mega);
 
             if (_cameraFollow != null)
             {
-                _cameraFollow.EnterDig(_digMode.DigCenter, () => State.Set(GameState.Dig));
+                // The site decides its own framing: a mega pit needs a wider one than the
+                // standard board, so the ortho size travels with the DigCenter.
+                _cameraFollow.EnterDig(_digMode.DigCenter, _digMode.DigOrthoSize,
+                    () => State.Set(GameState.Dig));
             }
             else
             {
@@ -1516,8 +1687,12 @@ namespace DinoDigger.Core
             ReleaseEggSpecies(type);
 
             SpawnConfetti(pos);
+
+            // Shell poof -> hatch sting -> the baby's first roar. Three beats, staggered, so the
+            // hatch reads as a little ceremony instead of one stacked chord.
+            Audio?.CeremonyPoof();
             Audio?.Hatch();
-            Audio?.Roar();
+            Tween.After(0.16f, () => GameManager.Instance?.Audio?.Roar());
             GameEvents.RaiseEggHatched(type);
             // Buddy if a slot is free; otherwise a meadow resident that trots home
             // once the hatch celebration has had its moment (delayed home walk).
@@ -3462,6 +3637,21 @@ namespace DinoDigger.Core
             _sellers.Clear();
             _fruitSalesCount = 0;
             _paradeActive = false;
+
+            // Mega-fossil sites (DinoDigger-84f) are session state, and a case must not inherit
+            // another case's pity counter — a mound turning up skull-marked in the middle of an
+            // unrelated assertion is exactly the kind of inherited surprise the pin backstop
+            // exists to prevent. Live mounds are un-marked below by their own re-roll.
+            _megaFossilSeenThisSession = false;
+            _moundsRolledThisSession = 0;
+            if (_mounds != null)
+            {
+                for (int i = 0; i < _mounds.Count; i++)
+                {
+                    _mounds[i]?.SetMegaFossil(false, null);
+                }
+            }
+
             _snifferTimer = SnifferIntervalSeconds;
             _snifferPulses = 0;
             _courierScanTimer = 0f;

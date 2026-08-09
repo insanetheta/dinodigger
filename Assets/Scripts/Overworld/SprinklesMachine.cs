@@ -256,9 +256,11 @@ namespace DinoDigger.Overworld
                 _spraysDelivered++;
             }
 
-            // Sparkle payoff on the berry itself, then the chime — the "ta-da".
+            // Sparkle payoff on the berry itself, then the gush + chime — the "ta-da". The gush is
+            // the game's one real water moment, so it carries the sound the dig pass sourced for it.
             gm?.MachineSpawnFx(target.transform.position, star, new Color(0.75f, 1f, 0.55f), 0.32f, 10);
-            gm?.Audio?.Chime();
+            gm?.Audio?.WaterGush();
+            Tween.After(0.14f, () => GameManager.Instance?.Audio?.Chime());
             Sparkle(6);
             Jiggle(0.14f, 0.3f);
         }

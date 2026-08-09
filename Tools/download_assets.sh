@@ -49,6 +49,8 @@ URL_UI="https://kenney.nl/media/pages/assets/ui-pack/f651646eab-1718203990/kenne
 URL_FARM="https://kenney.nl/media/pages/assets/isometric-miniature-farm/abd0274182-1670690319/kenney_isometric-miniature-farm.zip"
 URL_DIGITAL="https://kenney.nl/media/pages/assets/digital-audio/216eac4753-1677590265/kenney_digital-audio.zip"
 URL_IFACE="https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip"
+URL_IMPACT="https://kenney.nl/media/pages/assets/impact-sounds/87b4ddecda-1677589768/kenney_impact-sounds.zip"
+URL_JINGLES="https://kenney.nl/media/pages/assets/music-jingles/f37e530b9e-1677590399/kenney_music-jingles.zip"
 
 # OpenGameArt CC0 music (Bluebonnet by Kistol — gentle/happy, looped OGG).
 URL_MUSIC="https://opengameart.org/sites/default/files/bluebonnet_in_b_major_looped_0.ogg"
@@ -61,6 +63,8 @@ fetch ui-pack.zip                   "$URL_UI"
 fetch isometric-miniature-farm.zip  "$URL_FARM"
 fetch digital-audio.zip             "$URL_DIGITAL"
 fetch interface-sounds.zip          "$URL_IFACE"
+fetch impact-sounds.zip             "$URL_IMPACT"
+fetch music-jingles.zip             "$URL_JINGLES"
 
 # ---------------------------------------------------------------------------
 # Extract + organize (keep only useful payload)
@@ -103,6 +107,52 @@ cp "$TMP/stage/is/Audio/"*.ogg     "$AUD/InterfaceSounds/"
 cp "$TMP/stage/is/License.txt"     "$AUD/InterfaceSounds/" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
+# Dig-audio packs (DinoDigger-7c4). These two ship 130 + 85 oggs; the dig pass
+# uses a curated handful, so unlike the packs above we copy ONLY the files the
+# AudioConfig actually references. Keeping the whitelist here (rather than
+# copying everything) is what keeps Assets/Audio small — if you wire a new clip
+# in GeneratedArtImporter, add its filename to the matching list below or the
+# importer will report it missing after a fresh download.
+# See Tools/ASSET_SOURCES.md for the clip -> game-moment mapping.
+# ---------------------------------------------------------------------------
+
+# copy_picks <src-audio-dir> <dst-dir> <file...>
+copy_picks() {
+  local src="$1"; local dst="$2"; shift 2
+  mkdir -p "$dst"
+  local f
+  for f in "$@"; do
+    if [ ! -f "$src/$f" ]; then
+      echo "ERROR: expected clip '$f' is not in the downloaded pack ($src)" >&2
+      exit 1
+    fi
+    cp "$src/$f" "$dst/"
+  done
+}
+
+# Impact Sounds -> the dig one-shots: tile cracks, cascade thumps, crystal and
+# glass pops, bone knocks, the pinata pot, and the machine's wake bell.
+unzip -q -o "$TMP/impact-sounds.zip" -d "$TMP/stage/imp"
+rm -rf "$AUD/ImpactSounds"
+copy_picks "$TMP/stage/imp/Audio" "$AUD/ImpactSounds" \
+  impactMining_000.ogg impactMining_001.ogg impactMining_002.ogg \
+  impactSoft_heavy_000.ogg impactSoft_heavy_001.ogg \
+  impactSoft_medium_000.ogg \
+  impactGlass_light_000.ogg impactGlass_medium_000.ogg \
+  impactWood_light_000.ogg \
+  impactTin_medium_000.ogg \
+  impactBell_heavy_002.ogg
+cp "$TMP/stage/imp/License.txt" "$AUD/ImpactSounds/" 2>/dev/null || true
+
+# Music Jingles -> two pizzicato phrases: the coin-spray flourish and the short
+# music-box vamp the dance party loops.
+unzip -q -o "$TMP/music-jingles.zip" -d "$TMP/stage/mj"
+rm -rf "$AUD/MusicJingles"
+copy_picks "$TMP/stage/mj/Audio/Pizzicato jingles" "$AUD/MusicJingles" \
+  jingles_PIZZI00.ogg jingles_PIZZI03.ogg
+cp "$TMP/stage/mj/License.txt" "$AUD/MusicJingles/" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
 # Background music (OpenGameArt, CC0)
 # ---------------------------------------------------------------------------
 echo ">> downloading background music (Bluebonnet, looped OGG)"
@@ -125,4 +175,6 @@ echo "  $ART/UIPack                  ($(find "$ART/UIPack" -name '*.png' | wc -l
 echo "  $ART/IsometricMiniatureFarm  ($(find "$ART/IsometricMiniatureFarm" -name '*.png' | wc -l | tr -d ' ') png)"
 echo "  $AUD/DigitalAudio            ($(find "$AUD/DigitalAudio" -name '*.ogg' | wc -l | tr -d ' ') ogg)"
 echo "  $AUD/InterfaceSounds         ($(find "$AUD/InterfaceSounds" -name '*.ogg' | wc -l | tr -d ' ') ogg)"
+echo "  $AUD/ImpactSounds            ($(find "$AUD/ImpactSounds" -name '*.ogg' | wc -l | tr -d ' ') ogg, curated)"
+echo "  $AUD/MusicJingles            ($(find "$AUD/MusicJingles" -name '*.ogg' | wc -l | tr -d ' ') ogg, curated)"
 echo "  $MUS/Bluebonnet_looped.ogg   (background music)"

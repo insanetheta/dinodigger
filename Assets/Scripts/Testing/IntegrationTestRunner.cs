@@ -316,6 +316,13 @@ namespace DinoDigger.Testing
             DigModeController.TestSuppressToys = false;
             DigModeController.TestSuppressBones = false;
 
+            // Dig Loop 2.0 D3 pins, cleared for exactly the same reason as every pin above them:
+            // a leaked ladder suppression would silently withhold the way down from a case that
+            // expects it, and a leaked Glow suppression would leave a case asserting raw peek
+            // alphas passing for the wrong reason.
+            DigModeController.TestSuppressLadder = false;
+            DigModeController.TestSuppressGlow = false;
+
             // The toy roller's no-repeat history (DinoDigger-qhy) is static AND mirrored into the
             // save, so a feature rolled by one case would steer the next case's first site. Wiped
             // here for the same reason as every pin above: a case must never inherit state it did

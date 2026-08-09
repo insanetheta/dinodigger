@@ -15,6 +15,13 @@ namespace DinoDigger.Overworld
         [SerializeField] private Tilemap _water;
         [SerializeField] private Tilemap _obstacles;
 
+        // PURELY DECORATIVE env scatter layer (DinoDigger-y1g): ferns on grass, footprints
+        // on path, lilies on water. Deliberately NOT consulted by IsWalkableCell or by any
+        // gameplay query — it is wired here only so the dressing can be inspected from one
+        // place (and asserted by the EnvDressingApplied case). Null on a scene built before
+        // the env set landed, which changes nothing.
+        [SerializeField] private Tilemap _decals;
+
         // Cleared town-district cell rect (set by SceneBuilder). The district is
         // walkable grass — dinos and the player stroll through it — so it is NOT
         // excluded by walkability; this rect lets mound respawns steer clear of it,
@@ -252,6 +259,23 @@ namespace DinoDigger.Overworld
         {
             return _water != null && _water.GetTile(cell) != null;
         }
+
+        // TEST HOOK (DinoDigger-y1g): the exact tile assets painted on each layer, so the
+        // env dressing case can compare the built island against the library's pure
+        // GroundTileFor/DecalTileFor derivation. Read-only; nothing else uses these.
+        internal TileBase TestGroundTile(Vector3Int cell) =>
+            _ground != null ? _ground.GetTile(cell) : null;
+        internal TileBase TestWaterTile(Vector3Int cell) =>
+            _water != null ? _water.GetTile(cell) : null;
+        internal TileBase TestDecalTile(Vector3Int cell) =>
+            _decals != null ? _decals.GetTile(cell) : null;
+        internal bool TestHasDecalLayer => _decals != null;
+
+        /// <summary>The rendered sprite on the ground layer at a cell (null when bare) —
+        /// how a test proves the island paints MANY DISTINCT sprites rather than one
+        /// stamp, independent of how the variants happen to be authored as assets.</summary>
+        internal Sprite TestGroundSprite(Vector3Int cell) =>
+            _ground != null ? _ground.GetSprite(cell) : null;
 
         // TEST HOOK: the cleared town-district cell rect + whether one exists.
         internal RectInt TestTownDistrict => _townDistrict;

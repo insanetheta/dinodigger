@@ -78,6 +78,13 @@ namespace DinoDigger.EditorTools
 
             Tilemap ground = CreateTilemap(gridGo, "Ground", 0);
             Tilemap water = CreateTilemap(gridGo, "Water", 1);
+            // ENV scatter layer (DinoDigger-y1g): ferns/moss on grass, footprints/pebbles on
+            // path, lilies on water. Sorted ABOVE ground+water (0/1) and BELOW obstacles (5),
+            // dig mounds (8), fences (9) and every actor — a decal is something the world is
+            // drawn ON TOP OF, never something that can hide a tap target. It is a plain
+            // decorative Tilemap with no colliders, and OverworldMap deliberately never
+            // consults it, so walkability and pathfinding are bit-for-bit unchanged.
+            Tilemap decals = CreateTilemap(gridGo, "Decals", 2);
             Tilemap obstacles = CreateTilemap(gridGo, "Obstacles", 5);
 
             var overworldMap = gridGo.AddComponent<OverworldMap>();
@@ -96,7 +103,7 @@ namespace DinoDigger.EditorTools
             EnsureStreamConnectivity(map, startCell, streamCourses);
 
             var moundCells = new List<Vector3Int>();
-            PaintMap(map, ground, water, obstacles, lib, moundCells, startCell,
+            PaintMap(map, ground, water, decals, obstacles, lib, config, moundCells, startCell,
                 meadowRect, districtRect, gardenRect);
             streamNetwork.Configure(grid, streamCourses);
 
@@ -259,6 +266,7 @@ namespace DinoDigger.EditorTools
             Wire(overworldMap, "_ground", ground);
             Wire(overworldMap, "_water", water);
             Wire(overworldMap, "_obstacles", obstacles);
+            Wire(overworldMap, "_decals", decals);
 
             Wire(camFollow, "_camera", cam);
             Wire(camFollow, "_target", backhoeGo.transform);
@@ -654,11 +662,77 @@ namespace DinoDigger.EditorTools
             return new RectInt(x0, y0, GardenW, GardenH);
         }
 
-        private static void PaintMap(char[,] m, Tilemap ground, Tilemap water, Tilemap obstacles,
-            PlaceholderLibrary lib, List<Vector3Int> moundCells, Vector3Int startCell,
+        // ------------------------------------------------- env dressing (DinoDigger-y1g)
+        //
+        // WHAT THIS PASS MAY AND MAY NOT DO. Painting is the ONLY thing that changes: which
+        // tile asset lands on the ground/water layers, plus a purely decorative decal layer.
+        // OverworldMap answers walkability from tile PRESENCE (ground yes, water/obstacle
+        // no) and never from tile identity, so swapping a flat grass tile for one of 16
+        // mottle variants or a shoreline transition cannot move a walkable cell. The
+        // obstacle layer is untouched: trees and rocks are still the SAME lib.TreeTile /
+        // lib.RockTile references GameManager compares a tap against, restyled in place by
+        // the importer. Mound picking still runs off the same candidate list, from the same
+        // cells, in the same order — the dressing runs around it, never through it.
+        //
+        // Everything is DETERMINISTIC by construction: variant choice, transition choice and
+        // decal scatter are pure functions of the cell coordinate (see Config/EnvDressing +
+        // PlaceholderLibrary.GroundTileFor/DecalTileFor), never System.Random, so rebuilding
+        // the scene reproduces the identical island and the EnvDressingApplied case can
+        // predict every cell without rebuilding anything.
+
+        /// <summary>The ground family a map char PAINTS as. Bridge decks are handled
+        /// separately (they get the bridge art, not a ground variant).</summary>
+        private static EnvBiome GroundBiomeOf(char c)
+        {
+            switch (c)
+            {
+                case 'G': case 'M': case 'D': case 'T': case 'R': return EnvBiome.Grass;
+                case 'P': case 'B': return EnvBiome.Path;
+                case 'W': case 'S': return EnvBiome.Water;
+                case 'A': return EnvBiome.Bed;
+                default: return EnvBiome.None; // '~' open ocean: no ground at all
+            }
+        }
+
+        /// <summary>How a NEIGHBOUR reads to a grass cell computing its transition mask.
+        /// A bridge is a deck OVER a channel, so the grass beside one wants the shoreline
+        /// ramp, not a path edge — matching how the art's own reference scene composes.</summary>
+        private static EnvBiome EdgeBiomeOf(char c)
+        {
+            return c == 'B' ? EnvBiome.Water : GroundBiomeOf(c);
+        }
+
+        private static void PaintMap(char[,] m, Tilemap ground, Tilemap water, Tilemap decals,
+            Tilemap obstacles, PlaceholderLibrary lib, GameConfig config,
+            List<Vector3Int> moundCells, Vector3Int startCell,
             RectInt meadowRect, RectInt districtRect, RectInt gardenRect)
         {
             var grassCandidates = new List<Vector3Int>();
+
+            // Dress only when there is env art to dress WITH (and the config switch allows
+            // it). Off, every branch below falls through to the exact flat tile it painted
+            // before the env set landed — the guaranteed no-regression path.
+            bool dress = lib != null && lib.HasEnvGround &&
+                         (config == null || config.EnvDressingEnabled);
+
+            EnvBiome EdgeBiomeAt(Vector3Int c) =>
+                c.x < 0 || c.y < 0 || c.x >= N || c.y >= N
+                    ? EnvBiome.None
+                    : EdgeBiomeOf(m[c.x, c.y]);
+
+            System.Func<Vector3Int, EnvBiome> edgeLookup = EdgeBiomeAt;
+
+            // The dressed tile for a cell: a grass->X transition where grass meets another
+            // biome, else a hashed base variant, else the flat placeholder.
+            TileBase Dressed(Vector3Int cell, EnvBiome biome)
+            {
+                if (lib == null)
+                {
+                    return null;
+                }
+
+                return dress ? lib.GroundTileFor(cell, biome, edgeLookup) : lib.FlatTile(biome);
+            }
 
             for (int x = 0; x < N; x++)
             {
@@ -669,36 +743,40 @@ namespace DinoDigger.EditorTools
                     switch (t)
                     {
                         case 'G':
-                            ground.SetTile(cell, lib != null ? lib.GrassTile : null);
+                            ground.SetTile(cell, Dressed(cell, EnvBiome.Grass));
                             grassCandidates.Add(cell);
                             break;
                         case 'M':
                             // Meadow: plain walkable grass, but NEVER a mound candidate.
-                            ground.SetTile(cell, lib != null ? lib.GrassTile : null);
+                            ground.SetTile(cell, Dressed(cell, EnvBiome.Grass));
                             break;
                         case 'D':
                             // Town district: cleared walkable grass (dinos + player can
                             // stroll through; buildings add their own colliders later),
                             // but NEVER a mound candidate.
-                            ground.SetTile(cell, lib != null ? lib.GrassTile : null);
+                            ground.SetTile(cell, Dressed(cell, EnvBiome.Grass));
                             break;
                         case 'A':
-                            // Berry Patch garden: cleared walkable grass for the sprout
+                            // Berry Patch garden: cleared walkable ground for the sprout
                             // props. NEVER a mound candidate, and 'A' isn't stream-routable
-                            // so no channel ever cuts through the plot.
-                            ground.SetTile(cell, lib != null ? lib.GrassTile : null);
+                            // so no channel ever cuts through the plot. The env set gives
+                            // this plot its own TILLED BED ground (the 4 bed variants) and a
+                            // grass->bed rim on the cells around it, so the Berry Patch
+                            // finally reads as a garden — still ordinary walkable ground,
+                            // still no collider, still identical to grass for every query.
+                            ground.SetTile(cell, Dressed(cell, EnvBiome.Bed));
                             break;
                         case 'P':
-                            ground.SetTile(cell, lib != null ? lib.PathTile : null);
+                            ground.SetTile(cell, Dressed(cell, EnvBiome.Path));
                             grassCandidates.Add(cell);
                             break;
                         case 'W':
-                            water.SetTile(cell, lib != null ? lib.WaterTile : null);
+                            water.SetTile(cell, Dressed(cell, EnvBiome.Water));
                             break;
                         case 'S':
                             // Stream: a water tile with NO ground tile => unwalkable,
                             // exactly like the pond.
-                            water.SetTile(cell, lib != null ? lib.WaterTile : null);
+                            water.SetTile(cell, Dressed(cell, EnvBiome.Water));
                             break;
                         case 'B':
                             // Bridge: a path (or a connectivity heal) crosses the stream
@@ -706,16 +784,14 @@ namespace DinoDigger.EditorTools
                             // (walkable, like a path) with NO water tile, so the crossing
                             // stays passable and reads as a bridge over the blue channel.
                             // NOT a mound candidate.
-                            ground.SetTile(cell, lib != null
-                                ? (lib.BridgeTile != null ? lib.BridgeTile : lib.PathTile)
-                                : null);
+                            ground.SetTile(cell, BridgeDeck(lib, dress, cell));
                             break;
                         case 'T':
-                            ground.SetTile(cell, lib != null ? lib.GrassTile : null);
+                            ground.SetTile(cell, Dressed(cell, EnvBiome.Grass));
                             obstacles.SetTile(cell, lib != null ? lib.TreeTile : null);
                             break;
                         case 'R':
-                            ground.SetTile(cell, lib != null ? lib.GrassTile : null);
+                            ground.SetTile(cell, Dressed(cell, EnvBiome.Grass));
                             obstacles.SetTile(cell, lib != null ? lib.RockTile : null);
                             break;
                     }
@@ -725,10 +801,110 @@ namespace DinoDigger.EditorTools
             // Choose 9 spread-out mound cells from plain grass/path candidates.
             PickMounds(grassCandidates, 12, moundCells, startCell, meadowRect, districtRect, gardenRect);
 
+            // Scatter decals LAST: it needs the mound cells so a fern never sits under a
+            // mound's tap target.
+            int decalCount = ScatterDecals(m, decals, lib, config, moundCells, startCell, dress);
+
             Debug.Log($"[SceneBuilder] PaintMap done: lib={(lib == null ? "NULL" : "ok")} " +
                       $"grassTile={(lib != null && lib.GrassTile != null ? "ok" : "NULL")} " +
-                      $"candidates={grassCandidates.Count} groundUsed={ground.GetUsedTilesCount()} " +
-                      $"waterUsed={water.GetUsedTilesCount()} obstUsed={obstacles.GetUsedTilesCount()}");
+                      $"envDressed={dress} candidates={grassCandidates.Count} " +
+                      $"groundUsed={ground.GetUsedTilesCount()} " +
+                      $"waterUsed={water.GetUsedTilesCount()} obstUsed={obstacles.GetUsedTilesCount()} " +
+                      $"decals={decalCount}");
+        }
+
+        /// <summary>The bridge deck tile for a crossing cell: one of the two baked slab
+        /// patterns (hashed by cell, so a multi-cell crossing alternates instead of
+        /// stamping), falling back to the single flat BridgeTile and then to the path tile —
+        /// the exact chain the pre-env builder used.</summary>
+        private static TileBase BridgeDeck(PlaceholderLibrary lib, bool dress, Vector3Int cell)
+        {
+            if (lib == null)
+            {
+                return null;
+            }
+
+            if (dress && lib.BridgeTiles != null)
+            {
+                TileBase deck = lib.BridgeTiles.Variant(cell, EnvDressing.SaltPath);
+                if (deck != null)
+                {
+                    return deck;
+                }
+            }
+
+            return lib.BridgeTile != null ? lib.BridgeTile : lib.PathTile;
+        }
+
+        /// <summary>
+        /// Sparse decorative scatter on the Decals tilemap, honouring the art's rule-4
+        /// grammar: ferns/moss/clover only on grass, footprints/pebbles (and the rare warm
+        /// stone accent) only on path, lilies only on water. Density comes from GameConfig's
+        /// ENV region; placement is a pure hash of the cell, so the scatter is identical on
+        /// every rebuild.
+        ///
+        /// SKIPPED, so a decal can never sit under something the child taps or under a prop:
+        /// tree/rock cells, bridge decks, the cleared town district (buildings land there),
+        /// the Berry Patch plot (the sprout props stand on it), every chosen mound cell, and
+        /// the backhoe's start cell. Returns the number of decals painted.
+        /// </summary>
+        private static int ScatterDecals(char[,] m, Tilemap decals, PlaceholderLibrary lib,
+            GameConfig config, List<Vector3Int> moundCells, Vector3Int startCell, bool dress)
+        {
+            if (decals == null || lib == null || !dress || !lib.HasEnvDecals)
+            {
+                return 0;
+            }
+
+            var occupied = new HashSet<Vector3Int>(moundCells) { startCell };
+            float accentShare = config != null ? config.EnvAccentShare
+                                               : EnvDressing.DefaultAccentShare;
+            int painted = 0;
+
+            for (int x = 0; x < N; x++)
+            {
+                for (int y = 0; y < N; y++)
+                {
+                    char t = m[x, y];
+                    // Only ordinary open ground takes scatter. 'T'/'R' carry a prop, 'B' is a
+                    // deck, 'D'/'A' are reserved plots, '~' is ocean.
+                    if (t != 'G' && t != 'M' && t != 'P' && t != 'W' && t != 'S')
+                    {
+                        continue;
+                    }
+
+                    var cell = new Vector3Int(x, y, 0);
+                    if (occupied.Contains(cell))
+                    {
+                        continue;
+                    }
+
+                    EnvBiome biome = GroundBiomeOf(t);
+                    float chance = config != null
+                        ? config.EnvDecalChance(biome)
+                        : DefaultDecalChance(biome);
+
+                    TileBase decal = lib.DecalTileFor(cell, biome, chance, accentShare);
+                    if (decal != null)
+                    {
+                        decals.SetTile(cell, decal);
+                        painted++;
+                    }
+                }
+            }
+
+            return painted;
+        }
+
+        private static float DefaultDecalChance(EnvBiome biome)
+        {
+            switch (biome)
+            {
+                case EnvBiome.Grass: return EnvDressing.DefaultGrassDecalChance;
+                case EnvBiome.Path: return EnvDressing.DefaultPathDecalChance;
+                case EnvBiome.Water: return EnvDressing.DefaultWaterDecalChance;
+                default: return 0f;
+            }
         }
 
         private static void PickMounds(List<Vector3Int> candidates, int count, List<Vector3Int> outCells,
@@ -1400,9 +1576,20 @@ namespace DinoDigger.EditorTools
             area.Configure(map, minX, minY, maxX, maxY, gateWorld);
 
             // Fence orientation: grid +x runs screen NE, grid +y runs screen NW,
-            // so edges along X and along Y need the two different Kenney rotations.
-            Sprite alongX = LoadFenceSprite("fenceLow_E");
-            Sprite alongY = LoadFenceSprite("fenceLow_N");
+            // so edges along X and along Y need the two different rotations.
+            //
+            // ENV SWAP (DinoDigger-y1g): the driftwood fence_x/fence_y pieces are
+            // CANVAS-COMPATIBLE drop-ins — same 256x512 canvas, same alpha bounding box,
+            // same PPU 100 — so CreateFencePiece's "scale to bounds.size.x == 1 cell" and
+            // its half-height offset land each piece in the identical spot. Missing env art
+            // falls straight back to the Kenney pieces (and a missing Kenney piece still
+            // just skips that visual, as before).
+            Sprite alongX = lib != null && lib.FenceAlongX != null
+                ? lib.FenceAlongX
+                : LoadFenceSprite("fenceLow_E");
+            Sprite alongY = lib != null && lib.FenceAlongY != null
+                ? lib.FenceAlongY
+                : LoadFenceSprite("fenceLow_N");
             if (alongX == null)
             {
                 alongX = alongY;

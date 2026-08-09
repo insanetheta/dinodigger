@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Tilemaps;
 using DinoDigger.Config;
 using DinoDigger.Core;
 
@@ -31,6 +32,8 @@ namespace DinoDigger.EditorTools
 
         private const string DigitalAudioDir = "Assets/Audio/Kenney/DigitalAudio";
         private const string InterfaceDir = "Assets/Audio/Kenney/InterfaceSounds";
+        private const string ImpactDir = "Assets/Audio/Kenney/ImpactSounds";
+        private const string JinglesDir = "Assets/Audio/Kenney/MusicJingles";
         private const string MusicPath = "Assets/Audio/Music/Bluebonnet_looped.ogg";
 
         // Target world-space heights per category.
@@ -252,6 +255,105 @@ namespace DinoDigger.EditorTools
             new DinoWire("Parasaurolophus", "parasaurolophus", "egg_pink"),
             new DinoWire("Velociraptor",    "velociraptor",    "egg_grey"),
         };
+
+        // ===================== ENV: Jurassic-earth environment set (DinoDigger-y1g)
+        //
+        // WORLD SIZE IS THE CONTRACT, NOT PPU. Every env sprite replaces a placeholder
+        // whose world footprint (px / PPU) it must match EXACTLY — that is what lets this
+        // be an art-only swap with no collider, cell pitch or spawn rect retuned. So the
+        // importer stores the TARGET WORLD WIDTH per asset and derives
+        //     PPU = sourceWidthPx / targetWorldWidth
+        // rather than hardcoding the PPU. Re-baking the art at a different resolution then
+        // keeps the same footprint automatically instead of silently resizing the island.
+        // With the shipped 2026-08 bake the derivation reproduces the mapping in
+        // Tools/generate_env.py's docstring exactly:
+        //   ground tile / bridge / mound  256 px wide, 1.00 u  -> PPU 256   (was 128 @ 128)
+        //   tree / rock                   256 px wide, 1.00 u  -> PPU 256   (was 128 @ 128)
+        //   nest                          256 px wide, 1.28 u  -> PPU 200   (was 128 @ 100)
+        //   fence_x / fence_y             256 px wide, 2.56 u  -> PPU 100   (== Kenney)
+        //
+        // PIVOTS ARE CENTER, and that is deliberate — the ticket's "bottom-center like the
+        // current props" does not describe this project. Every prop being replaced here is
+        // either a TILEMAP TILE (tree/rock/mound/bridge: the tilemap plants the sprite on
+        // the cell anchor, so a bottom pivot would shift the whole island up half a cell)
+        // or a center-pivoted SpriteRenderer prop (the DigMound sprite sits centered on its
+        // CircleCollider2D; the nest bowl sits at its parent's local origin; the Kenney
+        // fence pieces are center-pivoted and SceneBuilder offsets them by half their
+        // height). Same canvas + same pivot + same world size = pixel-identical placement
+        // and untouched colliders. ConfigureBuilding's BOTTOM-CENTER treatment is for
+        // buildings/machines, which stand on a ground line — none of these do.
+        //
+        // NOT IMPORTED, ON PURPOSE: env/ground/plate_*.png and env/decor/plate_stone.png
+        // are 1024^2 PIPELINE MASTERS (re-slice sources), and contact_sheet.png /
+        // verify_*.png are review artifacts. None is referenced by the game, so none ever
+        // enters the player build; leaving their import settings alone keeps the AssetDB
+        // churn (and the 3260x3804 contact sheet) out of every import run.
+        private const string EnvDir = GenRoot + "/env";
+        private const string EnvTilesDir = EnvDir + "/Tiles";
+
+        // Ground plates slice 4x4 (the bed plate only yields four usable squares).
+        private const int EnvTileVariants = 16;
+        private const int EnvBedVariants = 4;
+        // The baked transition families cover every non-empty 4-bit neighbour mask, 1..15.
+        private const int EnvEdgeMasks = 16;
+
+        // One iso ground cell is 1.0 x 0.5 world units (Grid cellSize), so every ground
+        // tile, bridge deck and mound targets 1.0 world units WIDE.
+        private const float EnvCellWorldW = 1.0f;
+        private const float EnvPropWorldW = 1.0f;   // tree / rock: 1x1, as the flat tiles were
+        private const float EnvNestWorldW = 1.28f;  // == nest_base.png 128px @ PPU 100
+        private const float EnvFenceWorldW = 2.56f; // == Kenney fenceLow_* 256px @ PPU 100
+
+        // Decal world WIDTHS, copied from Tools/generate_env.py's DECAL_WORLD_W — decals
+        // ship TRIMMED, so height follows from the art's own aspect. Keep in sync with the
+        // generator if the set is re-baked.
+        private struct EnvDecalArt
+        {
+            public string File;
+            public float WorldW;
+            public EnvDecalArt(string f, float w) { File = f; WorldW = w; }
+        }
+
+        // Rule 4 of the style contract ("life in clusters, not carpets") is a GRAMMAR, and
+        // these buckets are it: grass takes only things that cannot read as pickable, path
+        // takes ground marks, water takes lilies, and the warm stone accent is its own rare
+        // bucket. SceneBuilder never scatters a decal outside its bucket's biome.
+        private static readonly EnvDecalArt[] EnvGrassDecalArt =
+        {
+            new EnvDecalArt("decal_fern", 0.42f),
+            new EnvDecalArt("decal_moss", 0.34f),
+            new EnvDecalArt("decal_clover", 0.20f),
+        };
+
+        private static readonly EnvDecalArt[] EnvPathDecalArt =
+        {
+            new EnvDecalArt("decal_footprints", 0.30f),
+            new EnvDecalArt("decal_pebbles", 0.26f),
+        };
+
+        private static readonly EnvDecalArt[] EnvWaterDecalArt =
+        {
+            new EnvDecalArt("decal_lily", 0.22f),
+            new EnvDecalArt("decal_lily_blossom", 0.26f),
+        };
+
+        private static readonly EnvDecalArt[] EnvAccentDecalArt =
+        {
+            new EnvDecalArt("decal_stones", 0.30f),
+        };
+
+        // Outlined tappable props. [0] of each list is the one whose sprite is written into
+        // the existing Tile asset (see WireEnvLibrary) — the rest ride along in the library
+        // for the shake beat and any future variant pass.
+        private static readonly string[] EnvTreeArt =
+            { "tree_cycad", "tree_gingko", "tree_conifer" };
+        private const string EnvTreeShakeArt = "tree_gingko_shake";
+        private static readonly string[] EnvRockArt = { "rock_boulder", "rock_mossy" };
+        private static readonly string[] EnvBridgeArt = { "bridge_a", "bridge_b" };
+        private const string EnvMoundArt = "mound";
+        private const string EnvNestArt = "nest";
+        private const string EnvFenceXArt = "fence_x";
+        private const string EnvFenceYArt = "fence_y";
 
         [MenuItem("DinoDigger/Import Generated Art")]
         public static void Import()
@@ -552,6 +654,11 @@ namespace DinoDigger.EditorTools
                 }
             }
 
+            // Jurassic-earth environment set (DinoDigger-y1g): ground/edge tiles, decals,
+            // outlined props and decor, every one sized by TARGET WORLD WIDTH so it lands
+            // on the exact footprint of the placeholder it replaces.
+            ImportEnvTextures(missing, wired);
+
             AssetDatabase.Refresh();
 
             // ------------------------------------------------ 2) DinoDefinitions
@@ -841,10 +948,18 @@ namespace DinoDigger.EditorTools
                           $"(~{MachineTargetH}u tall, bottom pivot" +
                           (machineCount == 3 ? ")" : "; missing ones fall back to a tinted blob)"));
 
-                // Tilemap tiles + MoundSprite + icons intentionally left on placeholders.
+                // Jurassic-earth environment set (DinoDigger-y1g). Builds/refreshes the env
+                // Tile assets, fills the typed EnvTileSet/EnvEdgeSet slots, and re-points
+                // the SPRITE inside the existing tree/rock/mound/bridge Tile assets (never
+                // the Tile references themselves — GameManager routes tree/rock taps by
+                // comparing against lib.TreeTile / lib.RockTile). Every slot is null-tolerant:
+                // whatever the env set is missing simply stays on the flat placeholder.
+                WireEnvLibrary(lib, missing, wired);
+
+                // Icons intentionally left on placeholders.
                 EditorUtility.SetDirty(lib);
                 wired.Add("Library: backhoe 8-dir, fruit x4, treasure x4, dirt x3, particles x3");
-                wired.Add("Library: tiles/mound/icons kept on placeholders (flat env per art direction)");
+                wired.Add("Library: icons kept on placeholders");
             }
 
             // ------------------------------------------------ 4) AudioConfig
@@ -872,11 +987,53 @@ namespace DinoDigger.EditorTools
                 audio.Honk = LoadClip(Digital("twoTone1"), false, missing);
                 audio.Heart = LoadClip(Iface("glass_001"), false, missing);
 
+                // ---- dig audio pass (DinoDigger-7c4) ----
+                // The dig loop's own vocabulary. Impact Sounds carries the physical events
+                // (crack / thump / pop / knock), Digital Audio the expressive ones (fizz,
+                // gurgle, giggle), Music Jingles the two pizzicato phrases. Per-clip loudness
+                // trims are NOT here — they live beside the hooks in AudioManager, because the
+                // files ship byte-identical to the CC0 packs. See Tools/ASSET_SOURCES.md.
+                // NOTE: these come from the CURATED pack folders — if you swap a filename,
+                // add it to the whitelist in Tools/download_assets.sh too, or a fresh asset
+                // download will leave it missing here.
+                audio.TileCrackA = LoadClip(Impact("impactMining_000"), false, missing);
+                audio.TileCrackB = LoadClip(Impact("impactMining_001"), false, missing);
+                audio.TileCrackC = LoadClip(Impact("impactMining_002"), false, missing);
+                audio.Crumble = LoadClip(Iface("scratch_004"), false, missing);
+                audio.LandingThump = LoadClip(Impact("impactSoft_heavy_000"), false, missing);
+                audio.Whumph = LoadClip(Impact("impactSoft_heavy_001"), false, missing);
+                audio.FuseSizzle = LoadClip(Digital("lowRandom"), false, missing);
+                audio.CrystalPop = LoadClip(Impact("impactGlass_light_000"), false, missing);
+                audio.CrystalPopBig = LoadClip(Impact("impactGlass_medium_000"), false, missing);
+                audio.PotCrack = LoadClip(Impact("impactTin_medium_000"), false, missing);
+                audio.CoinSpray = LoadClip(Jingle("jingles_PIZZI00"), false, missing);
+                audio.BoneRattle = LoadClip(Impact("impactWood_light_000"), false, missing);
+                audio.BonePop = LoadClip(Digital("powerUp7"), false, missing);
+                audio.CeremonyPoof = LoadClip(Impact("impactSoft_medium_000"), false, missing);
+                audio.MachineWake = LoadClip(Impact("impactBell_heavy_002"), false, missing);
+                audio.Gurgle = LoadClip(Digital("lowDown"), false, missing);
+                audio.Toot = LoadClip(Digital("twoTone2"), false, missing);
+                audio.Giggle = LoadClip(Digital("pepSound3"), false, missing);
+                audio.WaterGush = LoadClip(Iface("scroll_003"), false, missing);
+                audio.DanceLoop = LoadClip(Jingle("jingles_PIZZI03"), true, missing);
+                audio.LadderDing = LoadClip(Digital("threeTone2"), false, missing);
+                audio.SparkZap = LoadClip(Digital("zap1"), false, missing);
+                audio.Boing = LoadClip(Digital("phaseJump1"), false, missing);
+
                 EditorUtility.SetDirty(audio);
                 wired.Add("AudioConfig: Music=Bluebonnet_looped, Tap=click_002, Move=switch_004, " +
-                          "Dig=drop_002, Crumble=scratch_003, ItemPop=pluck_002, Chime=threeTone1, " +
+                          "Dig=drop_002, Crumble=scratch_004, ItemPop=pluck_002, Chime=threeTone1, " +
                           "Hatch=powerUp1, Roar=lowThreeTone, Eat=pepSound2, Grow=phaserUp1, " +
                           "TreasureCollect=highUp, Honk=twoTone1, Heart=glass_001");
+                wired.Add("AudioConfig dig pass: TileCrackA/B/C=impactMining_000/001/002, " +
+                          "LandingThump=impactSoft_heavy_000, Whumph=impactSoft_heavy_001, " +
+                          "FuseSizzle=lowRandom, CrystalPop=impactGlass_light_000, " +
+                          "CrystalPopBig=impactGlass_medium_000, PotCrack=impactTin_medium_000, " +
+                          "CoinSpray=jingles_PIZZI00, BoneRattle=impactWood_light_000, " +
+                          "BonePop=powerUp7, CeremonyPoof=impactSoft_medium_000, " +
+                          "MachineWake=impactBell_heavy_002, Gurgle=lowDown, Toot=twoTone2, " +
+                          "Giggle=pepSound3, WaterGush=scroll_003, DanceLoop=jingles_PIZZI03, " +
+                          "LadderDing=threeTone2, SparkZap=zap1, Boing=phaseJump1");
             }
 
             AssetDatabase.SaveAssets();
@@ -913,6 +1070,435 @@ namespace DinoDigger.EditorTools
         /// (<see cref="DirtTargetH"/> world units): PPU = max(sourceW, sourceH) / target. That is
         /// what keeps a tall crystal and a wide geode inside the same footprint a dirt tile
         /// occupies, instead of one of them spilling over its neighbours.</summary>
+        // =========================================== ENV import (DinoDigger-y1g)
+
+        private static string EnvGroundPath(string name) => $"{EnvDir}/ground/{name}.png";
+        private static string EnvDecalPath(string name) => $"{EnvDir}/decal/{name}.png";
+        private static string EnvPropPath(string name) => $"{EnvDir}/prop/{name}.png";
+        private static string EnvDecorPath(string name) => $"{EnvDir}/decor/{name}.png";
+
+        private static string EnvTileName(string biome, int variant) => $"tile_{biome}_{variant:00}";
+        private static string EnvEdgeName(string other, int mask) => $"edge_grass_{other}_{mask}";
+
+        /// <summary>
+        /// Configure every env texture that exists on disk. Nothing here is required: a
+        /// checkout without the art (or with only part of it) reports ONE summary line and
+        /// leaves the island on the flat placeholder tiles.
+        /// </summary>
+        private static void ImportEnvTextures(List<string> missing, List<string> wired)
+        {
+            // Probe one file rather than tracking 117 individual misses when the whole set
+            // is simply not in this checkout.
+            if (SourceWidth(EnvGroundPath(EnvTileName("grass", 0))) <= 0)
+            {
+                wired.Add($"ENV: no environment set under {EnvDir} — the island keeps the " +
+                          "flat placeholder tiles (no regression, nothing to import)");
+                return;
+            }
+
+            int ground = 0;
+            ground += ConfigureEnvBiome("grass", EnvTileVariants);
+            ground += ConfigureEnvBiome("path", EnvTileVariants);
+            ground += ConfigureEnvBiome("water", EnvTileVariants);
+            ground += ConfigureEnvBiome("bed", EnvBedVariants);
+
+            int edges = 0;
+            edges += ConfigureEnvEdges("path");
+            edges += ConfigureEnvEdges("water");
+            edges += ConfigureEnvEdges("bed");
+
+            int decals = ConfigureEnvDecals(EnvGrassDecalArt) +
+                         ConfigureEnvDecals(EnvPathDecalArt) +
+                         ConfigureEnvDecals(EnvWaterDecalArt) +
+                         ConfigureEnvDecals(EnvAccentDecalArt);
+
+            int props = 0;
+            foreach (string t in EnvTreeArt)
+            {
+                props += ConfigureEnv(EnvPropPath(t), EnvPropWorldW) ? 1 : 0;
+            }
+
+            props += ConfigureEnv(EnvPropPath(EnvTreeShakeArt), EnvPropWorldW) ? 1 : 0;
+            foreach (string r in EnvRockArt)
+            {
+                props += ConfigureEnv(EnvPropPath(r), EnvPropWorldW) ? 1 : 0;
+            }
+
+            props += ConfigureEnv(EnvPropPath(EnvMoundArt), EnvCellWorldW) ? 1 : 0;
+
+            int decor = 0;
+            foreach (string b in EnvBridgeArt)
+            {
+                decor += ConfigureEnv(EnvDecorPath(b), EnvCellWorldW) ? 1 : 0;
+            }
+
+            decor += ConfigureEnv(EnvDecorPath(EnvFenceXArt), EnvFenceWorldW) ? 1 : 0;
+            decor += ConfigureEnv(EnvDecorPath(EnvFenceYArt), EnvFenceWorldW) ? 1 : 0;
+            decor += ConfigureEnv(EnvDecorPath(EnvNestArt), EnvNestWorldW) ? 1 : 0;
+
+            wired.Add($"ENV textures: {ground} ground variants + {edges} transitions + " +
+                      $"{decals} decals + {props} props + {decor} decor " +
+                      "(PPU = sourceWidth / target world width, CENTER pivots — every " +
+                      "footprint identical to the placeholder it replaces)");
+
+            int expected = EnvTileVariants * 3 + EnvBedVariants + (EnvEdgeMasks - 1) * 3 +
+                           EnvGrassDecalArt.Length + EnvPathDecalArt.Length +
+                           EnvWaterDecalArt.Length + EnvAccentDecalArt.Length +
+                           EnvTreeArt.Length + 1 + EnvRockArt.Length + 1 +
+                           EnvBridgeArt.Length + 3;
+            int got = ground + edges + decals + props + decor;
+            if (got != expected)
+            {
+                missing.Add($"{EnvDir}: imported {got}/{expected} env sprites — the gaps stay " +
+                            "on their flat placeholders (re-run Tools/generate_env.py bake)");
+            }
+        }
+
+        private static int ConfigureEnvBiome(string biome, int variants)
+        {
+            int n = 0;
+            for (int i = 0; i < variants; i++)
+            {
+                n += ConfigureEnv(EnvGroundPath(EnvTileName(biome, i)), EnvCellWorldW) ? 1 : 0;
+            }
+
+            return n;
+        }
+
+        private static int ConfigureEnvEdges(string other)
+        {
+            int n = 0;
+            for (int mask = 1; mask < EnvEdgeMasks; mask++)
+            {
+                n += ConfigureEnv(EnvGroundPath(EnvEdgeName(other, mask)), EnvCellWorldW) ? 1 : 0;
+            }
+
+            return n;
+        }
+
+        private static int ConfigureEnvDecals(EnvDecalArt[] set)
+        {
+            int n = 0;
+            foreach (EnvDecalArt d in set)
+            {
+                n += ConfigureEnv(EnvDecalPath(d.File), d.WorldW) ? 1 : 0;
+            }
+
+            return n;
+        }
+
+        /// <summary>
+        /// Import one env sprite at PPU = sourceWidth / <paramref name="worldWidth"/> with a
+        /// CENTER pivot — the two things that make an env asset a drop-in for the placeholder
+        /// it replaces. Returns false (and configures nothing) when the PNG is absent, which
+        /// is always a legal state: the caller's slot then stays on its flat fallback.
+        ///
+        /// Forces spriteMode = Single through BOTH the property and the settings block for
+        /// the same reason ConfigureBuilding does: freshly dropped PNGs can arrive carrying a
+        /// stale auto-slice rect from a previous canvas, and a Single-mode sprite never reads
+        /// those rects.
+        /// </summary>
+        private static bool ConfigureEnv(string assetPath, float worldWidth)
+        {
+            var importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
+            if (importer == null || worldWidth <= 0.0001f)
+            {
+                return false;
+            }
+
+            importer.GetSourceTextureWidthAndHeight(out int w, out int _);
+            if (w <= 0)
+            {
+                return false;
+            }
+
+            importer.textureType = TextureImporterType.Sprite;
+            importer.spriteImportMode = SpriteImportMode.Single;
+            importer.spritePixelsPerUnit = w / worldWidth;
+            importer.filterMode = FilterMode.Bilinear;
+            importer.mipmapEnabled = false;
+            importer.alphaIsTransparency = true;
+            // CLAMP, not Repeat: the ground tiles carry a 3px dilated alpha skirt so
+            // neighbours overlap opaquely (see generate_env.py's _diamond_alpha). Wrapping
+            // would sample the opposite edge into that skirt and re-draw the dark lattice
+            // the whole art pass exists to delete.
+            importer.wrapMode = TextureWrapMode.Clamp;
+            importer.textureCompression = TextureImporterCompression.Compressed;
+            importer.maxTextureSize = 1024;
+            importer.spriteBorder = Vector4.zero;
+
+            var s = new TextureImporterSettings();
+            importer.ReadTextureSettings(s);
+            s.spriteAlignment = (int)SpriteAlignment.Center;
+            s.spriteMode = (int)SpriteImportMode.Single;
+            importer.SetTextureSettings(s);
+
+            importer.SaveAndReimport();
+            return true;
+        }
+
+        /// <summary>
+        /// Create (or refresh) the <see cref="Tile"/> asset that lets an env sprite be
+        /// painted on a tilemap, and return it. colliderType is None on every one of them —
+        /// the ground/decal layers must never introduce physics, and walkability stays
+        /// exactly what OverworldMap already computes from tile PRESENCE. Returns null when
+        /// the sprite is absent, so the caller leaves that slot empty.
+        /// </summary>
+        private static TileBase EnsureEnvTile(string tileName, string spriteAssetPath)
+        {
+            Sprite sprite = LoadSprite(spriteAssetPath);
+            if (sprite == null)
+            {
+                return null;
+            }
+
+            EnsureFolder(EnvTilesDir);
+            string path = $"{EnvTilesDir}/{tileName}.asset";
+            var tile = AssetDatabase.LoadAssetAtPath<Tile>(path);
+            if (tile == null)
+            {
+                tile = ScriptableObject.CreateInstance<Tile>();
+                AssetDatabase.CreateAsset(tile, path);
+            }
+
+            if (tile.sprite != sprite || tile.colliderType != Tile.ColliderType.None)
+            {
+                tile.sprite = sprite;
+                tile.colliderType = Tile.ColliderType.None;
+                EditorUtility.SetDirty(tile);
+            }
+
+            return tile;
+        }
+
+        private static void EnsureFolder(string path)
+        {
+            if (AssetDatabase.IsValidFolder(path))
+            {
+                return;
+            }
+
+            string parent = System.IO.Path.GetDirectoryName(path).Replace('\\', '/');
+            string leaf = System.IO.Path.GetFileName(path);
+            EnsureFolder(parent);
+            AssetDatabase.CreateFolder(parent, leaf);
+        }
+
+        /// <summary>Fill one biome's variant set from tile_&lt;biome&gt;_NN.png.</summary>
+        private static int WireEnvBiome(EnvTileSet set, string biome, int variants)
+        {
+            var tiles = new TileBase[variants];
+            int found = 0;
+            for (int i = 0; i < variants; i++)
+            {
+                string name = EnvTileName(biome, i);
+                tiles[i] = EnsureEnvTile(name, EnvGroundPath(name));
+                if (tiles[i] != null)
+                {
+                    found++;
+                }
+            }
+
+            set.Variants = tiles;
+            return found;
+        }
+
+        /// <summary>Fill one grass-to-X transition family, indexed BY MASK (slot 0 unused).</summary>
+        private static int WireEnvEdges(EnvEdgeSet set, string other)
+        {
+            var tiles = new TileBase[EnvEdgeSet.MaskCount];
+            int found = 0;
+            for (int mask = 1; mask < EnvEdgeSet.MaskCount; mask++)
+            {
+                string name = EnvEdgeName(other, mask);
+                tiles[mask] = EnsureEnvTile(name, EnvGroundPath(name));
+                if (tiles[mask] != null)
+                {
+                    found++;
+                }
+            }
+
+            set.ByMask = tiles;
+            return found;
+        }
+
+        private static int WireEnvDecals(EnvTileSet set, EnvDecalArt[] art)
+        {
+            var tiles = new TileBase[art.Length];
+            int found = 0;
+            for (int i = 0; i < art.Length; i++)
+            {
+                tiles[i] = EnsureEnvTile(art[i].File, EnvDecalPath(art[i].File));
+                if (tiles[i] != null)
+                {
+                    found++;
+                }
+            }
+
+            set.Variants = tiles;
+            return found;
+        }
+
+        private static Sprite[] LoadEnvProps(string[] names, System.Func<string, string> path)
+        {
+            var arr = new Sprite[names.Length];
+            for (int i = 0; i < names.Length; i++)
+            {
+                arr[i] = LoadSprite(path(names[i]));
+            }
+
+            return arr;
+        }
+
+        /// <summary>The first non-null sprite in a variant list, or null.</summary>
+        private static Sprite FirstOf(Sprite[] arr)
+        {
+            if (arr == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < arr.Length; i++)
+            {
+                if (arr[i] != null)
+                {
+                    return arr[i];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Re-point an EXISTING Tile asset's sprite (tree/rock/mound/bridge). This is the
+        /// whole prop swap: the Tile REFERENCE is untouched, so GameManager's
+        /// <c>ObstacleAt(cell) == lib.TreeTile</c> tap routing, the integration cases that
+        /// find trees/rocks the same way, and every already-painted scene keep working —
+        /// only the pixels change. Null sprite (art absent) leaves the placeholder alone.
+        ///
+        /// FOOTGUN, same as every other override in this file: re-running
+        /// PlaceholderArtGenerator rewrites these Tile assets back to the procedural
+        /// placeholders. The order has always been Generate -> Import -> Build Main Scene,
+        /// and SceneBuilder only auto-Generates when the config assets are missing outright.
+        /// </summary>
+        private static bool RestyleTile(TileBase tileBase, Sprite sprite)
+        {
+            var tile = tileBase as Tile;
+            if (tile == null || sprite == null)
+            {
+                return false;
+            }
+
+            if (tile.sprite != sprite)
+            {
+                tile.sprite = sprite;
+                EditorUtility.SetDirty(tile);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Fill every ENV slot on the library. Entirely null-tolerant, slot by slot: an
+        /// absent variant, transition, decal or prop leaves its slot empty and SceneBuilder
+        /// falls back to exactly what it painted before the env set existed.
+        /// </summary>
+        private static void WireEnvLibrary(PlaceholderLibrary lib, List<string> missing,
+            List<string> wired)
+        {
+            if (lib.GrassTiles == null) { lib.GrassTiles = new EnvTileSet(); }
+            if (lib.PathTiles == null) { lib.PathTiles = new EnvTileSet(); }
+            if (lib.WaterTiles == null) { lib.WaterTiles = new EnvTileSet(); }
+            if (lib.BedTiles == null) { lib.BedTiles = new EnvTileSet(); }
+            if (lib.GrassPathEdges == null) { lib.GrassPathEdges = new EnvEdgeSet(); }
+            if (lib.GrassWaterEdges == null) { lib.GrassWaterEdges = new EnvEdgeSet(); }
+            if (lib.GrassBedEdges == null) { lib.GrassBedEdges = new EnvEdgeSet(); }
+            if (lib.GrassDecals == null) { lib.GrassDecals = new EnvTileSet(); }
+            if (lib.PathDecals == null) { lib.PathDecals = new EnvTileSet(); }
+            if (lib.WaterDecals == null) { lib.WaterDecals = new EnvTileSet(); }
+            if (lib.AccentDecals == null) { lib.AccentDecals = new EnvTileSet(); }
+
+            int g = WireEnvBiome(lib.GrassTiles, "grass", EnvTileVariants);
+            int p = WireEnvBiome(lib.PathTiles, "path", EnvTileVariants);
+            int w = WireEnvBiome(lib.WaterTiles, "water", EnvTileVariants);
+            int b = WireEnvBiome(lib.BedTiles, "bed", EnvBedVariants);
+            wired.Add($"Library ENV ground: grass {g}/{EnvTileVariants}, path {p}/{EnvTileVariants}, " +
+                      $"water {w}/{EnvTileVariants}, bed {b}/{EnvBedVariants} variants " +
+                      "(empty sets fall back to the flat tiles)");
+
+            int ep = WireEnvEdges(lib.GrassPathEdges, "path");
+            int ew = WireEnvEdges(lib.GrassWaterEdges, "water");
+            int eb = WireEnvEdges(lib.GrassBedEdges, "bed");
+            wired.Add($"Library ENV transitions: grass->path {ep}/15, grass->water {ew}/15, " +
+                      "grass->bed " + eb + "/15 (indexed by neighbour mask 1..15)");
+
+            int dg = WireEnvDecals(lib.GrassDecals, EnvGrassDecalArt);
+            int dp = WireEnvDecals(lib.PathDecals, EnvPathDecalArt);
+            int dw = WireEnvDecals(lib.WaterDecals, EnvWaterDecalArt);
+            int da = WireEnvDecals(lib.AccentDecals, EnvAccentDecalArt);
+            wired.Add($"Library ENV decals: grass {dg}, path {dp}, water {dw}, accent {da} " +
+                      "(rule-4 buckets — SceneBuilder never scatters one outside its biome)");
+
+            // Outlined tappable props. Every one of these keeps the world footprint of the
+            // sprite it replaces, so no collider is touched (verified in the mapping table
+            // at the top of this file).
+            lib.TreeSprites = LoadEnvProps(EnvTreeArt, EnvPropPath);
+            lib.TreeShakeSprite = LoadSprite(EnvPropPath(EnvTreeShakeArt));
+            lib.RockSprites = LoadEnvProps(EnvRockArt, EnvPropPath);
+            lib.BridgeSprites = LoadEnvProps(EnvBridgeArt, EnvDecorPath);
+            if (lib.BridgeTiles == null) { lib.BridgeTiles = new EnvTileSet(); }
+            var bridgeTiles = new TileBase[EnvBridgeArt.Length];
+            for (int i = 0; i < EnvBridgeArt.Length; i++)
+            {
+                bridgeTiles[i] = EnsureEnvTile(EnvBridgeArt[i], EnvDecorPath(EnvBridgeArt[i]));
+            }
+
+            lib.BridgeTiles.Variants = bridgeTiles;
+            lib.FenceAlongX = LoadSprite(EnvDecorPath(EnvFenceXArt));
+            lib.FenceAlongY = LoadSprite(EnvDecorPath(EnvFenceYArt));
+
+            Sprite moundSprite = LoadSprite(EnvPropPath(EnvMoundArt));
+            Sprite nestSprite = LoadSprite(EnvDecorPath(EnvNestArt));
+
+            // The RESTYLE: same Tile assets, new pixels. Identity is the tap contract.
+            bool tree = RestyleTile(lib.TreeTile, FirstOf(lib.TreeSprites));
+            bool rock = RestyleTile(lib.RockTile, FirstOf(lib.RockSprites));
+            bool bridge = RestyleTile(lib.BridgeTile, FirstOf(lib.BridgeSprites));
+            bool moundTile = RestyleTile(lib.MoundTile, moundSprite);
+
+            // Overworld mound prop + nest bowl are plain SpriteRenderer sprites: swap the
+            // library slot and every consumer (DigMound, BerrySprout's tinted base, the
+            // machine-friend blob fallback, NestController) picks the new art up unchanged.
+            if (moundSprite != null)
+            {
+                lib.MoundSprite = moundSprite;
+            }
+
+            if (nestSprite != null)
+            {
+                lib.NestSprite = nestSprite;
+            }
+
+            int propCount = (tree ? 1 : 0) + (rock ? 1 : 0) + (bridge ? 1 : 0) +
+                            (moundTile ? 1 : 0) + (moundSprite != null ? 1 : 0) +
+                            (nestSprite != null ? 1 : 0);
+            wired.Add($"Library ENV props: {propCount}/6 restyled in place " +
+                      $"(tree={tree}, rock={rock}, bridge={bridge}, moundTile={moundTile}, " +
+                      $"moundSprite={moundSprite != null}, nest={nestSprite != null}) — " +
+                      "Tile REFERENCES unchanged, so tree/rock tap routing is untouched");
+            wired.Add($"Library ENV decor: fence {(lib.FenceAlongX != null ? "X" : "-")}" +
+                      $"{(lib.FenceAlongY != null ? "Y" : "-")} " +
+                      "(canvas-compatible Kenney drop-ins), " +
+                      $"tree variants {lib.TreeSprites.Length}, shake pose " +
+                      (lib.TreeShakeSprite != null ? "present" : "absent") +
+                      $", rock variants {lib.RockSprites.Length}, bridge decks {lib.BridgeSprites.Length}");
+
+            if (!lib.HasEnvGround)
+            {
+                missing.Add($"{EnvDir}/ground (no env ground tiles wired — island stays flat)");
+            }
+        }
+
         private static void ConfigureCellFit(string rel, List<string> missing)
         {
             string p = GenPath(rel);
@@ -1249,5 +1835,7 @@ namespace DinoDigger.EditorTools
                 : $"{GenRoot}/{folder}/{stage}_{pose}_{Dir8Suffix[dir8]}.png";
         private static string Digital(string name) => $"{DigitalAudioDir}/{name}.ogg";
         private static string Iface(string name) => $"{InterfaceDir}/{name}.ogg";
+        private static string Impact(string name) => $"{ImpactDir}/{name}.ogg";
+        private static string Jingle(string name) => $"{JinglesDir}/{name}.ogg";
     }
 }

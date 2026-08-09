@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 13312, guid: 0000000000000000e000000000000000, type: 0}
   m_Name: Bridge
   m_EditorClassIdentifier: 
-  m_Sprite: {fileID: 21300000, guid: f332672bcde86408f96fd23759560492, type: 3}
+  m_Sprite: {fileID: 21300000, guid: ae4634527619e4f1c939e3bfc9553c5b, type: 3}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_Transform:
     e00: 1

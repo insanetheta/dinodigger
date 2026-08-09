@@ -265,12 +265,15 @@ namespace DinoDigger.Config
 
         [Header("Dig toys — the 'every dig has a toy' roller (DinoDigger-qhy)")]
         [Tooltip("Draw weights for the site's FEATURED toy, indexed 0 crystal cluster / " +
-                 "1 boom geode / 2 pinata pot / 3 surprise pocket. Every site gets exactly one " +
+                 "1 boom geode / 2 pinata pot / 3 surprise pocket / 4 water pocket / " +
+                 "5 gem vein / 6 bouncy mushroom / 7 dig critter. Every site gets exactly one " +
                  "featured toy GUARANTEED (the chances above then roll SECONDARY toys on top), " +
                  "and the previous site's feature is excluded from the draw so two digs in a " +
-                 "row never lead with the same treat. A zero weight benches that toy as a " +
-                 "feature without removing it from the game.")]
-        public int[] DigPrimaryToyWeights = { 3, 2, 2, 3 };
+                 "row never lead with the same treat — which, with the wave-2 toys " +
+                 "(DinoDigger-u47) in the roster, now also means a DEEPER LAYER never leads " +
+                 "with the layer above's treat. A zero weight benches that toy as a feature " +
+                 "without removing it from the game.")]
+        public int[] DigPrimaryToyWeights = { 3, 2, 2, 3, 2, 2, 2, 2 };
 
         [Header("Fossil bones (DinoDigger-0z5)")]
         [Tooltip("Chance a site buries a multi-cell bone, once every egg species is owned " +
@@ -298,6 +301,162 @@ namespace DinoDigger.Config
 
         [Tooltip("Sparkle particles the whole-bone pop throws.")]
         public int DigBoneSparkleCount = 20;
+
+        // ---- Depth layers (DinoDigger-dv1) -----------------------------------
+        // A dig is no longer one board: clear enough of the first layer and a big friendly
+        // LADDER appears at the bottom of the pit. Tapping it dips the camera and the SAME
+        // site rebuilds one stratum deeper — darker, harder, richer. Two layers is the whole
+        // ladder (the bible's "depth is time" without ever becoming a grind), and every knob
+        // that says how much deeper is deeper lives here so it can be judged by eye.
+        [Header("Dig depth layers (DinoDigger-dv1)")]
+        [Tooltip("How many strata one dig site can have. 2 = the shipped ladder (surface + " +
+                 "one deep layer). 1 disables the ladder entirely without removing the code.")]
+        public int DigDepthLayers = 2;
+
+        [Tooltip("Fraction of the layer's tiles that must be CLEARED before the ladder down " +
+                 "appears. 0.6 = a bit more than half the board — far enough in that the child " +
+                 "has committed to this dig, early enough that they still have digging left.")]
+        public float DigLadderRevealFraction = 0.6f;
+
+        [Tooltip("Colour MULTIPLY applied to the dirt tiles for each layer below the first. " +
+                 "Deliberately a cool shade rather than a black: deep must read as older and " +
+                 "quieter, never as dark-and-scary (that is also why Glow ships with it).")]
+        public Color DigDeepDirtMultiply = new Color(0.62f, 0.63f, 0.78f, 1f);
+
+        [Tooltip("Colour MULTIPLY applied to the dig backdrop for each layer below the first.")]
+        public Color DigDeepBackgroundMultiply = new Color(0.52f, 0.55f, 0.72f, 1f);
+
+        [Tooltip("Added to every tile's rolled hardness per layer below the first (clamped to " +
+                 "a sane 1..6). Deeper dirt is older dirt.")]
+        public int DigDeepHardnessBonus = 1;
+
+        [Tooltip("Extra crystal clusters rolled per deep layer — the visible half of 'richer'.")]
+        public int DigDeepCrystalClusterBonus = 1;
+
+        [Tooltip("Added to each SECONDARY toy chance (geode, pot, water, vein, mushroom) per " +
+                 "deep layer, clamped to 1. Deep boards are busier boards.")]
+        public float DigDeepToyChanceBonus = 0.2f;
+
+        [Tooltip("Multiplier on every coin a TOY pays on a deep layer (crystal blobs, pots, " +
+                 "veins, critters). The 'bigger treasure' half of the depth promise.")]
+        public float DigDeepCoinMultiplier = 2f;
+
+        [Tooltip("Multiplier on the TREASURE weight of the buried-loot roll on a deep layer, " +
+                 "so what the child digs up down there is worth more too.")]
+        public float DigDeepTreasureWeightMultiplier = 2f;
+
+        [Tooltip("Added to DigBoneSiteChance per deep layer (clamped to 1): bones are the deep " +
+                 "layer's headline, so a deep stratum should essentially always bury one.")]
+        public float DigDeepBoneChanceBonus = 0.5f;
+
+        [Tooltip("Seconds the camera takes to dip down and back as the ladder is taken. The " +
+                 "new layer is built at the BOTTOM of the dip, so the child sees the change " +
+                 "happen rather than being teleported into it.")]
+        public float DigLadderDipSeconds = 0.6f;
+
+        [Tooltip("World units the camera dips while descending.")]
+        public float DigLadderDipUnits = 1.6f;
+
+        // ---- Mega-fossil sites (DinoDigger-84f) -------------------------------
+        [Header("Mega-fossil sites (DinoDigger-84f)")]
+        [Tooltip("Chance a (re)spawning mound is a MEGA-FOSSIL site: a skull-marked mound that " +
+                 "opens a big 7x9 pit burying an ENTIRE remaining skeleton. Gated behind the " +
+                 "same all-egg-species rule bones are, so it can never appear in the early game.")]
+        public float DigMegaFossilChance = 0.12f;
+
+        [Tooltip("PITY. If the skeleton board still has an incomplete species and the child has " +
+                 "not seen a mega-fossil site yet this session, the Nth mound rolled is one " +
+                 "GUARANTEED. A rare event a child might never meet is not an event.")]
+        public int DigMegaFossilPityMounds = 6;
+
+        [Tooltip("Grid size of a mega-fossil dig (the normal site is DigRows x DigColumns). " +
+                 "Big enough to lay a whole six-bone skeleton out with room to dig between the " +
+                 "pieces.")]
+        public int DigMegaRows = 7;
+        public int DigMegaColumns = 9;
+
+        [Tooltip("Camera ortho size for a mega-fossil dig — the bigger pit needs a wider frame.")]
+        public float DigMegaOrthoSize = 5.8f;
+
+        // ---- Wave 2 dig toys (DinoDigger-u47) ---------------------------------
+        [Header("Dig toys — wave 2: water / critter / vein / mushroom (DinoDigger-u47)")]
+        [Tooltip("Chance a site hides a WATER POCKET: cracking it gushes down its column, " +
+                 "washing the remaining hardness off every tile below and floating buried loot " +
+                 "one row up toward the surface.")]
+        public float DigWaterPocketChance = 0.3f;
+
+        [Tooltip("Seconds the gush takes to run down the column. The LOGIC lands on the " +
+                 "cracking frame (so nothing can wedge); this is purely how long the splash " +
+                 "takes to travel.")]
+        public float DigWaterGushSeconds = 0.6f;
+
+        [Tooltip("Splash particles per washed tile.")]
+        public int DigWaterSplashCount = 10;
+
+        [Tooltip("Chance a cleared tile releases a DIG CRITTER — a glowbug that scurries from " +
+                 "tile to tile and pays a coin if the child can catch it.")]
+        public float DigCritterChance = 0.12f;
+
+        [Tooltip("Most critters loose in one dig at a time. They never block anything, but a " +
+                 "swarm would compete with the digging itself.")]
+        public int DigCritterMax = 2;
+
+        [Tooltip("Seconds between a critter's scurries from one tile to the next.")]
+        public float DigCritterHopSeconds = 1.5f;
+
+        [Tooltip("Seconds an uncaught critter stays out before it burrows away. Missing one is " +
+                 "never a loss — there is always another.")]
+        public float DigCritterLifeSeconds = 10f;
+
+        [Tooltip("Coins a caught critter giggles out.")]
+        public int DigCritterCoins = 2;
+
+        [Tooltip("Chance a site hides a GEM VEIN: a connected run of gem cells that chain-pops " +
+                 "segment by segment when either end is hit.")]
+        public float DigGemVeinChance = 0.3f;
+
+        [Tooltip("Cells in one gem vein (inclusive). Always a connected run, so a single hit " +
+                 "always takes the whole thing.")]
+        public int DigGemVeinMin = 3;
+        public int DigGemVeinMax = 5;
+
+        [Tooltip("Seconds between vein SEGMENTS popping as the spark travels along the run.")]
+        public float DigGemVeinStaggerSeconds = 0.12f;
+
+        [Tooltip("Coins one vein segment pays.")]
+        public int DigGemVeinCoinsPerSegment = 1;
+
+        [Tooltip("Chance a site hides a BOUNCY MUSHROOM: the arm's first bite boings off it " +
+                 "(no damage, big squash) and flings dirt, clearing 1-2 random neighbours " +
+                 "instead. The second bite pops the mushroom itself.")]
+        public float DigMushroomChance = 0.3f;
+
+        [Tooltip("Neighbouring tiles a boing flings loose (inclusive range).")]
+        public int DigMushroomFlingMin = 1;
+        public int DigMushroomFlingMax = 2;
+
+        [Tooltip("How far the mushroom squashes on a boing, and for how long. Big and springy " +
+                 "on purpose — the squash IS the joke.")]
+        public float DigMushroomSquash = 0.5f;
+        public float DigMushroomSquashSeconds = 0.4f;
+
+        // ---- Glow the lantern bot (DinoDigger-6tc) -----------------------------
+        [Header("Glow the lantern bot (DinoDigger-6tc)")]
+        [Tooltip("Peek alpha a buried outline is lifted to inside Glow's beam. The baseline " +
+                 "buried hint is 0.55, so anything above that reads as 'the lamp found this'.")]
+        public float DigGlowPeekAlpha = 0.85f;
+
+        [Tooltip("Peek alpha for the 3-cell cone Glow throws ONE TILE AHEAD of a crack — the " +
+                 "preview that turns a dig tap into a choice. Softer than the beam itself.")]
+        public float DigGlowConePeekAlpha = 0.7f;
+
+        [Tooltip("Seconds between Glow's belly-beam sweeps (it re-aims at the deepest uncleared " +
+                 "part of the pit).")]
+        public float DigGlowSweepSeconds = 0.5f;
+
+        [Tooltip("Body alpha Glow dims to on the bright first layer, where it has no work to " +
+                 "do — a cute night-light idle rather than a switched-off machine.")]
+        public float DigGlowDimAlpha = 0.55f;
 
         [Header("Movement")]
         public float BackhoeSpeed = 3.5f;
@@ -577,6 +736,48 @@ namespace DinoDigger.Config
             }
         }
 
+        /// <summary>The gem-vein length range, clamped to [2,8] with min &lt;= max. Two is the
+        /// floor for the same reason a cluster's is: a one-cell "vein" has nothing to chain.</summary>
+        public void GetGemVeinRange(out int min, out int max)
+        {
+            min = Mathf.Clamp(DigGemVeinMin, 2, 8);
+            max = Mathf.Clamp(DigGemVeinMax, 2, 8);
+            if (max < min)
+            {
+                max = min;
+            }
+        }
+
+        /// <summary>How many neighbours one mushroom boing flings loose, clamped to [1,4] with
+        /// min &lt;= max — a boing ALWAYS clears something (that is the whole payoff of a bite
+        /// that deals no damage), and never enough to read as a geode.</summary>
+        public void GetMushroomFlingRange(out int min, out int max)
+        {
+            min = Mathf.Clamp(DigMushroomFlingMin, 1, 4);
+            max = Mathf.Clamp(DigMushroomFlingMax, 1, 4);
+            if (max < min)
+            {
+                max = min;
+            }
+        }
+
+        /// <summary>Grid size for a dig site: the mega-fossil pit when <paramref name="mega"/>,
+        /// else the normal board. The normal board keeps its historical 4-6 row clamp; a mega
+        /// site is deliberately allowed to be bigger (it has a whole skeleton to lay out) and is
+        /// clamped only against absurdity.</summary>
+        public void GetDigGridSize(bool mega, out int rows, out int cols)
+        {
+            if (mega)
+            {
+                rows = Mathf.Clamp(DigMegaRows, 5, 12);
+                cols = Mathf.Clamp(DigMegaColumns, 5, 14);
+                return;
+            }
+
+            rows = Mathf.Clamp(DigRows, 4, 6);
+            cols = Mathf.Max(3, DigColumns);
+        }
+
         // ----- Derived helpers -----
 
         /// <summary>Coins banked when the treasure <paramref name="variant"/> is collected
@@ -790,5 +991,52 @@ namespace DinoDigger.Config
 
             return Dinos.Count > 0 ? Dinos[0] : null;
         }
+
+        // ======================================================================= ENV
+        // Environment dressing (DinoDigger-y1g). Append-only region: everything the
+        // Jurassic-earth ground/decal pass needs to be TUNED lives here, and nothing
+        // else in this file references it. Read by SceneBuilder at build time only —
+        // no runtime system consults these, and none of them can affect walkability,
+        // colliders or spawn logic (the dressing only chooses which equally-walkable
+        // tile asset is painted, plus a purely decorative decal layer).
+        //
+        // Defaults mirror EnvDressing's, which in turn mirror the density grammar the
+        // art's own approved contact sheet was composed with.
+
+        [Header("ENV dressing (DinoDigger-y1g)")]
+        [Tooltip("Master switch for the environment dressing pass. Off = SceneBuilder " +
+                 "paints the flat placeholder tiles exactly as it did before the env set " +
+                 "landed (the guaranteed no-regression path).")]
+        public bool EnvDressingEnabled = true;
+
+        [Range(0f, 1f)]
+        [Tooltip("Chance a plain grass cell gets a fern/moss/clover decal.")]
+        public float EnvGrassDecalChance = EnvDressing.DefaultGrassDecalChance;
+
+        [Range(0f, 1f)]
+        [Tooltip("Chance a path cell gets a footprints/pebbles decal.")]
+        public float EnvPathDecalChance = EnvDressing.DefaultPathDecalChance;
+
+        [Range(0f, 1f)]
+        [Tooltip("Chance a water cell gets a lily decal.")]
+        public float EnvWaterDecalChance = EnvDressing.DefaultWaterDecalChance;
+
+        [Range(0f, 1f)]
+        [Tooltip("Share of path decals that are the RARE warm-stone accent rather than " +
+                 "the everyday footprints/pebbles (style rule 4: clusters, not carpets).")]
+        public float EnvAccentShare = EnvDressing.DefaultAccentShare;
+
+        /// <summary>The decal density for a biome, or 0 for biomes that take no scatter.</summary>
+        public float EnvDecalChance(EnvBiome biome)
+        {
+            switch (biome)
+            {
+                case EnvBiome.Grass: return EnvGrassDecalChance;
+                case EnvBiome.Path: return EnvPathDecalChance;
+                case EnvBiome.Water: return EnvWaterDecalChance;
+                default: return 0f;
+            }
+        }
+        // =================================================================== end ENV
     }
 }

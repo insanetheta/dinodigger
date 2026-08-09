@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using DinoDigger.Config;
 using DinoDigger.Core;
+using DinoDigger.Managers;    // AudioManager (dig audio hooks)
 using DinoDigger.Overworld;   // ItemPickup (Big Bone value override)
 
 namespace DinoDigger.Dig
@@ -285,9 +286,26 @@ namespace DinoDigger.Dig
         // site, so "the pocket is this site's feature" means the crystals/geode/pot are left to
         // the secondary rolls and the mystery tile carries the dig. That is a real texture
         // difference, not a null result.
-        private enum PrimaryToy { CrystalCluster = 0, Geode = 1, Pot = 2, Pocket = 3 }
-        private const int PrimaryToyCount = 4;
-        private static readonly int[] FallbackPrimaryWeights = { 3, 2, 2, 3 };
+        //
+        // WAVE 2 (DinoDigger-u47) widened the roster from four to eight. Nothing about the
+        // roller changed: a wider roster makes the no-repeat rule STRONGER (eight ways for two
+        // digs in a row to differ instead of four), and because a deeper layer rebuilds through
+        // the same generation path, the guarantee and the no-repeat rule now hold PER LAYER —
+        // descending a ladder is a fresh draw that still refuses to repeat the layer above.
+        private enum PrimaryToy
+        {
+            CrystalCluster = 0,
+            Geode = 1,
+            Pot = 2,
+            Pocket = 3,
+            Water = 4,
+            Vein = 5,
+            Mushroom = 6,
+            Critter = 7,
+        }
+
+        private const int PrimaryToyCount = 8;
+        private static readonly int[] FallbackPrimaryWeights = { 3, 2, 2, 3, 2, 2, 2, 2 };
 
         // The last site's feature, remembered ACROSS SITES for the whole session (static, like
         // _lastSurprise) and ALSO across sessions: GameManager mirrors it into SaveData (stored
@@ -936,6 +954,8 @@ namespace DinoDigger.Dig
             _found.Clear();
             _crewBuddies = null;
             _theme = theme;
+            ResetDepthForNewSite(); // a hand-built site is a SURFACE site (TestDescend goes deeper)
+            _mega = false;
             BuildGrid();
         }
 
@@ -954,14 +974,24 @@ namespace DinoDigger.Dig
         /// <paramref name="theme"/> is the mound's rolled dig postcard (null = the flat
         /// default look/weights); <paramref name="buddies"/> is the walk roster that came
         /// along (up to two), which staffs the Buddy Dig Crew and its superpowers. A null
-        /// or empty list = no helpers shown (the old no-buddy behavior).</summary>
-        public void Open(DigTheme theme, IReadOnlyList<DigBuddy> buddies)
+        /// or empty list = no helpers shown (the old no-buddy behavior).
+        /// <paramref name="mega"/> opens the mound's rare MEGA-FOSSIL variant (DinoDigger-84f):
+        /// a much bigger pit burying an entire remaining skeleton. Optional, so every existing
+        /// caller and test opens an ordinary site exactly as before.</summary>
+        public void Open(DigTheme theme, IReadOnlyList<DigBuddy> buddies, bool mega = false)
         {
             _open = true;
             _finished = false;
             _found.Clear();
             _crewBuddies = buddies;
             _theme = theme;
+
+            // A dig always starts at the surface (DinoDigger-dv1) — the ladder is EARNED, never
+            // inherited from the last site the child was in, and neither is the descent
+            // bookkeeping that goes with it.
+            ResetDepthForNewSite();
+            _mega = mega;
+
             BuildGrid();
             GameEvents.RaiseDigModeEntered();
         }
@@ -984,6 +1014,16 @@ namespace DinoDigger.Dig
             _activeTile = null;
             _arm = ArmState.Idle;
             _siteGeneration++; // retire this site's in-flight cascades (see _siteGeneration)
+
+            // The site's own props go with it: the ladder and the critters belong to a board,
+            // and Glow belongs to the SITE (its woken flag is in the save, so the next dig
+            // rebuilds it already awake — see RefreshGlow).
+            RemoveLadder();
+            ClearCritters();
+            DespawnGlow();
+            ResetDepthForNewSite();
+            _mega = false;
+
             ClearGrid();
             _crew.Clear();
             _crewBuddies = null;
@@ -1005,14 +1045,17 @@ namespace DinoDigger.Dig
             ClearGrid();
             _siteGeneration++; // any cascade still in flight from the last site is now stale
 
-            _rows = _config != null ? Mathf.Clamp(_config.DigRows, 4, 6) : 5;
-            _cols = _config != null ? Mathf.Max(3, _config.DigColumns) : 7;
+            // Grid size is the SITE's, not the config's alone: a mega-fossil dig (DinoDigger-84f)
+            // opens a much bigger pit because it has a whole skeleton to lay out.
+            ResolveGridSize(out _rows, out _cols);
 
             _grid = new DirtTile[_rows, _cols];
             Vector3 origin = _root != null ? _root.position : transform.position;
 
-            Color dirtTint = _theme != null ? _theme.DirtTint : Color.white;
-            ApplyBackgroundTint(_theme != null ? _theme.BackgroundTint : Color.white);
+            // DEPTH (DinoDigger-dv1): the theme's own tints, then one multiply per layer below
+            // the surface. Deep is cooler and quieter, never black — see LayerDirtTint.
+            Color dirtTint = LayerDirtTint(_theme != null ? _theme.DirtTint : Color.white);
+            ApplyBackgroundTint(LayerBackgroundTint(_theme != null ? _theme.BackgroundTint : Color.white));
 
             float halfW = (_cols - 1) * 0.5f;
 
@@ -1045,6 +1088,14 @@ namespace DinoDigger.Dig
             _boneAssigned = false;
             _bonesPopped = 0;
             _boneCellsUncovered = 0;
+
+            // Per-layer props + tallies for the wave-2 toys (DinoDigger-u47), the ladder
+            // (DinoDigger-dv1) and Glow (DinoDigger-6tc). A LAYER is a board: its critters and
+            // its ladder belong to it and go with it, while Glow — a friend, not furniture —
+            // survives the rebuild and is re-seated by RefreshGlow at the end.
+            ResetWave2Counters();
+            ClearCritters();
+            RemoveLadder();
 
             for (int r = 0; r < _rows; r++)
             {
@@ -1084,6 +1135,12 @@ namespace DinoDigger.Dig
             RefreshBonePeeks();
             PlaceBackhoe(origin, halfW);
 
+            // Glow is re-seated LAST, once every other layer has claimed its cells: an awake
+            // lantern re-perches on the new board and a sleeping one hides behind one of its
+            // tiles, which is what makes "Glow follows you down the ladder" true without the
+            // descent knowing anything about machines (DinoDigger-6tc).
+            RefreshGlow();
+
             // Stegosaurus "treasure map": once at the start of the round, every buried
             // peek flashes bright and settles a little brighter than the default hint.
             Crew stego = FindCrew(DinoType.Stegosaurus);
@@ -1113,15 +1170,23 @@ namespace DinoDigger.Dig
         /// invert the reward curve. No theme active = the flat DirtHealth (legacy, unchanged).</summary>
         private int RollTileHardness()
         {
+            int rolled;
             if (_theme == null)
             {
-                return _config != null ? _config.DirtHealth : 3;
+                rolled = _config != null ? _config.DirtHealth : 3;
+            }
+            else
+            {
+                _theme.GetTapRange(out int min, out int max);
+                int a = Random.Range(min, max + 1);
+                int b = Random.Range(min, max + 1);
+                rolled = Mathf.Min(a, b);
             }
 
-            _theme.GetTapRange(out int min, out int max);
-            int a = Random.Range(min, max + 1);
-            int b = Random.Range(min, max + 1);
-            return Mathf.Min(a, b);
+            // DEPTH (DinoDigger-dv1): deeper dirt is older dirt. Clamped at 6 so even a badly
+            // configured stack of layers can never turn a tile into a chore — the generosity cap
+            // the theme range already respects, held one layer further out.
+            return Mathf.Clamp(rolled + LayerHardnessBonus(), 1, 6);
         }
 
         /// <summary>Tint the full-bleed dig backdrop for the active theme. Resolves the
@@ -1497,7 +1562,19 @@ namespace DinoDigger.Dig
                     // clears this cell (and eight more) when the fuse burns down.
                     t.Damage();
                     return;
+
+                case DigTileKind.Vein:
+                    // The whole connected run, not just this segment — and the LOGICAL half, so a
+                    // caller clearing several cells still settles exactly once at the end. (The
+                    // chain clears its segments directly rather than back through here, which is
+                    // what stops a vein from re-entering its own spark.)
+                    PopGemVeinLogical(t, cause);
+                    return;
             }
+
+            // A BOUNCY MUSHROOM is deliberately NOT special-cased here: the damage loop below
+            // hits it twice, its first hit is eaten by the boing (which flings its neighbours)
+            // and the second pops it — exactly what a bite does, in exactly the same order.
 
             int guard = 0;
             while (!t.IsDestroyed && guard++ < 8)
@@ -1808,10 +1885,16 @@ namespace DinoDigger.Dig
 
             PlacePrimaryToy();
 
+            // DEPTH (DinoDigger-dv1): a deeper layer is a RICHER layer, and it says so through
+            // the same secondary rolls the surface uses — more clusters, better odds on
+            // everything else — rather than through a second generation path.
+            float toyBonus = LayerToyChanceBonus();
+
             float crystalChance = _config != null ? Mathf.Clamp01(_config.DigCrystalSiteChance) : 0.65f;
-            if (Random.value < crystalChance)
+            if (Random.value < Mathf.Clamp01(crystalChance + toyBonus))
             {
                 int clusters = _config != null ? Mathf.Clamp(_config.DigCrystalClusterCount, 0, 4) : 2;
+                clusters += LayerCrystalClusterBonus();
                 int colors = _lib != null ? Mathf.Max(1, _lib.CrystalColorCount) : 3;
                 int min = 3;
                 int max = 6;
@@ -1824,18 +1907,23 @@ namespace DinoDigger.Dig
             }
 
             float geodeChance = _config != null ? Mathf.Clamp01(_config.DigGeodeChance) : 0.3f;
-            if (Random.value < geodeChance)
+            if (Random.value < Mathf.Clamp01(geodeChance + toyBonus))
             {
                 DirtTile t = RandomPlainTile();
                 t?.SetKind(DigTileKind.Geode, 0);
             }
 
             float potChance = _config != null ? Mathf.Clamp01(_config.DigPotChance) : 0.35f;
-            if (Random.value < potChance)
+            if (Random.value < Mathf.Clamp01(potChance + toyBonus))
             {
                 DirtTile t = RandomPlainTile();
                 t?.SetKind(DigTileKind.Pot, 0);
             }
+
+            // Wave 2 (DinoDigger-u47): the water pocket, the gem vein and the bouncy mushroom
+            // roll as secondaries exactly like the three above. (The critter is not a cell, so
+            // it only ever arrives as this site's FEATURE or out of a cleared tile.)
+            PlaceWave2SecondaryToys();
         }
 
         // ----- The toy roller: the anti-dull guarantee (DinoDigger-qhy) -----
@@ -1965,8 +2053,14 @@ namespace DinoDigger.Dig
                     return true;
                 }
 
-                default:
+                case PrimaryToy.Pocket:
                     return RandomPlainTile() != null;
+
+                // Wave 2 (DinoDigger-u47) — the water pocket, the vein, the mushroom and the
+                // critter place themselves through their own helpers, and report a refusal the
+                // same way the three above do so the roller can walk on to the next entry.
+                default:
+                    return TryPlacePrimaryWave2((PrimaryToy)k);
             }
         }
 
@@ -2124,6 +2218,11 @@ namespace DinoDigger.Dig
             float egg = _theme != null ? _theme.EggWeight : _config.EggWeight;
             float fruit = _theme != null ? _theme.FruitWeight : _config.FruitWeight;
             float treasure = _theme != null ? _theme.TreasureWeight : _config.TreasureWeight;
+
+            // DEPTH (DinoDigger-dv1): older strata hold the better stuff, so the TREASURE weight
+            // is multiplied per layer. Eggs and fruit are untouched — depth makes the loot
+            // richer, it never makes the everyday finds rarer in absolute terms.
+            treasure *= LayerTreasureWeightMultiplier();
 
             // THE EGG NERF. Once every egg species is owned an egg has no dinosaur left to
             // contain, so most of its weight is freed. It used to become egg SHARDS for the
@@ -2306,7 +2405,7 @@ namespace DinoDigger.Dig
             }
 
             SpawnPitBurst(at, new Color(1f, 0.85f, 0.3f), 26);
-            gm.Audio?.Chime();
+            gm.Audio?.Giggle();   // the pocket's actual giggle, not the generic chime it borrowed
 
             for (int i = 0; i < GiggleCoins; i++)
             {
@@ -2490,8 +2589,18 @@ namespace DinoDigger.Dig
                 return;
             }
 
+            // A MEGA-FOSSIL SITE (DinoDigger-84f) does not roll a bone: it buries the whole rest
+            // of the skeleton, which is the entire reason the child came.
+            if (_mega)
+            {
+                PlaceMegaSkeleton();
+                return;
+            }
+
+            // DEPTH (DinoDigger-dv1): bones are the deep layer's headline, so the chance takes
+            // the layer bonus. Clamped at 1 — a deep stratum essentially always buries one.
             float chance = _config != null ? Mathf.Clamp01(_config.DigBoneSiteChance) : 1f;
-            if (Random.value >= chance)
+            if (Random.value >= Mathf.Clamp01(chance + LayerBoneChanceBonus()))
             {
                 return;
             }
@@ -2771,7 +2880,7 @@ namespace DinoDigger.Dig
 
             Vector3 at = BoneCenter(b);
             GameManager gm = GameManager.Instance;
-            gm?.Audio?.ItemPop();
+            gm?.Audio?.BonePop();   // a whole bone is a bigger find than a loose item
 
             int sparkles = _config != null ? Mathf.Clamp(_config.DigBoneSparkleCount, 0, 60) : 20;
             SpawnPitBurst(at, BonePeekTint, sparkles);
@@ -2792,6 +2901,10 @@ namespace DinoDigger.Dig
             {
                 TileAt(b.Rows[k], b.Cols[k])?.ClearBonePeek();
             }
+
+            // On a MEGA-FOSSIL SITE the skeleton is what the round is FOR, so the last bone out
+            // can be the thing that ends it (DinoDigger-84f). No-op on an ordinary site.
+            MaybeFinishMegaRound();
         }
 
         /// <summary>The assembled bone rising out of the pit. All of its motion is on GameConfig
@@ -2833,6 +2946,9 @@ namespace DinoDigger.Dig
             float rattleTime = _config != null ? Mathf.Clamp(_config.DigBoneRattleSeconds, 0.05f, 3f) : 0.55f;
             float hold = _config != null ? Mathf.Clamp(_config.DigBoneHoldSeconds, 0f, 4f) : 0.8f;
 
+            // The rattle you SEE now also rattles: a dry wooden knock under the shake, so the
+            // bone reads as a hard object rather than a sprite wobbling.
+            GameManager.Instance?.Audio?.BoneRattle();
             Tween.ShakeRotation(go.transform, rattle, rattleTime);
             Tween.MoveTo(go.transform, at + new Vector3(0f, height, 0f), rise, () =>
             {
@@ -3014,7 +3130,10 @@ namespace DinoDigger.Dig
 
             _crystalBlobs++;
             _lastBlobSize = count;
-            GameManager.Instance?.Audio?.Chime();
+
+            // Bigger blobs get the fatter, lower pop, so the size of the find is audible before
+            // the coins land. A single crystal keeps the small glass tink.
+            GameManager.Instance?.Audio?.CrystalPop(count > 1);
             PayToyCoins(_config != null ? _config.DigCrystalCoins(count) : count);
             return count;
         }
@@ -3193,7 +3312,9 @@ namespace DinoDigger.Dig
                 return;
             }
 
-            GameManager.Instance?.Audio?.Chime();
+            // The fuse is lit: a soft fizz that runs while the geode counts down, so the child
+            // gets a warning beat before the whumph rather than a bang out of nowhere.
+            GameManager.Instance?.Audio?.FuseSizzle();
             SpawnPitBurst(geode.transform.position, new Color(0.75f, 0.95f, 1f), 10);
             Tween.PunchScale(geode.transform, 0.22f, 0.22f);
 
@@ -3212,7 +3333,9 @@ namespace DinoDigger.Dig
         }
 
         /// <summary>The whumph: a soft 3x3 clear centred on the geode, with a dust ring, a tiny
-        /// camera nudge and a giggle hook for the audio pass.
+        /// camera nudge, and the two-part sound the moment is named for — a muffled thud
+        /// immediately, then a delighted giggle on the tail, so the blast reads as funny rather
+        /// than frightening.
         ///
         /// The centre is read from the geode's CURRENT row/col, not from where it was when the
         /// fuse was lit — a geode that fell during its own fuse blows up where it actually is.
@@ -3227,7 +3350,12 @@ namespace DinoDigger.Dig
             _geodeBooms++;
 
             GameManager gm = GameManager.Instance;
-            gm?.Audio?.Roar();      // AUDIO HOOK: the dig pass swaps in a soft whumph + giggle
+
+            // Soft whumph on the beat, giggle a moment later: the laugh has to arrive AFTER the
+            // thud or the two mask each other and the joke lands as noise.
+            gm?.Audio?.Whumph();
+            Tween.After(0.18f, () => GameManager.Instance?.Audio?.Giggle());
+
             gm?.DigShakeCamera(
                 _config != null ? _config.DigGeodeShakeAmplitude : 0.09f,
                 _config != null ? _config.DigGeodeShakeSeconds : 0.28f);
@@ -3283,12 +3411,21 @@ namespace DinoDigger.Dig
             int min = 5;
             int max = 8;
             _config?.GetPotCoinRange(out min, out max);
-            int coins = Random.Range(min, max + 1);
+            // DEPTH (DinoDigger-dv1): a pot broken in the deep sprays proportionally more. The
+            // pot banks coin-by-coin from its own fountain rather than through PayToyCoins, so
+            // the multiplier is applied to the ROLL — the spectacle and the wallet still agree
+            // exactly, which is the one invariant the pot case asserts.
+            int coins = Mathf.Max(1, Mathf.RoundToInt(Random.Range(min, max + 1) * LayerCoinMultiplier()));
             _potsBroken++;
             _lastPotCoins = coins;
 
             Vector3 at = pot != null ? pot.transform.position : _origin;
-            gm.Audio?.ItemPop();
+
+            // Two beats, not one: the pot gives way (tin knock), then the coins fan out on a
+            // pizzicato flourish timed to the arc so the jingle rides the coins rather than
+            // preceding them.
+            gm.Audio?.PotCrack();
+            Tween.After(0.1f, () => GameManager.Instance?.Audio?.CoinSpray());
             SpawnPitBurst(at, new Color(1f, 0.85f, 0.4f), 20);
 
             float arc = _config != null ? Mathf.Clamp(_config.DigPotCoinArcSeconds, 0.1f, 2f) : 0.55f;
@@ -3377,7 +3514,10 @@ namespace DinoDigger.Dig
         /// timed to its own landing.</summary>
         private void PayToyCoins(int coins)
         {
-            coins = Mathf.Max(0, coins);
+            // DEPTH (DinoDigger-dv1): the deeper the layer, the bigger the treasure. Applied at
+            // the single point every non-pot toy payout passes through, so a new toy is richer
+            // at depth without ever having to know that depth exists.
+            coins = Mathf.RoundToInt(Mathf.Max(0, coins) * LayerCoinMultiplier());
             _toyCoins += coins;
             if (coins <= 0 || GameManager.Instance == null)
             {
@@ -3430,8 +3570,21 @@ namespace DinoDigger.Dig
                 SprayPotCoins(t);
             }
 
+            // A WATER POCKET bursts here for exactly the same reason (DinoDigger-u47): this is
+            // the one place every "that tile is gone" path meets, so the column gets washed
+            // whether the child cracked it, a crew power took it, or a falling rock did.
+            if (t.Kind == DigTileKind.Water)
+            {
+                GushWaterColumn(t, cause);
+            }
+
             _clearCause = cause;
             CollectIfBuried(t);
+
+            // ...and a cleared tile is where a DIG CRITTER was hiding. Rolled at the chokepoint
+            // so any way of clearing a tile can release one; it joins nothing, blocks nothing and
+            // gates nothing (see DigCritter).
+            MaybeSpawnCritter(t);
 
             // BONES (DinoDigger-0z5) are booked here, at the vacate chokepoint, so a cell
             // uncovered in the MIDDLE of a cascade counts the moment it happens rather than
@@ -3542,6 +3695,17 @@ namespace DinoDigger.Dig
             {
                 RefreshBonePeeks();
                 UpdateBones();
+
+                // THE BOARD HAS STOPPED MOVING — the one moment everything that reads the whole
+                // board gets to look at it. All three are pure reads-and-reacts (nothing here
+                // clears a tile, so none of them can re-enter the settle they are riding):
+                //   the LADDER (DinoDigger-dv1) checks whether this layer has been dug out
+                //     enough to earn the way down;
+                //   GLOW (DinoDigger-6tc) checks whether the tile it sleeps behind came away,
+                //     and re-aims its beam at the new deepest cell.
+                MaybeRevealLadder();
+                MaybeRevealGlow();
+                ApplyGlowLight();
             }
 
             _settlePasses = passes;
@@ -3628,7 +3792,15 @@ namespace DinoDigger.Dig
         /// get crushed by falling dirt, and it would leave the pit through a path that pays no
         /// coins. Crystal is hard: dirt lands ON it and stops. It only ever leaves by a tap, an
         /// auto-pop or a geode. (A PINATA POT is deliberately NOT exempt: getting cracked open by
-        /// a falling rock is a lovely accident and it still sprays its coins.)</summary>
+        /// a falling rock is a lovely accident and it still sprays its coins.)
+        ///
+        /// A WASHED TILE is exempt for the same reason as a crystal (DinoDigger-u47). A water
+        /// pocket softens the column below it to ONE remaining hit, and the gush's own collapse
+        /// lands on that column a heartbeat later — so without this the water would finish the
+        /// very tiles it had just softened, which inverts the whole toy: water softens, it never
+        /// digs, and the child always gets the last tap. The exemption lasts exactly as long as
+        /// the softening does (see <see cref="DirtTile.IsWashed"/>): one real hit spends it and
+        /// the tile is ordinary again.</summary>
         private void ApplyLandingCracks(int gen)
         {
             for (int i = 0; i < _landings.Count; i++)
@@ -3640,7 +3812,7 @@ namespace DinoDigger.Dig
 
                 DirtTile victim = _landings[i].Victim;
                 if (victim == null || victim.IsDestroyed || victim.IsSurprise ||
-                    victim.Kind == DigTileKind.Crystal)
+                    victim.Kind == DigTileKind.Crystal || victim.IsWashed)
                 {
                     continue;
                 }
@@ -3697,9 +3869,10 @@ namespace DinoDigger.Dig
             ps.Emit(count);
         }
 
-        /// <summary>Soft landing thump. AUDIO HOOK: the dig audio pass gives falls their own low
-        /// "whump"; until then a landing borrows the crumble sample, throttled to one per beat so
-        /// a ten-tile cascade lands as one thud rather than a rattle.</summary>
+        /// <summary>Soft landing thump: falls have their own low "whump" (Kenney impactSoft_heavy),
+        /// throttled to one per <see cref="ThumpGap"/> so a ten-tile cascade lands as one thud
+        /// rather than a rattle. The throttle lives here rather than in AudioManager because it is
+        /// a property of the cascade, not of the sample.</summary>
         private void PlayThump()
         {
             if (Time.time - _lastThump < ThumpGap)
@@ -3708,7 +3881,7 @@ namespace DinoDigger.Dig
             }
 
             _lastThump = Time.time;
-            GameManager.Instance?.Audio?.Crumble();
+            GameManager.Instance?.Audio?.LandingThump();
         }
 
         // ----- Tap handling -----
@@ -3769,8 +3942,37 @@ namespace DinoDigger.Dig
                 return;
             }
 
+            // A GEM VEIN tap is its own resolution too (DinoDigger-u47): the bucket's bite sparks
+            // the whole connected run, popping segment by segment and paying per segment. Same
+            // shape as the crystal branch above, for the same reason — the tap always wins, it
+            // just wins along a line instead of across a colour.
+            if (tile.Kind == DigTileKind.Vein)
+            {
+                PopGemVein(tile, "gem vein tap");
+                FireCrewPowers(tile);
+                return;
+            }
+
             bool destroyed = tile.Damage();
-            GameManager.Instance?.Audio?.Crumble();
+
+            // A bite that BREAKS the tile and a bite that only marks it are different events and
+            // now sound like it: the survivor gets one of three rotating cracks, the kill gets the
+            // crumble. A pot is special-cased because its first hit is the visible "pot cracked"
+            // beat (RefreshSprite swaps in the cracked art) and wants the tin knock, not a
+            // pickaxe-on-rock crack.
+            AudioManager audio = GameManager.Instance?.Audio;
+            if (destroyed)
+            {
+                audio?.Crumble();
+            }
+            else if (tile.Kind == DigTileKind.Pot)
+            {
+                audio?.PotCrack();
+            }
+            else
+            {
+                audio?.TileCrack();
+            }
 
             // VACATE BEFORE ANY FALL. The bite's own clear is booked first (and without
             // settling): the T-Rex clear below picks its neighbour from the live grid, and a
@@ -3863,7 +4065,12 @@ namespace DinoDigger.Dig
                 SwoopPteranodon(ptero, tile.transform.position);
             }
 
-            if (_buried.Count == 0)
+            // A MEGA-FOSSIL SITE (DinoDigger-84f) does not end when its loot runs out: it ends
+            // when the SKELETON is out. Ending on the loot would let a child walk away from the
+            // thing the skull on the mound promised them, and this game does not take things
+            // away. (The mirror case — the last bone popping after the loot is already gone —
+            // is handled by MaybeFinishMegaRound on the bone pop.)
+            if (_buried.Count == 0 && !MegaSkeletonPending())
             {
                 _finished = true;
                 GameManager.Instance?.FinishDig(_found);

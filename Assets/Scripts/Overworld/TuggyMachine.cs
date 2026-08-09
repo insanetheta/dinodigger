@@ -110,15 +110,16 @@ namespace DinoDigger.Overworld
         protected override void OnWoke()
         {
             FillTank();       // wound up and ready: the wake tap can be followed by a first toot
-            GameManager.Instance?.Audio?.Honk();
+            GameManager.Instance?.Audio?.Toot();
         }
 
         protected override void Activate(Vector2 worldPoint)
         {
             _toots++;
 
-            // The toot itself: a honk, a bob, a puff off the smokestack.
-            GameManager.Instance?.Audio?.Honk();
+            // The toot itself: a two-tone whistle, a bob, a puff off the smokestack. Tuggy's own
+            // note, one step off the duck's quack so the two never read as the same character.
+            GameManager.Instance?.Audio?.Toot();
             Jiggle(0.18f, 0.35f);
 
             GameManager gm = GameManager.Instance;

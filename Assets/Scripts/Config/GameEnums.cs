@@ -67,7 +67,14 @@ namespace DinoDigger.Config
         Dirt = 0,
         Crystal = 1,   // taps pop the whole connected same-colour blob
         Geode = 2,     // any crack lights a fuse, then a 3x3 whumph
-        Pot = 3        // two taps, then a fountain of coins
+        Pot = 3,       // two taps, then a fountain of coins
+
+        // ---- Wave 2 toys (DinoDigger-u47) ----
+        // Same contract as the three above: a toy is STILL a DirtTile, so the cascade engine
+        // never learns they exist. Only art, hardness and what happens on the break differ.
+        Water = 4,     // water pocket: one crack and it gushes down the whole column
+        Vein = 5,      // one segment of a gem vein: a hit sparks along the connected run
+        Mushroom = 6   // bouncy mushroom: the first bite BOINGS off and flings dirt instead
     }
 
     /// <summary>One bone in a dinosaur skeleton (DinoDigger-0z5). This is the bone's

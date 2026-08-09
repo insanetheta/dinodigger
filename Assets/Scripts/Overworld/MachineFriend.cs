@@ -13,6 +13,12 @@ namespace DinoDigger.Overworld
         Doodle = 0,     // wind-up music box, town plaza
         Sprinkles = 1,  // watering bot, berry garden
         Tuggy = 2,      // tugboat, streams
+
+        // Glow lives INSIDE THE DIG (DinoDigger-6tc): it is found dormant behind a tile of the
+        // first dark stratum and perches on the pit edge once woken. The dig site builds and
+        // owns the machine itself; MachineFriendController still owns its discovery gate and its
+        // woken flag, so it persists exactly like its three cousins.
+        Glow = 3,       // lantern bot, deep dig
     }
 
     /// <summary>
@@ -119,6 +125,7 @@ namespace DinoDigger.Overworld
                 case MachineKind.Doodle: return "doodle";
                 case MachineKind.Sprinkles: return "sprinkles";
                 case MachineKind.Tuggy: return "tuggy";
+                case MachineKind.Glow: return "glow";
                 default: return kind.ToString().ToLowerInvariant();
             }
         }
@@ -332,7 +339,7 @@ namespace DinoDigger.Overworld
                 _sparkle.Emit(14);
             }
 
-            GameManager.Instance?.Audio?.Chime();
+            GameManager.Instance?.Audio?.MachineWake();   // a bell, distinct from every reward chime
             Jiggle(0.30f, 0.55f);
 
             // Start the job "ready", so the very first wake tap can be followed straight
@@ -358,7 +365,7 @@ namespace DinoDigger.Overworld
         {
             Jiggle(0.10f, 0.35f);
             Tween.ShakeRotation(transform, 5f, 0.4f, 2);
-            GameManager.Instance?.Audio?.Honk();
+            GameManager.Instance?.Audio?.Gurgle();   // the low "not yet", never the duck's honk
         }
 
         // -------------------------------------------------------------- the gauge

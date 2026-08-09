@@ -85,8 +85,18 @@ namespace DinoDigger.Overworld
             transform.position = next;
         }
 
-        /// <summary>Ease into the dig view centered on <paramref name="digCenter"/>.</summary>
+        /// <summary>Ease into the dig view centered on <paramref name="digCenter"/> at the
+        /// config's standard dig framing.</summary>
         public void EnterDig(Vector3 digCenter, System.Action onArrived)
+        {
+            EnterDig(digCenter, _config != null ? _config.DigOrthoSize : 3.2f, onArrived);
+        }
+
+        /// <summary>Ease into the dig view at a framing the SITE chose. A mega-fossil dig
+        /// (DinoDigger-84f) opens a much bigger pit and needs a wider frame, and the site is the
+        /// only thing that knows how big its own board is — so the size travels in with the
+        /// centre rather than being read from config here.</summary>
+        public void EnterDig(Vector3 digCenter, float orthoSize, System.Action onArrived)
         {
             _digCenter = digCenter;
             _transitioning = true;
@@ -94,7 +104,9 @@ namespace DinoDigger.Overworld
             Vector3 to = new Vector3(digCenter.x, digCenter.y, from.z);
             float dur = _config != null ? _config.TransitionSeconds : 0.5f;
             float fromSize = _camera != null ? _camera.orthographicSize : 5.5f;
-            float toSize = _config != null ? _config.DigOrthoSize : 3.2f;
+            float toSize = orthoSize > 0.1f
+                ? orthoSize
+                : (_config != null ? _config.DigOrthoSize : 3.2f);
 
             Tween.Stop(_move);
             _move = Tween.Run(dur, t =>
@@ -248,6 +260,64 @@ namespace DinoDigger.Overworld
                     transform.position = basePos; // always land back on the exact framing
                 }
             });
+        }
+
+        /// <summary>THE DESCENT DIP (DinoDigger-dv1). Ease the dig view DOWN by
+        /// <paramref name="units"/>, run <paramref name="onBottom"/> there, then ease back to the
+        /// framing it came from. The new stratum is built at the bottom of the dip, so the child
+        /// watches the world go down instead of being teleported into a different one.
+        ///
+        /// Guarded exactly like <see cref="ShakeDig"/>: it only runs while the camera is parked
+        /// in the dig view (during a transition the move tween owns the transform and a second
+        /// writer would fight it), and it works off the framing this component ALREADY OWNS
+        /// (<see cref="_digCenter"/>) rather than a snapshot of the live position, so it always
+        /// lands back on the exact frame. If it cannot run, the callback still fires immediately —
+        /// the descent must never be conditional on the flourish.</summary>
+        public void DipDig(float units, float seconds, System.Action onBottom)
+        {
+            float drop = Mathf.Clamp(units, 0f, 6f);
+            float dur = Mathf.Clamp(seconds, 0f, 3f);
+            if (_camera == null || !_digMode || _transitioning || drop <= 0.0001f || dur <= 0.01f)
+            {
+                onBottom?.Invoke();
+                return;
+            }
+
+            float z = transform.position.z;
+            Vector3 basePos = new Vector3(_digCenter.x, _digCenter.y, z);
+            Vector3 bottom = basePos + new Vector3(0f, -drop, 0f);
+            bool fired = false;
+
+            Tween.Stop(_move);
+            _move = Tween.Run(dur * 0.5f, t =>
+            {
+                if (_camera != null)
+                {
+                    transform.position = Vector3.Lerp(basePos, bottom, t);
+                }
+            }, () =>
+            {
+                if (!fired)
+                {
+                    fired = true;
+                    onBottom?.Invoke();
+                }
+
+                _move = Tween.Run(dur * 0.5f, t =>
+                {
+                    if (_camera != null)
+                    {
+                        transform.position = Vector3.Lerp(bottom, basePos, t);
+                    }
+                }, () =>
+                {
+                    _move = null;
+                    if (_camera != null && _digMode && !_transitioning)
+                    {
+                        transform.position = basePos; // always land back on the exact framing
+                    }
+                }, Tween.EaseInOutCubic);
+            }, Tween.EaseInOutCubic);
         }
 
         /// <summary>Ease back out to following the backhoe.</summary>

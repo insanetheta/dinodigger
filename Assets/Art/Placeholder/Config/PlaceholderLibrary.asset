@@ -19,6 +19,153 @@ MonoBehaviour:
   MoundTile: {fileID: 11400000, guid: 297cefaea05ef46dab890cc79756a35a, type: 2}
   TreeTile: {fileID: 11400000, guid: 2c3fac2f6d2394f42bfe25aec87345b8, type: 2}
   RockTile: {fileID: 11400000, guid: e165eb770290b4814bb6c5ce8e0ea667, type: 2}
+  GrassTiles:
+    Variants:
+    - {fileID: 11400000, guid: ca4c71d2723aa479584a8e99a8767068, type: 2}
+    - {fileID: 11400000, guid: 59e72bf4ebbdd48efbbc05d7acc2d7e0, type: 2}
+    - {fileID: 11400000, guid: f39456eb6c27d4554ab49b0fe6ed58d5, type: 2}
+    - {fileID: 11400000, guid: bf5ec4f5fa5284d69ab10cf52d513639, type: 2}
+    - {fileID: 11400000, guid: f17c24b730dab4de7b26c8372d0a9d99, type: 2}
+    - {fileID: 11400000, guid: 824e041415ecc4996b38c415761fb5e5, type: 2}
+    - {fileID: 11400000, guid: b7d859ab8d48946da8cb589681ee758b, type: 2}
+    - {fileID: 11400000, guid: 121121b0659a848eb8fbaf74a68f1e06, type: 2}
+    - {fileID: 11400000, guid: 180f306f2a4b040c7aa418af47df8bfe, type: 2}
+    - {fileID: 11400000, guid: c9744d712cf4b4cae8b8cd4c0fcb1e86, type: 2}
+    - {fileID: 11400000, guid: 042cdb020a1ee4301aac0c64d62d293f, type: 2}
+    - {fileID: 11400000, guid: 0f2bd2517f2d94eb982777cbe55b5f79, type: 2}
+    - {fileID: 11400000, guid: a5abeebec724c44a8821f306345f0f3a, type: 2}
+    - {fileID: 11400000, guid: a48ef9627f42340c1ad541bec98d4dc1, type: 2}
+    - {fileID: 11400000, guid: 7ec229a58c5fd4d09bbc6437ec0f1f82, type: 2}
+    - {fileID: 11400000, guid: 7cea68b1693694968868eba11f7124b3, type: 2}
+  PathTiles:
+    Variants:
+    - {fileID: 11400000, guid: 9958f60cfec90439e863138ec772e5fd, type: 2}
+    - {fileID: 11400000, guid: e90e16c41b971482396687e8c6ad53b9, type: 2}
+    - {fileID: 11400000, guid: 3aa779ea9bcdc4280913cd9598b2007b, type: 2}
+    - {fileID: 11400000, guid: 4c7b8670682164a05b4ec7d2f1dde424, type: 2}
+    - {fileID: 11400000, guid: 52a2649621eeb4134b15021db994f37f, type: 2}
+    - {fileID: 11400000, guid: 613ca722f0c384cebb982d4c9a9d1875, type: 2}
+    - {fileID: 11400000, guid: ea380fc1ad9c243e49e7c4ceeed5641f, type: 2}
+    - {fileID: 11400000, guid: a55b7639807354203a88aa196c23bb7f, type: 2}
+    - {fileID: 11400000, guid: d40f9c9d3553f440eaaeb8db9b087992, type: 2}
+    - {fileID: 11400000, guid: f8a63199272e44a838e7b72c67a9666b, type: 2}
+    - {fileID: 11400000, guid: 599ae5be9b7c54676bdeb0ed82bfc1b2, type: 2}
+    - {fileID: 11400000, guid: 728c184c80fd44d6d91ecfcf07d474ea, type: 2}
+    - {fileID: 11400000, guid: bf8b1291c72cf4bea86ac2ff7a94c47c, type: 2}
+    - {fileID: 11400000, guid: 4e2e785a5f86c4e71a92765b59441d89, type: 2}
+    - {fileID: 11400000, guid: a239c670162144c2ca8350d5c73a1667, type: 2}
+    - {fileID: 11400000, guid: 1028e0b2a59cb4d39bdfa8adcd6c09c4, type: 2}
+  WaterTiles:
+    Variants:
+    - {fileID: 11400000, guid: 781ee72242fbd46a4946febac0b12913, type: 2}
+    - {fileID: 11400000, guid: 6e9152acab204411e9f65e4521e5c202, type: 2}
+    - {fileID: 11400000, guid: 9c549143c6d8c4975abd91c377a45089, type: 2}
+    - {fileID: 11400000, guid: 5371c5de33160450d8dd3e5062202ded, type: 2}
+    - {fileID: 11400000, guid: d0159fd712e36474ca9b51d6fb5ca344, type: 2}
+    - {fileID: 11400000, guid: f7cb1c7a4aa104f30ad9c8faab999687, type: 2}
+    - {fileID: 11400000, guid: f69d761dbee2743528eda2139ae7fe47, type: 2}
+    - {fileID: 11400000, guid: d5640691b5f1f4aeda88da8ac65aaf76, type: 2}
+    - {fileID: 11400000, guid: 1203eb433e9654ff7a4ba73280082450, type: 2}
+    - {fileID: 11400000, guid: c59362ca7437541998d2f6b51df92d17, type: 2}
+    - {fileID: 11400000, guid: f98c5f29f06c8415eaa8c1d005d9de32, type: 2}
+    - {fileID: 11400000, guid: 7ddac618bec5e496cad2a2da7bf950ee, type: 2}
+    - {fileID: 11400000, guid: 99e67efe7a59e44a7811b3e5b0597fe1, type: 2}
+    - {fileID: 11400000, guid: f61a7d840ffad4307bb8d648f5165597, type: 2}
+    - {fileID: 11400000, guid: 133de828463a0428db5493ef7de1f28e, type: 2}
+    - {fileID: 11400000, guid: fc4429ddb73454b07b4aa637950f01fe, type: 2}
+  BedTiles:
+    Variants:
+    - {fileID: 11400000, guid: 436ca25e61d1b46b983787f135a3b9dc, type: 2}
+    - {fileID: 11400000, guid: 78fca26159109411bb9dd98d73b35b50, type: 2}
+    - {fileID: 11400000, guid: 5fa34ddddcac641549f8c56c350a5225, type: 2}
+    - {fileID: 11400000, guid: 3c4ac6c4fea504cbca3eb78d812b4e64, type: 2}
+  GrassPathEdges:
+    ByMask:
+    - {fileID: 0}
+    - {fileID: 11400000, guid: 34208721c111f47a4b2d7352bf23c5e6, type: 2}
+    - {fileID: 11400000, guid: ddb3477b48d0a4fc5a98d10a5d30e712, type: 2}
+    - {fileID: 11400000, guid: f85bdac263bcb49f38090c3902559c0b, type: 2}
+    - {fileID: 11400000, guid: 42fc91c6a042d4a75950a460b5a483af, type: 2}
+    - {fileID: 11400000, guid: d90130466fccc4d619058efe66b35037, type: 2}
+    - {fileID: 11400000, guid: 69118b03177814805b4fc8517cfa9aa4, type: 2}
+    - {fileID: 11400000, guid: 2634a9fed8b1946fc8e3cdd53118307b, type: 2}
+    - {fileID: 11400000, guid: a65a89d07209f4da2a81eafeb0a59205, type: 2}
+    - {fileID: 11400000, guid: 3a5acc20064554fbe964c9755640005a, type: 2}
+    - {fileID: 11400000, guid: c981e3dc149914dd89be360b78d88f08, type: 2}
+    - {fileID: 11400000, guid: e78e84cf9be49419aa3f82b00ae6dfcb, type: 2}
+    - {fileID: 11400000, guid: c9b33ea29d2d74984bc6bc43149d71e7, type: 2}
+    - {fileID: 11400000, guid: 163b07342bf8c4ea791df7895174702e, type: 2}
+    - {fileID: 11400000, guid: 1db83236200ad4ace9192b07f23e6831, type: 2}
+    - {fileID: 11400000, guid: 533d41d78584d4359a21d547bc35a0ab, type: 2}
+  GrassWaterEdges:
+    ByMask:
+    - {fileID: 0}
+    - {fileID: 11400000, guid: b67aa929ba09840c1af71a9fb8ff61d2, type: 2}
+    - {fileID: 11400000, guid: 5085d7ac48de94a32820e9b0be4275fa, type: 2}
+    - {fileID: 11400000, guid: 21befafdd7f3646e18ea9226fae12c4b, type: 2}
+    - {fileID: 11400000, guid: 5f82b12c49765451b8adcd9daf290d3c, type: 2}
+    - {fileID: 11400000, guid: af2efb8c574744c31895959c9c9dcf94, type: 2}
+    - {fileID: 11400000, guid: 67d6bb9834e3b4f62b2a09d0e5d55a00, type: 2}
+    - {fileID: 11400000, guid: 65e356f0990714b98b10e5b4c812b714, type: 2}
+    - {fileID: 11400000, guid: 59b979ab86c464dbd8d3d28df873b632, type: 2}
+    - {fileID: 11400000, guid: b464112ad44024c9990b4d7cfd22ec90, type: 2}
+    - {fileID: 11400000, guid: f3008cbec6ded469794772d462425900, type: 2}
+    - {fileID: 11400000, guid: debd6f0e92d334f4db0e65e148d2bcf1, type: 2}
+    - {fileID: 11400000, guid: a3d82167a74174f039340348c327bbd9, type: 2}
+    - {fileID: 11400000, guid: 2c27c34d6ea8442acb8e131cb0da45fb, type: 2}
+    - {fileID: 11400000, guid: a04564f8611e9438cb8bbc0fb73173c9, type: 2}
+    - {fileID: 11400000, guid: 134dcfd61b27345918c7d2479c99bb6e, type: 2}
+  GrassBedEdges:
+    ByMask:
+    - {fileID: 0}
+    - {fileID: 11400000, guid: 6211a8b71b44341d69297deca7871acc, type: 2}
+    - {fileID: 11400000, guid: d69845b12f2574886b8e247cfcb1a4a5, type: 2}
+    - {fileID: 11400000, guid: 2a83d51df25cb4624b002af9db926478, type: 2}
+    - {fileID: 11400000, guid: 906585ec666094b06ae1df649e4483bf, type: 2}
+    - {fileID: 11400000, guid: 9b025a7fbb34647dbb4399033cb49933, type: 2}
+    - {fileID: 11400000, guid: 117937b3861a9413ab2609a933de6635, type: 2}
+    - {fileID: 11400000, guid: b65cc468767d544d6841a6f6d7d222b2, type: 2}
+    - {fileID: 11400000, guid: 3b237059451de417fa010c3851bb726f, type: 2}
+    - {fileID: 11400000, guid: 513282a67be0b4d32a5e580bf4f65f80, type: 2}
+    - {fileID: 11400000, guid: 71b5daf13b52a4c118501cf33bd9e90d, type: 2}
+    - {fileID: 11400000, guid: 757ba00294dce480fb7b765d77d398ab, type: 2}
+    - {fileID: 11400000, guid: 867f6ecea3e2b434283815e2e85837c4, type: 2}
+    - {fileID: 11400000, guid: 5cb0f31101634417886dec4894089c88, type: 2}
+    - {fileID: 11400000, guid: b95db478b5604448c8aec5a407cf9c63, type: 2}
+    - {fileID: 11400000, guid: 8bbd4c2e94e6d43cba481f220c2e18d2, type: 2}
+  GrassDecals:
+    Variants:
+    - {fileID: 11400000, guid: 1ff5fcf82f5f049eeab2c8823101946f, type: 2}
+    - {fileID: 11400000, guid: c84459d844c3643f196b3562ca5854b0, type: 2}
+    - {fileID: 11400000, guid: 39a3c3b9f453f45c5a41c0309dfc887a, type: 2}
+  PathDecals:
+    Variants:
+    - {fileID: 11400000, guid: c0c5f54e4c26f45c4ac24ef1af024fa4, type: 2}
+    - {fileID: 11400000, guid: 284dcca6b3eff420ab20e04b47340264, type: 2}
+  WaterDecals:
+    Variants:
+    - {fileID: 11400000, guid: 32692ca5cd8984b2baede5bc52d45588, type: 2}
+    - {fileID: 11400000, guid: 3a16535942d524e6096aaa40f7f9e635, type: 2}
+  AccentDecals:
+    Variants:
+    - {fileID: 11400000, guid: 085b3b7c2afe549b8bc8dfc4a9c87afa, type: 2}
+  TreeSprites:
+  - {fileID: 21300000, guid: 22e72ebe5e04c46cd8c1a50f64d2c5a0, type: 3}
+  - {fileID: 21300000, guid: 96e7946346cb841609054566c270b620, type: 3}
+  - {fileID: 21300000, guid: ab151ae9752d649ac90dbe3002e9d905, type: 3}
+  TreeShakeSprite: {fileID: 21300000, guid: 233cdf5a4870f4bcdb66176883b9920e, type: 3}
+  RockSprites:
+  - {fileID: 21300000, guid: dfe9f47ded7264426bfe917222eb046b, type: 3}
+  - {fileID: 21300000, guid: 62ceda96738594e0eafcbd9bbfa68d1d, type: 3}
+  BridgeSprites:
+  - {fileID: 21300000, guid: ae4634527619e4f1c939e3bfc9553c5b, type: 3}
+  - {fileID: 21300000, guid: 4b1d1c2ad066f43c2b27ba8fe6a9711f, type: 3}
+  BridgeTiles:
+    Variants:
+    - {fileID: 11400000, guid: 3fef4eabfe2974eda8169afbbaf586fd, type: 2}
+    - {fileID: 11400000, guid: 82e67f0f8379b4aada6d8c5f0c8ca8f1, type: 2}
+  FenceAlongX: {fileID: 21300000, guid: 12a6b631160a54a7691d3d31372ebcb0, type: 3}
+  FenceAlongY: {fileID: 21300000, guid: fa87cefdfd598453fa7c926980d14f50, type: 3}
   BackhoeDir:
   - {fileID: 21300000, guid: 1e7b162d67df549069140250028aea45, type: 3}
   - {fileID: 21300000, guid: bbc77658b144f4e298038b83ff6400b2, type: 3}
@@ -55,8 +202,8 @@ MonoBehaviour:
   Boom2Sprite: {fileID: 21300000, guid: 9be4c7387b8764b8686204bc1cc8e8f3, type: 3}
   Stick2Sprite: {fileID: 21300000, guid: 53850d4bce9a64c39b5ba30f6b821c0b, type: 3}
   Bucket2Sprite: {fileID: 21300000, guid: 0e23aded883bf43ef8b2dc54e54bf5a5, type: 3}
-  MoundSprite: {fileID: 21300000, guid: ba8f1f6237bb44f59b131592af5dd9ab, type: 3}
-  NestSprite: {fileID: 21300000, guid: a681d1186e9bf4d4b822522950312bf3, type: 3}
+  MoundSprite: {fileID: 21300000, guid: 1bdb99f402384401e844b616a423e2a4, type: 3}
+  NestSprite: {fileID: 21300000, guid: 8c23e3adc6b3b4f9dae60944046ea219, type: 3}
   EggAssemblySprites:
   - {fileID: 21300000, guid: 9fb8d1eda038644948c5edf2b7f13938, type: 3}
   - {fileID: 21300000, guid: 5426e773ab80e4f218ba01c9a6cd8b29, type: 3}
@@ -77,10 +224,24 @@ MonoBehaviour:
   PinataPotCracked: {fileID: 21300000, guid: fc0015e14558e4baaa49823f2b363d88, type: 3}
   DustPuff: {fileID: 21300000, guid: 6e331695a3d7f442a9440f3f7458c8bc, type: 3}
   BoneSprites:
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
+  - {fileID: 21300000, guid: cefde956a9e524449858c3b3ba3ed3c3, type: 3}
+  - {fileID: 21300000, guid: 99e1f3170d14b449ea655a0cd3894363, type: 3}
+  - {fileID: 21300000, guid: 66b79c499621a41919eea7088108b2ba, type: 3}
+  - {fileID: 21300000, guid: 65415c113edf14847ab63298a7879370, type: 3}
+  SkeletonBoards:
+  - {fileID: 21300000, guid: d55e484540beb4d29b6ed20040e9cb8c, type: 3}
+  - {fileID: 21300000, guid: 593a02dd59fb04529b2bbc7f90f72962, type: 3}
+  - {fileID: 21300000, guid: 4687a342fdff64dc9afd78368cd8133b, type: 3}
+  - {fileID: 21300000, guid: 8b9616aa013eb426fb3e6f86df9eb901, type: 3}
+  - {fileID: 21300000, guid: 38ba2483d2de8435fa2c98d5207e952e, type: 3}
+  BoneButtonIcon: {fileID: 21300000, guid: 65415c113edf14847ab63298a7879370, type: 3}
+  DinoMaticArt:
+    States:
+    - {fileID: 21300000, guid: dd255ec381d2e4ab5a562ab0d74c584c, type: 3}
+    - {fileID: 21300000, guid: 98d053063cb554b00bca2aec4f48b721, type: 3}
+    - {fileID: 21300000, guid: a85b521000f0a42af889a9f11ae2d3ff, type: 3}
+    - {fileID: 21300000, guid: eeb6564d1945345a08a700bf2ba37af2, type: 3}
+    - {fileID: 21300000, guid: df0ceae57688842c3868ae8c695b8a33, type: 3}
   FruitSprites:
   - {fileID: 21300000, guid: c1673ff39a92c4c188e1f6b21f872025, type: 3}
   - {fileID: 21300000, guid: 37e1ee2d5b26148a69b3a6be4a7a4841, type: 3}

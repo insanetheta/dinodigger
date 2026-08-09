@@ -33,11 +33,24 @@ namespace DinoDigger.EditorTools
         private const int DigBgMaxTex = 512;
         private const string DigBgDir = "Assets/Art/Generated/digbg/";
 
+        /// <summary>The Jurassic-earth environment set (DinoDigger-y1g). VERIFIED COVERED by
+        /// the sweep below with no new skip-check needed: the sweep searches all of
+        /// "Assets/Art" recursively, so every one of the 117 env sprites already gets the
+        /// standard 256px crunched override. Every shipped env PNG is authored at &lt;= 256px
+        /// (256x128 ground/bridge/mound, 256x256 props/nest, 256x512 fence, trimmed decals),
+        /// so the override costs no resolution — it is the crunch compression that buys the
+        /// budget. Named here purely so the coverage is reported explicitly instead of being
+        /// assumed. The 1024^2 pipeline masters (env/*/plate_*.png) and the review sheets
+        /// (contact_sheet / verify_*) live in the same tree and are swept too, which is
+        /// harmless: nothing references them, so they never enter the player bundle.</summary>
+        private const string EnvDir = "Assets/Art/Generated/env/";
+
         private static void ApplyWebGLTextureOverrides()
         {
             string[] guids = AssetDatabase.FindAssets("t:Texture2D",
                 new[] { "Assets/Art" });
             int changed = 0;
+            int envSeen = 0;
             foreach (string guid in guids)
             {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
@@ -45,6 +58,11 @@ namespace DinoDigger.EditorTools
                 if (importer == null)
                 {
                     continue;
+                }
+
+                if (path.StartsWith(EnvDir, System.StringComparison.Ordinal))
+                {
+                    envSeen++;
                 }
 
                 // Dig background fills the whole screen; keep it at full 512 to avoid blur.
@@ -69,7 +87,9 @@ namespace DinoDigger.EditorTools
                 changed++;
             }
 
-            Debug.Log($"[WebGLBuilder] WebGL texture overrides applied to {changed} textures");
+            Debug.Log($"[WebGLBuilder] WebGL texture overrides applied to {changed} textures " +
+                      $"({envSeen} of them under {EnvDir} — the env set is inside the sweep, " +
+                      $"capped at {WebGLMaxTex}px crunched @{WebGLQuality})");
         }
 
         [MenuItem("DinoDigger/Build WebGL (docs)")]

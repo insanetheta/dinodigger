@@ -65,6 +65,29 @@ namespace DinoDigger.Dig
         private int _crystalColor;
         private bool _geodeArmed;   // a geode takes no damage: its FIRST hit lights the fuse
 
+        // BOUNCY MUSHROOM (DinoDigger-u47). Modelled on the geode's interception, for the same
+        // reason: the FIRST thing that hits a mushroom is answered by the mushroom rather than
+        // by the damage counter, so "the bite boings off" is one branch instead of four
+        // (tap / crew clear / landing crack / fling all arrive through Damage). The SECOND hit
+        // falls through and pops it — the mushroom is 1-hardness, so the bounce flag is
+        // effectively its first hit point.
+        private bool _bounced;
+
+        // WASHED BY A WATER POCKET (DinoDigger-u47). Set when a gush softens this tile down to
+        // its last remaining hit, cleared the moment it takes a real one. It exists for one
+        // reason: a washed tile is a 1-hit tile, and the gush's OWN cascade lands on it a
+        // heartbeat later — so without this the water would routinely finish the very tiles it
+        // softened, which is the one thing a water pocket must never do (it softens, it never
+        // digs). The cascade skips a washed victim exactly as it already skips a crystal and the
+        // surprise pocket, and for the same reason: those are the child's tap to take.
+        private bool _washed;
+
+        // GLOW'S BEAM (DinoDigger-6tc). A floor under the buried-peek alpha, raised while this
+        // cell is lit by the lantern bot and dropped when the beam sweeps away. It is a FLOOR,
+        // never an assignment: a tile the child has already cracked open is showing a brighter
+        // hint of its own and the lamp must not dim it.
+        private float _glowFloor;
+
         // Fallback tints for the three crystal colours, used only when the generated crystal art
         // has not been imported (the dirt sprite is tinted instead). Deliberately vivid: the
         // colour is the ONLY thing a child has to match, so it must read at a glance either way.
@@ -74,6 +97,26 @@ namespace DinoDigger.Dig
             new Color(1.00f, 0.55f, 0.45f),  // coral
             new Color(1.00f, 0.82f, 0.30f),  // gold
         };
+
+        // Signature tints for the wave-2 toys (DinoDigger-u47). Vivid and unmistakable for the
+        // same reason the crystal fallbacks are: while these run on borrowed art, the COLOUR is
+        // the only thing telling a toddler this cell is not ordinary dirt.
+        private static readonly Color WaterTint = new Color(0.38f, 0.66f, 1.00f);
+        private static readonly Color VeinTint = new Color(0.80f, 0.55f, 1.00f);
+        private static readonly Color MushroomTint = new Color(1.00f, 0.42f, 0.45f);
+
+        /// <summary>The splash/spark colour a wave-2 toy throws, so the dig's particle bursts
+        /// and the tile itself can never drift apart.</summary>
+        public static Color KindTint(DigTileKind kind)
+        {
+            switch (kind)
+            {
+                case DigTileKind.Water: return WaterTint;
+                case DigTileKind.Vein: return VeinTint;
+                case DigTileKind.Mushroom: return MushroomTint;
+                default: return Color.white;
+            }
+        }
 
         public int Row { get; private set; }
         public int Col { get; private set; }
@@ -113,6 +156,17 @@ namespace DinoDigger.Dig
         /// <summary>True while this tile is travelling to a cell the cascade already moved
         /// it to. Taps on it are ignored (it lands first) and tests pace to it.</summary>
         public bool IsFalling => _falling;
+
+        /// <summary>True once this tile has taken at least one hit and is showing cracks. Read by
+        /// Glow's beam (DinoDigger-6tc), which throws its preview cone one tile AHEAD of a crack —
+        /// a cracked tile is where the child is working, so it is where a preview is worth
+        /// having.</summary>
+        public bool IsCracked => _damage > 0;
+
+        /// <summary>True while this tile is sitting on the floor a water pocket washed it down to
+        /// (one hit left) and has not been hit since. The gravity cascade does not damage a
+        /// washed tile — see <see cref="_washed"/>.</summary>
+        public bool IsWashed => _washed && !_destroyed;
 
         // TEST HOOKS for the integration runner (damage progression + peek visibility).
         internal int TestDamage => _damage;
@@ -192,6 +246,8 @@ namespace DinoDigger.Dig
             _kind = kind;
             _crystalColor = Mathf.Clamp(crystalColor, 0, CrystalTints.Length - 1);
             _geodeArmed = false;
+            _bounced = false;
+            _washed = false;
             _damage = 0;
 
             switch (kind)
@@ -202,6 +258,16 @@ namespace DinoDigger.Dig
                     break;
                 case DigTileKind.Pot:
                     _maxHealth = 2;
+                    break;
+
+                // WAVE 2 (DinoDigger-u47). All three are one-hit tiles, and each spends that
+                // hit differently: the water pocket bursts, a vein segment sparks its whole run,
+                // and the mushroom's first bite is eaten by the BOUNCE (see _bounced) so it
+                // takes two bites in practice without ever taking two points of damage.
+                case DigTileKind.Water:
+                case DigTileKind.Vein:
+                case DigTileKind.Mushroom:
+                    _maxHealth = 1;
                     break;
             }
 
@@ -225,11 +291,12 @@ namespace DinoDigger.Dig
             if (_peek != null)
             {
                 _peek.sprite = itemSprite;
-                // Clear color hint visible from the start (2x boosted per playtest
-                // feedback); strengthens further as the dirt cracks.
-                _peek.color = new Color(tint.r, tint.g, tint.b, _restPeekAlpha);
                 _peek.transform.localScale = Vector3.one * 0.7f;
                 _peek.enabled = true;
+                // Clear color hint visible from the start (2x boosted per playtest
+                // feedback); strengthens further as the dirt cracks — and rides whatever
+                // floor Glow's beam has this cell on (see ApplyPeekAlpha).
+                ApplyPeekAlpha();
             }
         }
 
@@ -255,9 +322,31 @@ namespace DinoDigger.Dig
             if (_peek != null)
             {
                 _peek.sprite = boneSprite;
-                _peek.color = new Color(tint.r, tint.g, tint.b, _restPeekAlpha);
                 _peek.transform.localScale = Vector3.one * 0.7f;
                 _peek.enabled = boneSprite != null;
+                ApplyPeekAlpha();
+            }
+        }
+
+        /// <summary>WATER POCKET (DinoDigger-u47). This tile's buried item has floated up to the
+        /// tile above: drop the secret and the hint together. The owner moves the
+        /// <c>_buried</c> entry in the same breath, so "the map says this tile hides something"
+        /// and "this tile is glowing" can never disagree for even one frame.
+        ///
+        /// Leaves a BONE cell's hint alone — that hint belongs to the cell, not to the tile, and
+        /// the owner re-seats it after every settle.</summary>
+        public void ClearItem()
+        {
+            if (!HasItem)
+            {
+                return;
+            }
+
+            HasItem = false;
+            if (_peek != null && !CoversBone)
+            {
+                _peek.sprite = null;
+                _peek.enabled = false;
             }
         }
 
@@ -468,6 +557,22 @@ namespace DinoDigger.Dig
                 return false;
             }
 
+            // A BOUNCY MUSHROOM eats its first hit exactly the way a geode does, and for the
+            // same architectural reason: whatever hit it — the bucket, a crew clear, a tile
+            // landing on it — the answer is the BOING, decided here once. It reports "still
+            // standing" (it is), the owner flings the dirt, and the NEXT hit falls through to
+            // the ordinary damage path below and pops it.
+            if (_kind == DigTileKind.Mushroom && !_bounced)
+            {
+                _bounced = true;
+                _owner?.OnMushroomBounced(this);
+                return false;
+            }
+
+            // A real hit spends the wash: whatever softened this tile, it has now been dug, and
+            // from here it is an ordinary tile again (a fresh gush may soften it once more).
+            _washed = false;
+
             _damage++;
             if (_crumbs != null)
             {
@@ -495,13 +600,101 @@ namespace DinoDigger.Dig
             // peek brightens on exactly the same curve — from the child's side "there is
             // something under this tile" is one idea, whether it turns out to be loot or a
             // piece of a skeleton.
-            if ((HasItem || CoversBone) && _peek != null)
+            ApplyPeekAlpha();
+        }
+
+        /// <summary>THE one place the buried hint's alpha is decided (DinoDigger-6tc). Three
+        /// inputs, combined by MAX rather than by "whoever wrote last":
+        ///
+        ///   the resting hint  — 0.55 by default, raised for good by the Stegosaurus map;
+        ///   the crack curve   — a cracked tile shows more of what it hides;
+        ///   Glow's beam floor — the lantern lifting an outline it is shining at.
+        ///
+        /// Taking the max is what lets the lamp sweep away without ever DIMMING a hint the
+        /// child has already earned by cracking the tile.</summary>
+        private void ApplyPeekAlpha()
+        {
+            if (_peek == null || (!HasItem && !CoversBone))
+            {
+                return;
+            }
+
+            float baseAlpha = _damage > 0
+                ? Mathf.Lerp(0.7f, 1f, (float)_damage / Mathf.Max(1, _maxHealth))
+                : _restPeekAlpha;
+            float a = Mathf.Max(baseAlpha, _glowFloor);
+
+            // Only ever turns the hint ON (a renderer with no sprite draws nothing either way):
+            // hiding a peek belongs to Crumble / ClearBonePeek, which own the exit paths.
+            if (_peek.sprite != null)
             {
                 _peek.enabled = true;
-                float a = Mathf.Lerp(0.7f, 1f, (float)_damage / Mathf.Max(1, _maxHealth));
-                _peek.color = new Color(_peekTint.r, _peekTint.g, _peekTint.b, a);
             }
+
+            _peek.color = new Color(_peekTint.r, _peekTint.g, _peekTint.b, a);
         }
+
+        /// <summary>GLOW'S BEAM (DinoDigger-6tc). Raise (or release) the alpha floor under this
+        /// cell's buried outline. Pure rendering: it never touches the tile's damage, its
+        /// hardness or the buried bookkeeping, so a lit tile is still exactly as much work to
+        /// dig as an unlit one — the lamp sells INFORMATION, never progress.</summary>
+        public void SetGlowFloor(float alpha)
+        {
+            float next = Mathf.Clamp01(alpha);
+            if (Mathf.Approximately(next, _glowFloor))
+            {
+                return;
+            }
+
+            _glowFloor = next;
+            ApplyPeekAlpha();
+        }
+
+        /// <summary>WATER POCKET (DinoDigger-u47). Wash this tile down to ONE remaining hit,
+        /// whatever hardness it rolled, and return true if that actually changed anything.
+        ///
+        /// Deliberately never destroys: the gush makes the column soft, it does not dig it for
+        /// the child. And deliberately DIRT ONLY — a toy has its own promise (a crystal is the
+        /// child's to pop, a geode's fuse is its own event, a pot pays on ITS break) and water
+        /// running over it must not quietly rewrite that.</summary>
+        public bool WashSoft()
+        {
+            if (_destroyed || _kind != DigTileKind.Dirt || _maxHealth <= 1 || _damage >= _maxHealth - 1)
+            {
+                return false;
+            }
+
+            // A FLOOR OF ONE REMAINING HIT, never zero. Softening is not digging: the child
+            // always gets the last tap on a tile the water ran over.
+            _damage = _maxHealth - 1;
+            _washed = true;
+            RefreshSprite();
+            ApplyPeekAlpha();
+            return true;
+        }
+
+        /// <summary>BOUNCY MUSHROOM (DinoDigger-u47). The big springy squash a boing throws.
+        /// RESTING-SCALE SAFE by construction: it hands the transform over from any in-flight
+        /// punch and re-bases on <see cref="_restScale"/> first, exactly as the landing squash
+        /// does, so a child hammering the mushroom can never inflate it (the giant-blueberry
+        /// bug). All of its motion is read from config at the moment of the bounce.</summary>
+        public void Boing(float amount, float seconds)
+        {
+            Tween.CancelPunch(transform);
+            EndSquash();
+            transform.localScale = _restScale;
+            Tween.PunchScale(transform, Mathf.Clamp(amount, 0.05f, 0.9f),
+                Mathf.Clamp(seconds, 0.05f, 2f));
+        }
+
+        /// <summary>TEST HOOK. Has this mushroom already spent its one bounce?</summary>
+        internal bool TestBounced => _bounced;
+
+        /// <summary>TEST HOOK. Hits this tile still needs before it crumbles (a mushroom's
+        /// pending BOUNCE counts as one, because to the child it is one more bite).</summary>
+        internal int TestHitsRemaining =>
+            _destroyed ? 0 : Mathf.Max(0, _maxHealth - _damage) +
+                             (_kind == DigTileKind.Mushroom && !_bounced ? 1 : 0);
 
         /// <summary>Break this tile RIGHT NOW whatever its hardness, optionally holding the art
         /// on screen for <paramref name="visualDelay"/> seconds first and then sparkle-shrinking
@@ -649,6 +842,45 @@ namespace DinoDigger.Dig
                     break;
                 }
 
+                // ---- Wave 2 toys: PLACEHOLDER ART ON PURPOSE (DinoDigger-u47) ----
+                // The art budget for this wave belongs to another ticket (see the follow-up
+                // bead), so each of these borrows an existing sprite under a signature tint
+                // rather than shipping nothing. Every lookup is null-tolerant and falls all the
+                // way back to plain dirt under the tint, so a toy is ALWAYS visible and always
+                // reads as "not ordinary dirt" — which is the only thing the mechanic needs
+                // from the art until the real sprites land.
+                case DigTileKind.Water:
+                    // Deliberately the dirt silhouette: a water pocket is a POCKET — a patch of
+                    // wet dark ground, not an object sitting in the wall. The tint carries it.
+                    if (_lib.Dirt(0) != null)
+                    {
+                        _dirt.sprite = _lib.Dirt(0);
+                    }
+
+                    break;
+
+                case DigTileKind.Vein:
+                    // The gem treasure sprite: a gem embedded in the wall is exactly what a
+                    // vein segment is, and it can never be confused with a crystal TILE (which
+                    // is a whole chunky cell of one flat colour).
+                    if (_lib.Treasure(1) != null)
+                    {
+                        _dirt.sprite = _lib.Treasure(1);
+                    }
+
+                    break;
+
+                case DigTileKind.Mushroom:
+                    // The mound blob reads as a fat round cap; under the mushroom tint it is
+                    // unmistakably a toadstool and unmistakably not a mound (which is never in
+                    // the pit in the first place).
+                    if (_lib.MoundSprite != null)
+                    {
+                        _dirt.sprite = _lib.MoundSprite;
+                    }
+
+                    break;
+
                 default:
                 {
                     // Map damage 0..max-1 across the 3 crack-state sprites.
@@ -697,6 +929,21 @@ namespace DinoDigger.Dig
                     _dirt.color = _lib != null && _lib.PinataPot != null
                         ? Color.white
                         : new Color(0.95f, 0.55f, 0.75f);
+                    break;
+
+                // The wave-2 toys are ALWAYS tinted, whatever art they found: the tint IS their
+                // identity until the real sprites land (see RefreshSprite), so unlike the three
+                // toys above they never fall through to white.
+                case DigTileKind.Water:
+                    _dirt.color = WaterTint;
+                    break;
+
+                case DigTileKind.Vein:
+                    _dirt.color = VeinTint;
+                    break;
+
+                case DigTileKind.Mushroom:
+                    _dirt.color = MushroomTint;
                     break;
 
                 default:

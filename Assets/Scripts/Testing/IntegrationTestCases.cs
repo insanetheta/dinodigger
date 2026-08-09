@@ -72,6 +72,7 @@ namespace DinoDigger.Testing
                 new TestCase("TrikeCarry",           35f, Case_TrikeCarry),
                 new TestCase("ParadeOnce",           30f, Case_ParadeOnce),
                 new TestCase("StreamsConnectivity",  15f, Case_StreamsConnectivity),
+                new TestCase("EnvDressingApplied",   20f, Case_EnvDressingApplied), // body: IntegrationTestCasesEnv.cs (DinoDigger-y1g)
                 new TestCase("DuckCatch",            40f, Case_DuckCatch),
                 new TestCase("TownAvoidsMoundAndStream", 25f, Case_TownAvoidsMoundAndStream),
                 new TestCase("TownWiredInScene",         10f, Case_TownWiredInScene),
@@ -143,6 +144,23 @@ namespace DinoDigger.Testing
                 new TestCase("SprinklesRipensOnTap", 70f, Case_SprinklesRipensOnTap),
                 new TestCase("TuggyTowsDucklings",   70f, Case_TuggyTowsDucklings),
                 new TestCase("MachineDiscoveryQueue", 45f, Case_MachineDiscoveryQueue),
+                // DIG LOOP 2.0 D3 (DinoDigger-dv1 / -84f / -u47 / -6tc). Bodies live in
+                // IntegrationTestCasesDepth.cs. Late, like every dig case above them: all of
+                // them bank coins (toys pay), and the mega-fossil case owns every egg species
+                // and completes a whole skeleton — the loudest state change in the suite.
+                new TestCase("LadderDescends",       60f, Case_LadderDescends),
+                new TestCase("DeeperLayerRicher",    60f, Case_DeeperLayerRicher),
+                new TestCase("WaterPocketWashes",    45f, Case_WaterPocketWashes),
+                new TestCase("CritterCatchable",     45f, Case_CritterCatchable),
+                new TestCase("GemVeinChains",        45f, Case_GemVeinChains),
+                new TestCase("MushroomBoings",       45f, Case_MushroomBoings),
+                new TestCase("GlowRevealsAdjacent",  60f, Case_GlowRevealsAdjacent),
+                new TestCase("MegaFossilCompletes",  75f, Case_MegaFossilCompletes),
+                // Dig audio (DinoDigger-7c4). Runs last before NoConsoleErrors because it
+                // TOGGLES MUTE, which is persisted in PlayerPrefs: it restores the previous
+                // value in a finally, but keeping it late means a missed restore cannot silence
+                // the cases above it. Body lives in IntegrationTestCasesAudio.cs.
+                new TestCase("AudioHooksFire",       45f, Case_AudioHooksFire),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }
@@ -2845,9 +2863,31 @@ namespace DinoDigger.Testing
                             ctx.Assert(dm.TestKindCount(DigTileKind.Pot) > 0,
                                 $"site {s} featured a pinata pot but has none");
                             break;
-                        default:
+                        case 3:
                             ctx.Assert(dm.TestSurpriseTile != null,
                                 $"site {s} featured the surprise pocket but none was placed");
+                            break;
+
+                        // WAVE 2 (DinoDigger-u47). The roster widened from four to eight, and
+                        // this case is the guarantee's only witness — an entry it did not know
+                        // about would pass silently as "some feature was chosen" while putting
+                        // nothing on the board at all.
+                        case 4:
+                            ctx.Assert(dm.TestKindCount(DigTileKind.Water) > 0,
+                                $"site {s} featured a water pocket but has none");
+                            break;
+                        case 5:
+                            ctx.Assert(dm.TestKindCount(DigTileKind.Vein) > 1,
+                                $"site {s} featured a gem vein but has {dm.TestKindCount(DigTileKind.Vein)} " +
+                                "vein cells (a vein needs at least two to chain)");
+                            break;
+                        case 6:
+                            ctx.Assert(dm.TestKindCount(DigTileKind.Mushroom) > 0,
+                                $"site {s} featured a bouncy mushroom but has none");
+                            break;
+                        default:
+                            ctx.Assert(dm.TestCritterCount > 0,
+                                $"site {s} featured a dig critter but none is loose in the pit");
                             break;
                     }
 
@@ -2884,7 +2924,11 @@ namespace DinoDigger.Testing
                     "the guarantee overrode TestSuppressToys — every hand-built board is now dirty");
                 ctx.Assert(dm.TestKindCount(DigTileKind.Crystal) == 0 &&
                            dm.TestKindCount(DigTileKind.Geode) == 0 &&
-                           dm.TestKindCount(DigTileKind.Pot) == 0,
+                           dm.TestKindCount(DigTileKind.Pot) == 0 &&
+                           dm.TestKindCount(DigTileKind.Water) == 0 &&
+                           dm.TestKindCount(DigTileKind.Vein) == 0 &&
+                           dm.TestKindCount(DigTileKind.Mushroom) == 0 &&
+                           dm.TestCritterCount == 0,
                     "toys placed at a site with the toy roller suppressed");
                 gm.TestForceRoam();
 

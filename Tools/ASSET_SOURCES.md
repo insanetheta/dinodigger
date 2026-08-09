@@ -21,8 +21,70 @@ Stripped to keep the project light: `Vector/` SVG sources, `Preview*`/`Sample*` 
 |------|--------|---------|-------------------|----------|
 | Digital Audio | `Assets/Audio/Kenney/DigitalAudio/` | CC0 | https://kenney.nl/assets/digital-audio<br>zip: https://kenney.nl/media/pages/assets/digital-audio/216eac4753-1677590265/kenney_digital-audio.zip | Playful digital blips / rewards / pickup sounds |
 | Interface Sounds | `Assets/Audio/Kenney/InterfaceSounds/` | CC0 | https://kenney.nl/assets/interface-sounds<br>zip: https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip | UI clicks, confirmations, taps, toggles for buttons |
+| Impact Sounds | `Assets/Audio/Kenney/ImpactSounds/` | CC0 | https://kenney.nl/assets/impact-sounds<br>zip: https://kenney.nl/media/pages/assets/impact-sounds/87b4ddecda-1677589768/kenney_impact-sounds.zip | Dig one-shots: tile cracks, cascade thumps, crystal/glass pops, bone knocks, pot crack, machine wake bell |
+| Music Jingles | `Assets/Audio/Kenney/MusicJingles/` | CC0 | https://kenney.nl/assets/music-jingles<br>zip: https://kenney.nl/media/pages/assets/music-jingles/f37e530b9e-1677590399/kenney_music-jingles.zip | Two pizzicato phrases: coin-spray flourish + the dance party's music-box vamp |
 
 Payload kept: `Audio/*.ogg` and `License.txt` only.
+
+**Impact Sounds and Music Jingles are CURATED, not copied wholesale.** Those packs ship 130
+and 85 oggs respectively and the dig audio pass uses 13 of them, so `download_assets.sh` copies
+an explicit filename whitelist (`copy_picks`) instead of `*.ogg`. If you wire a new clip from
+either pack in `GeneratedArtImporter`, add its filename to the matching list in the script or a
+fresh `download_assets.sh` run will leave the importer reporting it missing.
+
+### Dig audio pass — clip manifest (DinoDigger-7c4)
+
+Every game moment below is a named slot on `AudioConfig`, wired to its file by
+`GeneratedArtImporter`. "Gain" is the per-clip trim baked into the importer — see the
+loudness note under the table.
+
+| Game moment | AudioConfig slot | Pack | File | Gain |
+|---|---|---|---|---|
+| Tile crack (variant A) | `TileCrackA` | Impact Sounds | `impactMining_000.ogg` | 1.00 |
+| Tile crack (variant B) | `TileCrackB` | Impact Sounds | `impactMining_001.ogg` | 1.00 |
+| Tile crack (variant C) | `TileCrackC` | Impact Sounds | `impactMining_002.ogg` | 1.00 |
+| Tile crumble (tile destroyed) | `Crumble` | Interface Sounds | `scratch_004.ogg` | 1.00 |
+| Cascade landing thump | `LandingThump` | Impact Sounds | `impactSoft_heavy_000.ogg` | 0.69 |
+| Geode soft whumph | `Whumph` | Impact Sounds | `impactSoft_heavy_001.ogg` | 0.69 |
+| Geode fuse sizzle | `FuseSizzle` | Digital Audio | `lowRandom.ogg` | 0.35 |
+| Crystal pop (small) | `CrystalPop` | Impact Sounds | `impactGlass_light_000.ogg` | 1.00 |
+| Crystal pop (big blob) | `CrystalPopBig` | Impact Sounds | `impactGlass_medium_000.ogg` | 1.00 |
+| Pinata pot crack | `PotCrack` | Impact Sounds | `impactTin_medium_000.ogg` | 1.00 |
+| Coin spray jingle | `CoinSpray` | Music Jingles | `jingles_PIZZI00.ogg` | 0.71 |
+| Bone rattle | `BoneRattle` | Impact Sounds | `impactWood_light_000.ogg` | 1.00 |
+| Whole-bone pop | `BonePop` | Digital Audio | `powerUp7.ogg` | 0.51 |
+| Coin / treasure collect | `TreasureCollect` | Digital Audio | `highUp.ogg` | 0.35 |
+| Egg + machine ceremony poof | `CeremonyPoof` | Impact Sounds | `impactSoft_medium_000.ogg` | 0.48 |
+| Machine wake chime | `MachineWake` | Impact Sounds | `impactBell_heavy_002.ogg` | 1.00 |
+| Machine not-ready gurgle/wobble | `Gurgle` | Digital Audio | `lowDown.ogg` | 0.35 |
+| Dance party music-box loop | `DanceLoop` | Music Jingles | `jingles_PIZZI03.ogg` | 0.60 |
+| Duck quack | `Honk` | Digital Audio | `twoTone1.ogg` | 0.56 |
+| Tuggy toot | `Toot` | Digital Audio | `twoTone2.ogg` | 0.56 |
+| Sprinkles water gush | `WaterGush` | Interface Sounds | `scroll_003.ogg` | 1.00 |
+| Giggle-pocket giggle | `Giggle` | Digital Audio | `pepSound3.ogg` | 0.35 |
+| Depth ladder reveal ding | `LadderDing` | Digital Audio | `threeTone2.ogg` | 0.50 |
+| Gem vein spark zap | `SparkZap` | Digital Audio | `zap1.ogg` | 0.39 |
+| Mushroom boing | `Boing` | Digital Audio | `phaseJump1.ogg` | 0.58 |
+
+The Dig Loop 2.0 tiles (`Water`, `Vein`, `Mushroom`) and the depth ladder landed in a parallel
+wave while this audio pass was in flight, so those four sounds found real homes after all:
+`DigLadder.Build` (ding), `DigToysWave2.GushWaterPocket` (gush), the vein's spark walk, and
+`OnMushroomBounced`. `SparkZap` takes the segment index and run length so a vein sparks as one
+rising zip rather than N identical zaps.
+
+`WaterGush` is used twice on purpose — the dig's water pocket and Sprinkles' watering spray are
+the game's two "water happens now" moments and should share a voice.
+
+**Loudness normalisation.** The packs are mastered at wildly different levels — every clip peaks
+near −1 dBFS, but *mean* level runs from about −25 dB (Impact Sounds) to −10 dB (Digital Audio),
+so the digital blips scream next to the impacts. Rather than re-encode the CC0 files (which
+would fork them from their upstream source), each clip carries a per-clip gain in `AudioConfig`,
+computed offline as `clamp(10^((−20 − mean_dB)/20), 0.35, 1.0)` from
+`ffmpeg -i <clip> -af volumedetect -f null /dev/null`. Target mean is −20 dB. Gain is never
+boosted above 1.0 (peaks are already near full scale, so a boost would clip); it only pulls the
+hot clips down. That is what makes the set toddler-soft, and it is why the shipped files are
+byte-identical to the pack contents. To re-derive the numbers after changing a clip, re-run
+`volumedetect` and apply the formula above.
 
 ## Background Music (OpenGameArt)
 
