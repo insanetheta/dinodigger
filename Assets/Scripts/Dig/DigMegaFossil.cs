@@ -19,10 +19,12 @@ namespace DinoDigger.Dig
     ///   IT IS SIGNPOSTED. The mound wears a skull marker (the bone art the pit already uses)
     ///     before the child ever taps it, so the surprise happens in the overworld and the dig
     ///     itself delivers on a promise the child chose to accept.
-    ///   IT IS GUARANTEED EVENTUALLY. A pure chance roll is a thing some children never see. So
-    ///     the roll carries PITY: if the board still has an incomplete skeleton and no mega site
-    ///     has been seen this session, the Nth mound is one for certain
-    ///     (<c>GameConfig.DigMegaFossilPityMounds</c>).
+    ///   IT IS GUARANTEED EVENTUALLY, AND ONLY ONCE OVER. A pure chance roll is a thing some
+    ///     children never see. So the roll carries PITY: if the board still has an incomplete
+    ///     skeleton and no mega site has been seen this session, the Nth mound is one for certain
+    ///     (<c>GameConfig.DigMegaFossilPityMounds</c>). Pity is paid the moment the SKULL GOES ON
+    ///     — and at most one skull stands on the island at a time (DinoDigger-tyf), so the
+    ///     guarantee hands the child one landmark rather than turning the whole island into one.
     ///   IT NEVER ENDS EARLY. A normal round ends when the last buried item is uncovered. On a
     ///     mega site that would be a way to LOSE the skeleton, so the round stays open until the
     ///     bones are out (see <see cref="MegaSkeletonPending"/>). The child cannot accidentally

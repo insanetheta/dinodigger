@@ -1088,15 +1088,20 @@ namespace DinoDigger.Core
         /// and mark it. Called by <see cref="DigMound.RollTheme"/>, so every mound — baked at boot
         /// or respawned after a dig — goes through exactly one decision point.
         ///
-        /// THREE GATES, in order of how much they protect:
+        /// FOUR GATES, in order of how much they protect:
         ///   1. BONES MUST BE UNLOCKED. A mega site is a late-game event that buries a skeleton;
         ///      before the child owns every egg species there is no skeleton to bury, so the
         ///      early game never sees one at all.
         ///   2. THE BOARD MUST STILL WANT BONES. With every skeleton complete there is nothing
         ///      for the big pit to hold.
-        ///   3. PITY. A rare roll is a thing some children never meet, so once the child has
+        ///   3. ONE LANDMARK AT A TIME (DinoDigger-tyf). A skull already standing on the island is
+        ///      the offer; a second one does not double it, it just makes both look ordinary.
+        ///      Checked against the LIVE mounds rather than a counter, so it holds however the
+        ///      roll was reached — island build, respawn or reset.
+        ///   4. PITY. A rare roll is a thing some children never meet, so once the child has
         ///      rolled through <c>DigMegaFossilPityMounds</c> mounds this session without seeing
-        ///      one, the next is guaranteed.</summary>
+        ///      one, the next is guaranteed — and the MARK is what satisfies it (see
+        ///      <see cref="MarkMegaFossilMound"/>), not the dig.</summary>
         internal void RollMegaFossilMound(DigMound mound)
         {
             if (mound == null)
@@ -1113,6 +1118,14 @@ namespace DinoDigger.Core
 
             _moundsRolledThisSession++;
 
+            // GATE 3. Every mound on the island rolls back-to-back at build time, so without this
+            // the whole row would be deciding in parallel with nothing to tell it a sibling had
+            // already come up mega.
+            if (ActiveMegaFossilMound(mound) != null)
+            {
+                return;
+            }
+
             float chance = _config != null ? Mathf.Clamp01(_config.DigMegaFossilChance) : 0.12f;
             int pity = _config != null ? Mathf.Max(1, _config.DigMegaFossilPityMounds) : 6;
             bool guaranteed = !_megaFossilSeenThisSession && _moundsRolledThisSession >= pity;
@@ -1120,6 +1133,61 @@ namespace DinoDigger.Core
             if (!guaranteed && Random.value >= chance)
             {
                 return;
+            }
+
+            MarkMegaFossilMound(mound);
+        }
+
+        /// <summary>The one active mound wearing a skull right now, or null — <paramref name="ignore"/>
+        /// is the mound currently being decided, which has just cleared its own mark. A SEARCH and
+        /// not a count on purpose: at most one may ever be marked, so finding a second one is
+        /// already the answer.</summary>
+        private DigMound ActiveMegaFossilMound(DigMound ignore)
+        {
+            if (_mounds == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < _mounds.Count; i++)
+            {
+                DigMound m = _mounds[i];
+                if (m != null && m != ignore && m.IsActive && m.IsMegaFossil)
+                {
+                    return m;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Put the skull on a mound — the ONE place a mound becomes a mega site, so the
+        /// two rules that keep the landmark rare cannot be reached around (DinoDigger-tyf):
+        ///
+        ///   * THE MARK SATISFIES PITY. The promise the pity rule owes the child is a skull they
+        ///     can walk up to, not a pit they have already been inside: marking is where the debt
+        ///     is paid, so the following mounds go back to rolling their ordinary chance instead
+        ///     of every one of them inheriting the guarantee. (Entering a mega dig sets the same
+        ///     flag — by then it is long since set, which is exactly right.)
+        ///   * AT MOST ONE SKULL. Belt and braces behind gate 3: whatever route arrived here,
+        ///     including a forced mark, no second marked mound survives it.</summary>
+        private void MarkMegaFossilMound(DigMound mound)
+        {
+            if (mound == null)
+            {
+                return;
+            }
+
+            if (_mounds != null)
+            {
+                for (int i = 0; i < _mounds.Count; i++)
+                {
+                    DigMound other = _mounds[i];
+                    if (other != null && other != mound && other.IsMegaFossil)
+                    {
+                        other.SetMegaFossil(false, null);
+                    }
+                }
             }
 
             // The marker is the SKULL the pit already uses for a skull bone — the same object the
@@ -1131,14 +1199,16 @@ namespace DinoDigger.Core
             }
 
             mound.SetMegaFossil(true, marker);
+            _megaFossilSeenThisSession = true;
         }
 
         /// <summary>TEST HOOK. Force the next mound roll to come up mega (or clear the force),
-        /// so a case can prove the overworld half without grinding respawns.</summary>
+        /// so a case can prove the overworld half without grinding respawns. Goes through the
+        /// same door as a rolled mark, so a forced one cannot break the one-skull invariant
+        /// either.</summary>
         internal void TestForceMegaFossil(DigMound mound)
         {
-            Sprite marker = _library != null ? _library.Bone((int)Config.BoneType.Skull) : null;
-            mound?.SetMegaFossil(true, marker);
+            MarkMegaFossilMound(mound);
         }
 
         /// <summary>TEST HOOK. Mounds rolled and whether a mega site has been met this session —
@@ -1248,8 +1318,10 @@ namespace DinoDigger.Core
                 : null;
 
             // ...and, rarely, its SKULL MARKER (DinoDigger-84f): a mega-fossil mound opens a much
-            // bigger pit with a whole remaining skeleton in it. Noted as seen the moment the
-            // child commits to digging it, which is what the pity counter is counting toward.
+            // bigger pit with a whole remaining skeleton in it. Noted as seen here too, though
+            // MarkMegaFossilMound already set the flag when the skull went on the mound
+            // (DinoDigger-tyf) — a mound cannot be mega without having been marked, so this is
+            // now a restatement rather than the trigger, and it costs nothing to keep honest.
             bool mega = mound != null && mound.IsMegaFossil;
             if (mega)
             {

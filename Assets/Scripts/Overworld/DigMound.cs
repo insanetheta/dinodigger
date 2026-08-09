@@ -79,7 +79,12 @@ namespace DinoDigger.Overworld
         /// <summary>Mark (or un-mark) this mound as a mega-fossil site and show its skull.
         /// <paramref name="marker"/> is the skull sprite the dig itself uses for a skull bone —
         /// passed in rather than looked up, because a mound has no art library of its own. A null
-        /// marker still marks the mound (the dig is what matters); it just shows no overlay.</summary>
+        /// marker still marks the mound (the dig is what matters); it just shows no overlay.
+        ///
+        /// ONLY <see cref="GameManager"/> MAY CALL THIS WITH true, and only from
+        /// <c>MarkMegaFossilMound</c> — that is where the "at most one skull on the island"
+        /// invariant lives (DinoDigger-tyf), and a mound marking itself would walk straight
+        /// around it.</summary>
         public void SetMegaFossil(bool mega, Sprite marker)
         {
             IsMegaFossil = mega;

@@ -1052,6 +1052,185 @@ namespace DinoDigger.Testing
             }
         }
 
+        /// <summary>
+        /// THE MEGA-FOSSIL SITE IS A LANDMARK, NOT THE WEATHER (DinoDigger-tyf). Pity owes the
+        /// child ONE guaranteed skull, and the bug was that it paid out on every mound at once:
+        /// the whole island rolls back-to-back at build time, and the "seen" flag it consults was
+        /// only set when a mega dig was ENTERED — so past the pity threshold every remaining roll
+        /// was guaranteed and 7-9 of the 12 mounds came up marked.
+        ///
+        /// Both halves are asserted, because either one alone can be faked by a broken feature:
+        ///   AT MOST ONE MARK, ever, checked after EVERY roll — not just at the end, so a run
+        ///     that marks six and then tidies up to one cannot pass.
+        ///   AND AT LEAST ONE MARK, within the pity window — a fix that simply stopped marking
+        ///     would satisfy the cap perfectly and would be the worse regression of the two.
+        /// Then a forced respawn (the other route into a roll, and the one that repeats forever)
+        /// must not be able to add a second skull beside the first.
+        /// </summary>
+        private IEnumerator Case_MegaFossilOneAtATime(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+
+            try
+            {
+                gm.TestReset();
+
+                // Bones ride the all-egg-species gate, and so does the mega-fossil roll.
+                gm.TestSpawnDino(DinoType.TRex, GrowthStage.Baby);
+                gm.TestSpawnDino(DinoType.Triceratops, GrowthStage.Baby);
+                gm.TestSpawnDino(DinoType.Brachiosaurus, GrowthStage.Baby);
+                gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Baby);
+                yield return ctx.WaitFrames(1);
+                ctx.Assert(gm.TestEggSpeciesAllOwned, "need all egg species owned to unlock bones");
+
+                var wanted = new List<int>();
+                ctx.Assert(gm.TryRemainingBones(out DinoType species, wanted),
+                    "the skeleton board wants no bones at all, so no mound could ever roll mega");
+                ctx.Assert(!gm.TestSkeletonComplete(species), $"{species} is already complete");
+
+                int pity = gm.TestConfig != null ? Mathf.Max(1, gm.TestConfig.DigMegaFossilPityMounds) : 6;
+                ctx.Assert(!gm.TestMegaFossilSeen && gm.TestMoundsRolled == 0,
+                    "the reset left the pity counter part-way through a previous case's session");
+
+                // ---- A fresh island: every mound rolls its flavour back-to-back ----
+                IReadOnlyList<DigMound> mounds = gm.TestMounds;
+                ctx.Assert(mounds != null, "no mounds on the island");
+
+                int active = 0;
+                for (int i = 0; i < mounds.Count; i++)
+                {
+                    if (mounds[i] != null && mounds[i].IsActive)
+                    {
+                        active++;
+                    }
+                }
+
+                ctx.Assert(active >= pity,
+                    $"only {active} active mounds for a pity window of {pity} — the guaranteed " +
+                    "mark could not land inside this case, so the window assertion is meaningless");
+
+                int rolled = 0;
+                int firstMarkAt = -1;
+                for (int i = 0; i < mounds.Count; i++)
+                {
+                    DigMound m = mounds[i];
+                    if (m == null || !m.IsActive)
+                    {
+                        continue;
+                    }
+
+                    m.RollTheme(gm.TestConfig);   // the real path: DigMound -> RollMegaFossilMound
+                    rolled++;
+
+                    int marked = MarkedMoundCount(gm);
+                    ctx.Assert(marked <= 1,
+                        $"{marked} mounds wear a skull after {rolled} of {active} rolls — the " +
+                        "mega-fossil site is a rare landmark, at most one may be on offer");
+
+                    if (marked == 1 && firstMarkAt < 0)
+                    {
+                        firstMarkAt = rolled;
+                    }
+                }
+
+                ctx.Assert(firstMarkAt > 0,
+                    $"{rolled} mounds rolled with an incomplete skeleton and pity at {pity}, and " +
+                    "not one came up mega — the guarantee never paid out");
+                ctx.Assert(firstMarkAt <= pity,
+                    $"the first skull only landed on roll {firstMarkAt}, past the pity window of {pity}");
+                ctx.Assert(MarkedMoundCount(gm) == 1,
+                    $"{MarkedMoundCount(gm)} skulls stand on the island after all {rolled} rolls " +
+                    "(expected exactly one)");
+                ctx.Assert(gm.TestMegaFossilSeen,
+                    "the mark did not satisfy pity — the next roll would be guaranteed all over again");
+
+                DigMound landmark = FirstMarkedMound(gm);
+                ctx.Assert(landmark != null && landmark.IsActive,
+                    "the mark landed on a mound that is not standing on the island");
+
+                // ---- Respawns roll too, and they roll forever ----
+                gm.TestConfig.MoundRespawnSeconds = 1f; // restored by the runner
+                for (int r = 0; r < 3; r++)
+                {
+                    // Any active mound EXCEPT the landmark: respawning the marked one would only
+                    // prove it re-rolls, and the question here is whether a neighbour can put a
+                    // second skull up beside it.
+                    DigMound victim = null;
+                    for (int i = 0; i < mounds.Count && victim == null; i++)
+                    {
+                        if (mounds[i] != null && mounds[i].IsActive && mounds[i] != landmark)
+                        {
+                            victim = mounds[i];
+                        }
+                    }
+
+                    ctx.Assert(victim != null, "no active mound besides the landmark to respawn");
+
+                    gm.Spawn.ScheduleRespawn(victim);
+                    yield return ctx.WaitUntil(() => victim.IsActive, 12f,
+                        $"respawn {r + 1} never brought its mound back (1s delay)");
+
+                    int marked = MarkedMoundCount(gm);
+                    ctx.Assert(marked == 1,
+                        $"respawn {r + 1} left {marked} skulls on the island (expected exactly one)");
+                    ctx.Assert(landmark.IsMegaFossil,
+                        $"respawn {r + 1} moved the skull off the landmark the child was promised");
+                }
+
+                ctx.Log($"mega-fossil landmark: {rolled} island rolls yielded exactly ONE skull " +
+                        $"(first at roll {firstMarkAt}, pity {pity}, overlay drawn: " +
+                        $"{landmark.TestSkullVisible}), never two at any point, and 3 forced " +
+                        "respawns could not add a second");
+            }
+            finally
+            {
+                gm.TestForceRoam();
+                gm.TestReset();
+            }
+        }
+
+        /// <summary>How many mounds wear a skull right now — active or not, because a marked
+        /// mound waiting on a respawn is still a mark the invariant has to account for.</summary>
+        private int MarkedMoundCount(GameManager gm)
+        {
+            IReadOnlyList<DigMound> list = gm.TestMounds;
+            if (list == null)
+            {
+                return 0;
+            }
+
+            int n = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i] != null && list[i].IsMegaFossil)
+                {
+                    n++;
+                }
+            }
+
+            return n;
+        }
+
+        /// <summary>The skull-marked mound, or null.</summary>
+        private DigMound FirstMarkedMound(GameManager gm)
+        {
+            IReadOnlyList<DigMound> list = gm.TestMounds;
+            if (list == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i] != null && list[i].IsMegaFossil)
+                {
+                    return list[i];
+                }
+            }
+
+            return null;
+        }
+
         // ================================================================ helpers
 
         /// <summary>Clear the TOPMOST alive tile of some column that is not hiding an item.

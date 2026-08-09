@@ -155,6 +155,10 @@ namespace DinoDigger.Testing
                 new TestCase("GemVeinChains",        45f, Case_GemVeinChains),
                 new TestCase("MushroomBoings",       45f, Case_MushroomBoings),
                 new TestCase("GlowRevealsAdjacent",  60f, Case_GlowRevealsAdjacent),
+                // Rarity before payoff: the landmark case rolls the whole island on a PRISTINE
+                // board (no skeleton finished yet), so it runs ahead of the case that completes
+                // one. Both own every egg species; both reset after themselves.
+                new TestCase("MegaFossilOneAtATime", 60f, Case_MegaFossilOneAtATime),
                 new TestCase("MegaFossilCompletes",  75f, Case_MegaFossilCompletes),
                 // Dig audio (DinoDigger-7c4). Runs last before NoConsoleErrors because it
                 // TOGGLES MUTE, which is persisted in PlayerPrefs: it restores the previous
