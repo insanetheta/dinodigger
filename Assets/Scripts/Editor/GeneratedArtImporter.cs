@@ -55,6 +55,17 @@ namespace DinoDigger.EditorTools
         private static readonly Vector2 StickBasePin = new Vector2(0.1162f, 0.5026f);
         private const float BucketTargetH = 0.72f;   // toothed bucket height
 
+        // Dig arm V2 (DinoDigger-rrn): the proportionate slim art set in digarm2/.
+        // Same import conventions as V1 (pin-boss pivots, pin-to-pin PPU); numbers
+        // measured by Tools/generate_digarm2.py `measure` — keep in sync with
+        // digarm2/pins.json and DigArmV2.cs when the art is regenerated.
+        private const float Boom2PinDistPx = 716.9f;
+        private const float Stick2PinDistPx = 703.0f;
+        private static readonly Vector2 Boom2BasePin = new Vector2(0.1258f, 0.2487f);
+        private static readonly Vector2 Stick2BasePin = new Vector2(0.1166f, 0.5069f);
+        private static readonly Vector2 Bucket2Pivot = new Vector2(0.8981f, 0.8249f);
+        private const float Bucket2TargetH = 1.0f;   // V2 bucket is the arm-end star
+
         // Town buildings are sized by WIDTH so each footprint reads at a consistent
         // ~2.2 world units across regardless of raw resolution: PPU = sourceWidth / 2.2.
         // All construction states share the width target + a bottom-center pivot so they
@@ -108,6 +119,24 @@ namespace DinoDigger.EditorTools
         private const string HardHatRel = "town/prop_hardhat";
         private const string ToolHammerRel = "town/prop_tool_hammer";
         private const string ConstructionSignRel = "town/prop_sign_construction";
+
+        // Dig toys (DinoDigger-z4d), sliced to Generated/dig/. Crystals, the boom geode and the
+        // pinata pot all occupy ONE grid cell, exactly like a dirt tile — but their raw art is
+        // not square (a crystal is tall, a geode is wide), so sizing them by height the way the
+        // dirt states are sized would push a wide one out over its neighbours. They are sized by
+        // their LARGER dimension instead: PPU = max(w,h) / DirtTargetH, which fits every toy
+        // inside the same 1x1 cell footprint whatever its aspect. The three crystal colours are
+        // pixel-identical silhouettes, so they all land on the same PPU anyway and a colour swap
+        // can never change a tile's footprint.
+        private static readonly string[] DigCrystalRels =
+            { "dig/crystal_teal", "dig/crystal_coral", "dig/crystal_gold" };
+        private const string BoomGeodeRel = "dig/boom_geode";
+        private const string PinataPotRel = "dig/pinata_pot";
+        private const string PinataPotCrackedRel = "dig/pinata_pot_cracked";
+
+        // The landing/geode dust puff is a PARTICLE sprite (the emitter sets its world size), so
+        // it just needs a sane import scale like the other particles.
+        private const string DustPuffRel = "dig/dust_thump";
 
         // Dig-mode background is sized by WIDTH so it covers the whole camera view.
         // During dig the camera uses GameConfig.DigOrthoSize (3.2) => visible width at
@@ -281,6 +310,18 @@ namespace DinoDigger.EditorTools
             ConfigureEach(dirt, DirtTargetH, missing);
             ConfigureEach(particles, ParticleTargetH, missing);
 
+            // Dig toys: fit each one inside the 1x1 grid cell by its LARGER dimension, so a wide
+            // geode and a tall crystal both sit inside the same footprint the dirt states use.
+            foreach (string rel in DigCrystalRels)
+            {
+                ConfigureCellFit(rel, missing);
+            }
+
+            ConfigureCellFit(BoomGeodeRel, missing);
+            ConfigureCellFit(PinataPotRel, missing);
+            ConfigureCellFit(PinataPotCrackedRel, missing);
+            ConfigureEach(new[] { DustPuffRel }, ParticleTargetH, missing);
+
             // Full-bleed dig backdrop: PPU from WIDTH so it covers the camera view.
             const string digBgRel = "digbg/dig_background";
             string digBgPath = GenPath(digBgRel);
@@ -330,6 +371,24 @@ namespace DinoDigger.EditorTools
             else
             {
                 missing.Add(GenPath("digarm/digarm_bucket") + " (no readable source texture)");
+            }
+
+            // Dig arm V2 (DinoDigger-rrn): same conventions as the V1 block above.
+            // Optional on purpose — a checkout without digarm2/ art just tracks the
+            // misses and the rig stays on V1 whatever the config switch says.
+            ConfigureArmPiece("digarm2/digarm2_boom",
+                Boom2PinDistPx / BoomLenWorld, Boom2BasePin, missing);
+            ConfigureArmPiece("digarm2/digarm2_stick",
+                Stick2PinDistPx / StickLenWorld, Stick2BasePin, missing);
+            int bucket2H = SourceHeight(GenPath("digarm2/digarm2_bucket"));
+            if (bucket2H > 0)
+            {
+                ConfigureArmPiece("digarm2/digarm2_bucket",
+                    bucket2H / Bucket2TargetH, Bucket2Pivot, missing);
+            }
+            else
+            {
+                missing.Add(GenPath("digarm2/digarm2_bucket") + " (no readable source texture)");
             }
 
             // Town buildings (DinoDigger-5li.3 + DinoDigger-ggy): PPU from WIDTH so each reads
@@ -518,9 +577,34 @@ namespace DinoDigger.EditorTools
                 lib.BucketSprite = LoadSpriteTracked("digarm/digarm_bucket", missing);
                 wired.Add("Library: dig rig boom+stick+bucket (base pivots)");
 
+                // Dig arm V2 (DinoDigger-rrn): loaded WITHOUT tracking — a checkout
+                // without the V2 art is an expected gap (the importer pass above
+                // already reported it) and the rig then stays on V1.
+                lib.Boom2Sprite = LoadSprite(GenPath("digarm2/digarm2_boom"));
+                lib.Stick2Sprite = LoadSprite(GenPath("digarm2/digarm2_stick"));
+                lib.Bucket2Sprite = LoadSprite(GenPath("digarm2/digarm2_bucket"));
+                wired.Add("Library: dig rig V2 boom+stick+bucket " +
+                          (lib.Boom2Sprite != null && lib.Stick2Sprite != null &&
+                           lib.Bucket2Sprite != null
+                              ? "(slim set wired; switch = GameConfig.DigArmVersion)"
+                              : "(absent: rig stays on V1)"));
+
                 lib.FruitSprites = LoadArray(fruit, missing);
                 lib.TreasureSprites = LoadArray(treasure, missing);
                 lib.DirtStates = LoadArray(dirt, missing);
+
+                // Dig toys (DinoDigger-z4d). Direct typed assignment, no reflection — same
+                // convention as the town block above. Any sprite left null (art not generated /
+                // a stale library asset) is handled at runtime: a crystal falls back to a tinted
+                // dirt sprite, the dust falls back to the crumb particle. Nothing throws and no
+                // cell ever blanks out.
+                lib.CrystalSprites = LoadArray(DigCrystalRels, missing);
+                lib.BoomGeode = LoadSpriteTracked(BoomGeodeRel, missing);
+                lib.PinataPot = LoadSpriteTracked(PinataPotRel, missing);
+                lib.PinataPotCracked = LoadSpriteTracked(PinataPotCrackedRel, missing);
+                lib.DustPuff = LoadSpriteTracked(DustPuffRel, missing);
+                wired.Add($"Library: dig toys crystal x{DigCrystalRels.Length} + geode + pot " +
+                          $"(whole/cracked) + dust puff (each fits a {DirtTargetH}-unit grid cell)");
 
                 lib.StarParticle = LoadSpriteTracked(particles[0], missing);
                 lib.HeartParticle = LoadSpriteTracked(particles[1], missing);
@@ -659,6 +743,25 @@ namespace DinoDigger.EditorTools
         }
 
         // ------------------------------------------------------------- helpers
+
+        /// <summary>Import a dig-grid sprite so its LARGER dimension is exactly one cell
+        /// (<see cref="DirtTargetH"/> world units): PPU = max(sourceW, sourceH) / target. That is
+        /// what keeps a tall crystal and a wide geode inside the same footprint a dirt tile
+        /// occupies, instead of one of them spilling over its neighbours.</summary>
+        private static void ConfigureCellFit(string rel, List<string> missing)
+        {
+            string p = GenPath(rel);
+            int w = SourceWidth(p);
+            int h = SourceHeight(p);
+            int longest = Mathf.Max(w, h);
+            if (longest <= 0)
+            {
+                missing.Add(p + " (no readable source texture)");
+                return;
+            }
+
+            ConfigureSprite(p, longest / DirtTargetH, missing);
+        }
 
         private static void ConfigureEach(string[] relPaths, float targetHeight, List<string> missing)
         {

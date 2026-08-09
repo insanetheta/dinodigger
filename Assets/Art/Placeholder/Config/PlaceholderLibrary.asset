@@ -52,6 +52,9 @@ MonoBehaviour:
   BoomSprite: {fileID: 21300000, guid: f48ffd43843974b3cbe938d4490f39ac, type: 3}
   StickSprite: {fileID: 21300000, guid: 3d3fd9e14a4d54f799bb2826031ef720, type: 3}
   BucketSprite: {fileID: 21300000, guid: 56092610cf5ca4669882190d5b35be01, type: 3}
+  Boom2Sprite: {fileID: 21300000, guid: 9be4c7387b8764b8686204bc1cc8e8f3, type: 3}
+  Stick2Sprite: {fileID: 21300000, guid: 53850d4bce9a64c39b5ba30f6b821c0b, type: 3}
+  Bucket2Sprite: {fileID: 21300000, guid: 0e23aded883bf43ef8b2dc54e54bf5a5, type: 3}
   MoundSprite: {fileID: 21300000, guid: ba8f1f6237bb44f59b131592af5dd9ab, type: 3}
   NestSprite: {fileID: 21300000, guid: a681d1186e9bf4d4b822522950312bf3, type: 3}
   EggAssemblySprites:
@@ -65,6 +68,14 @@ MonoBehaviour:
   - {fileID: 21300000, guid: b2589efb5cbfd413096ac36d96865a6b, type: 3}
   - {fileID: 21300000, guid: 09bccae3a7be54c6397b747ec74d4675, type: 3}
   DigBackground: {fileID: 21300000, guid: 15d8d2a167cae4da58cda5b720686a08, type: 3}
+  CrystalSprites:
+  - {fileID: 21300000, guid: a4eaab53994434321971dba69c1a099d, type: 3}
+  - {fileID: 21300000, guid: a6e5891666f4d45b79292545da8c1c3b, type: 3}
+  - {fileID: 21300000, guid: 0e3df4f9581494daaac5a1f60b60c95d, type: 3}
+  BoomGeode: {fileID: 21300000, guid: 2267f97f3294e4f5ba89eff39a56cbe6, type: 3}
+  PinataPot: {fileID: 21300000, guid: 62a213c4061de46199b559d4fdfd231d, type: 3}
+  PinataPotCracked: {fileID: 21300000, guid: fc0015e14558e4baaa49823f2b363d88, type: 3}
+  DustPuff: {fileID: 21300000, guid: 6e331695a3d7f442a9440f3f7458c8bc, type: 3}
   FruitSprites:
   - {fileID: 21300000, guid: c1673ff39a92c4c188e1f6b21f872025, type: 3}
   - {fileID: 21300000, guid: 37e1ee2d5b26148a69b3a6be4a7a4841, type: 3}

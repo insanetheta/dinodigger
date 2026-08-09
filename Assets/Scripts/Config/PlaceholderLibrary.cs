@@ -93,6 +93,14 @@ namespace DinoDigger.Config
         public Sprite StickSprite;   // second (distal) arm segment
         public Sprite BucketSprite;  // toothed digging bucket, opening leftward
 
+        [Header("Dig excavator rig V2 (DinoDigger-rrn)")]
+        [Tooltip("Proportionate slim arm rebuild (Assets/Art/Generated/digarm2). Same rig " +
+                 "skeleton as V1; selected by GameConfig.DigArmVersion. Null slots = V2 " +
+                 "unavailable and the rig stays on V1 regardless of the switch.")]
+        public Sprite Boom2Sprite;   // V2 proximal segment (slim, small matched pin bosses)
+        public Sprite Stick2Sprite;  // V2 distal segment
+        public Sprite Bucket2Sprite; // V2 bucket, opening leftward, hinge lug top-right
+
         [Header("Overworld object sprites")]
         public Sprite MoundSprite;   // SpriteRenderer sprite for dig mounds
 
@@ -109,6 +117,27 @@ namespace DinoDigger.Config
         public Sprite[] DirtStates = new Sprite[3];
         [Tooltip("Full-bleed side-view backdrop behind the dig grid (sky + grass lip + soil).")]
         public Sprite DigBackground;
+
+        [Header("Dig toys (Dig Loop 2.0)")]
+        [Tooltip("Crystal tiles by colour index: 0 teal, 1 coral, 2 gold. The three sprites are " +
+                 "PIXEL-IDENTICAL silhouettes, so the colour is the only thing a child has to " +
+                 "match and a swap can never change a tile's footprint. Left null (no generated " +
+                 "art yet) a crystal falls back to the dirt sprite under a strong colour tint, " +
+                 "so the blob is still readable and every test still means something.")]
+        public Sprite[] CrystalSprites = new Sprite[3];
+
+        [Tooltip("Rare boom geode: a tap (or a crack from a landing tile) lights its fuse and " +
+                 "it clears a 3x3.")]
+        public Sprite BoomGeode;
+
+        [Tooltip("Pinata pot, whole and cracked (shown after its first hit). Breaking it sprays " +
+                 "a fountain of coins.")]
+        public Sprite PinataPot;
+        public Sprite PinataPotCracked;
+
+        [Tooltip("Soft dust puff used for cascade landings and the geode's ring. Null = the " +
+                 "landings quietly fall back to the crumb particle.")]
+        public Sprite DustPuff;
 
         [Header("Items")]
         public Sprite[] FruitSprites = new Sprite[4];
@@ -162,6 +191,18 @@ namespace DinoDigger.Config
         {
             return Pick(DirtStates, state);
         }
+
+        /// <summary>Crystal art for <paramref name="color"/> (0 teal, 1 coral, 2 gold), or null
+        /// when the dig art has not been imported — the tile then tints the dirt sprite instead.</summary>
+        public Sprite Crystal(int color)
+        {
+            return Pick(CrystalSprites, color);
+        }
+
+        /// <summary>How many crystal colours this library actually carries art for (at least 1,
+        /// so site generation always has a colour to roll even on a stale asset).</summary>
+        public int CrystalColorCount =>
+            CrystalSprites != null && CrystalSprites.Length > 0 ? CrystalSprites.Length : 3;
 
         public Sprite BuildingState(int state)
         {

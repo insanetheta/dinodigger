@@ -60,6 +60,28 @@ namespace DinoDigger.Config
         }
     }
 
+    /// <summary>How a falling tile's travel is shaped over its (post-stagger) flight time.
+    /// <see cref="Accelerate"/> is the shipped feel: a squared ramp, so a tile starts slow and
+    /// arrives fast — heavy, never floaty. The others exist so the feel pass can compare the
+    /// same cascade under a different curve without a code change.</summary>
+    public enum FallEase
+    {
+        Accelerate = 0,   // u*u — gravity-ish, the default
+        Linear = 1,       // constant speed (reads mechanical; a useful contrast)
+        EaseOut = 2,      // fast out of the gate, settling in (light + floaty)
+        EaseInOut = 3     // soft at both ends (dreamy; good for slow-motion review)
+    }
+
+    /// <summary>Which dig-mode excavator ARM ART SET renders (DinoDigger-rrn). The rig
+    /// skeleton, IK, joint limits and bite timing are identical either way — this only
+    /// selects which sprites mount on the bones, so the two can be A/B'd live by eye.
+    /// V1 stays the default until V2 is approved.</summary>
+    public enum DigArmVersion
+    {
+        V1 = 0,   // original gooseneck art (Assets/Art/Generated/digarm)
+        V2 = 1    // proportionate slim rebuild (Assets/Art/Generated/digarm2)
+    }
+
     /// <summary>All designer-tunable numbers in one asset.</summary>
     [CreateAssetMenu(menuName = "DinoDigger/Game Config", fileName = "GameConfig")]
     public class GameConfig : ScriptableObject
@@ -120,6 +142,126 @@ namespace DinoDigger.Config
         public int DigColumns = 7;
         [Tooltip("Taps to fully crumble one dirt tile (matches 3 crack states).")]
         public int DirtHealth = 3;
+
+        [Header("Dig arm art (DinoDigger-rrn)")]
+        [Tooltip("Which excavator-arm art set the dig minigame renders. V1 = the original " +
+                 "gooseneck art (default until V2 is approved). V2 = the proportionate slim " +
+                 "rebuild in Assets/Art/Generated/digarm2 — same rig skeleton, IK, joint " +
+                 "limits and bite timing, art only. Live-switchable mid-dig via the editor " +
+                 "menu DinoDigger/Demo/Dig Arm V2 On|Off, so the two can be A/B'd by eye. " +
+                 "If the V2 sprites are missing the rig safely stays on V1.")]
+        public DigArmVersion DigArmVersion = DigArmVersion.V1;
+
+        // ---- Dig Loop 2.0 feel knobs (DinoDigger-73a) -------------------------
+        // EVERY number that shapes how the cascade and the dig toys MOVE lives here, with the
+        // shipped values as defaults, because "it feels smooth and natural" is judged by eye in
+        // play mode and nowhere else. The runtime re-reads these on every single use (never
+        // caches them into a field at build time), so dragging a slider while the game is
+        // running retunes the very next tile that falls — that live loop is the whole point of
+        // the block. All of them are read through the clamped helpers at the bottom of this
+        // class, so a wild inspector value can slow a fall down or speed it up but can never
+        // stall a tile mid-air or divide by zero.
+        [Header("Dig cascade feel (Dig Loop 2.0)")]
+        [Tooltip("Seconds of travel per ROW a tile drops. The single biggest weight knob: " +
+                 "higher = a slower, heavier tumble.")]
+        public float DigFallRowSeconds = 0.07f;
+
+        [Tooltip("Floor on a fall's travel time, so even a one-row drop is a readable little " +
+                 "hop rather than a teleport.")]
+        public float DigFallMinSeconds = 0.05f;
+
+        [Tooltip("Ceiling on a fall's travel time, so a drop down a deep pit never drags.")]
+        public float DigFallMaxSeconds = 0.28f;
+
+        [Tooltip("Extra start delay per tile UP a falling column — what turns a column into a " +
+                 "tumble instead of a lift. 0 = the whole column starts as one slab.")]
+        public float DigFallStaggerSeconds = 0.05f;
+
+        [Tooltip("Cap on that per-column stagger, so a tall column's top tile never hangs.")]
+        public float DigFallStaggerMaxSeconds = 0.25f;
+
+        [Tooltip("Shape of a fall's travel over its flight time. Accelerate (default) reads as " +
+                 "gravity; the others are here for side-by-side feel comparisons.")]
+        public FallEase DigFallEase = FallEase.Accelerate;
+
+        [Tooltip("Landing squash depth: the tile widens by this fraction and flattens by it at " +
+                 "peak impact, then springs back to EXACTLY its resting scale.")]
+        public float DigSquashAmplitude = 0.18f;
+
+        [Tooltip("Seconds the landing squash takes to spike and spring back to rest.")]
+        public float DigSquashRecoverSeconds = 0.22f;
+
+        [Tooltip("Dust particles puffed at the impact line by ONE landing tile.")]
+        public int DigDustPerLanding = 4;
+
+        [Tooltip("Minimum seconds between landing thumps, so a ten-tile cascade lands as one " +
+                 "thud rather than a rattle.")]
+        public float DigLandingThumpGapSeconds = 0.08f;
+
+        [Header("Dig toys — crystals / geode / pot (DinoDigger-z4d)")]
+        [Tooltip("Seconds between RINGS of a crystal blob popping outward from the tapped " +
+                 "crystal. Small on purpose: the whole blob is gone in a blink, it just " +
+                 "ripples outward instead of vanishing as a slab.")]
+        public float DigCrystalPopRingSeconds = 0.03f;
+
+        [Tooltip("Seconds one popped crystal takes to sparkle-shrink away once its ring fires.")]
+        public float DigCrystalPopFadeSeconds = 0.14f;
+
+        [Tooltip("Sparkle particles burst by ONE popping crystal.")]
+        public int DigCrystalSparkleCount = 12;
+
+        [Tooltip("Coins paid PER CRYSTAL in a popped blob — so a bigger blob is a bigger " +
+                 "payout, with no maths a toddler has to follow. Kept small; the delight is " +
+                 "the pop, the coins are the cherry.")]
+        public int DigCrystalCoinBase = 1;
+
+        [Tooltip("Hard cap on the coins one blob pays, so a freak chain can't spray dozens of " +
+                 "pickups across the overworld.")]
+        public int DigCrystalCoinMax = 12;
+
+        [Tooltip("Seconds a tapped boom geode sparkle-fuses before it goes off — the " +
+                 "anticipation beat that makes the whumph land.")]
+        public float DigGeodeFuseSeconds = 0.4f;
+
+        [Tooltip("Tiny camera shake amplitude (world units) on a geode whumph. Deliberately " +
+                 "small — a toddler game nudges, it never jolts.")]
+        public float DigGeodeShakeAmplitude = 0.09f;
+
+        [Tooltip("Seconds the geode's camera nudge decays over.")]
+        public float DigGeodeShakeSeconds = 0.28f;
+
+        [Tooltip("Dust particles in the geode's soft ring.")]
+        public int DigGeodeDustCount = 18;
+
+        [Tooltip("Coins sprayed by a broken pinata pot (inclusive range, rolled per pot).")]
+        public int DigPotCoinMin = 5;
+        public int DigPotCoinMax = 8;
+
+        [Tooltip("Seconds one sprayed coin arcs outward before it bounces to rest.")]
+        public float DigPotCoinArcSeconds = 0.55f;
+
+        [Tooltip("Seconds a landed pot coin sits and shines before it auto-collects. Nothing " +
+                 "to chase and nothing to miss — the child just watches it get banked.")]
+        public float DigPotCoinCollectSeconds = 1f;
+
+        [Header("Dig toys — site generation")]
+        [Tooltip("Chance a site rolls ANY crystal at all. A site without crystals is still a " +
+                 "perfectly good dig; variety is the point.")]
+        public float DigCrystalSiteChance = 0.65f;
+
+        [Tooltip("Crystal clusters placed when a site rolls crystals (each its own colour).")]
+        public int DigCrystalClusterCount = 2;
+
+        [Tooltip("Cells in one crystal cluster (inclusive). Every cluster is 4-way connected, " +
+                 "so a single tap always pops the whole thing.")]
+        public int DigCrystalClusterMin = 3;
+        public int DigCrystalClusterMax = 6;
+
+        [Tooltip("Chance a site hides one boom geode (rare — it should feel like an event).")]
+        public float DigGeodeChance = 0.3f;
+
+        [Tooltip("Chance a site hides one pinata pot.")]
+        public float DigPotChance = 0.35f;
 
         [Header("Movement")]
         public float BackhoeSpeed = 3.5f;
@@ -264,6 +406,80 @@ namespace DinoDigger.Config
         [Header("Feel")]
         public float IdleAttractSeconds = 15f;
         public float ParentGateHoldSeconds = 3f;
+
+        // ----- Dig feel helpers -----
+        // The cascade calls these EVERY time it moves a tile (never caches the result), so an
+        // inspector tweak lands on the very next fall. They also clamp, which is what makes the
+        // live-tuning loop safe: a designer can drag any of the knobs above to a silly value
+        // mid-play and the worst that happens is a silly-looking (still finishing) cascade.
+
+        /// <summary>Travel seconds for a tile dropping <paramref name="rowsDropped"/> rows:
+        /// the per-row cost over a floor, under the ceiling. Never zero (a zero-second fall is
+        /// a teleport) and never more than 2s (a stuck-looking tile).</summary>
+        public float DigFallSeconds(int rowsDropped)
+        {
+            float ceiling = Mathf.Clamp(DigFallMaxSeconds, 0.02f, 2f);
+            float floor = Mathf.Clamp(DigFallMinSeconds, 0.01f, ceiling);
+            float t = floor + Mathf.Max(0f, DigFallRowSeconds) * Mathf.Max(0, rowsDropped);
+            return Mathf.Clamp(t, 0.01f, ceiling);
+        }
+
+        /// <summary>Start delay for the <paramref name="order"/>-th mover up a falling column
+        /// (0 = the bottom one, which never waits), capped so a tall column's top tile can't
+        /// hang in the air.</summary>
+        public float DigFallStagger(int order)
+        {
+            float cap = Mathf.Clamp(DigFallStaggerMaxSeconds, 0f, 1f);
+            return Mathf.Clamp(Mathf.Max(0, order) * Mathf.Max(0f, DigFallStaggerSeconds), 0f, cap);
+        }
+
+        /// <summary>Apply <see cref="DigFallEase"/> to a normalized 0..1 travel fraction.</summary>
+        public float DigFallCurve(float u)
+        {
+            u = Mathf.Clamp01(u);
+            switch (DigFallEase)
+            {
+                case FallEase.Linear: return u;
+                case FallEase.EaseOut: return 1f - Mathf.Pow(1f - u, 3f);
+                case FallEase.EaseInOut:
+                    return u < 0.5f ? 4f * u * u * u : 1f - Mathf.Pow(-2f * u + 2f, 3f) / 2f;
+                default: return u * u; // Accelerate
+            }
+        }
+
+        /// <summary>Coins one popped crystal blob of <paramref name="blobSize"/> pays: the
+        /// per-crystal base, clamped to at least 1 (a pop ALWAYS pays — toddler rule) and to
+        /// the configured maximum.</summary>
+        public int DigCrystalCoins(int blobSize)
+        {
+            int per = Mathf.Max(0, DigCrystalCoinBase);
+            int cap = Mathf.Max(1, DigCrystalCoinMax);
+            return Mathf.Clamp(per * Mathf.Max(1, blobSize), 1, cap);
+        }
+
+        /// <summary>The pot's coin-spray range, clamped defensively to [1,12] with min &lt;= max,
+        /// so a bad serialized value can never break a pot into zero coins.</summary>
+        public void GetPotCoinRange(out int min, out int max)
+        {
+            min = Mathf.Clamp(DigPotCoinMin, 1, 12);
+            max = Mathf.Clamp(DigPotCoinMax, 1, 12);
+            if (max < min)
+            {
+                max = min;
+            }
+        }
+
+        /// <summary>The crystal-cluster size range, clamped to [2,10] with min &lt;= max. Two is
+        /// the floor because a "cluster" of one has no blob to pop.</summary>
+        public void GetCrystalClusterRange(out int min, out int max)
+        {
+            min = Mathf.Clamp(DigCrystalClusterMin, 2, 10);
+            max = Mathf.Clamp(DigCrystalClusterMax, 2, 10);
+            if (max < min)
+            {
+                max = min;
+            }
+        }
 
         // ----- Derived helpers -----
 

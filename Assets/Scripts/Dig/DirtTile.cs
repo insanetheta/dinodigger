@@ -16,6 +16,7 @@ namespace DinoDigger.Dig
         private ParticleSystem _crumbs;
         private DigModeController _owner;
         private PlaceholderLibrary _lib;
+        private GameConfig _config;
 
         private int _maxHealth = 3;
         private int _damage;
@@ -48,14 +49,55 @@ namespace DinoDigger.Dig
         private Coroutine _squash;
         private bool _falling;
         private Vector3 _restScale = Vector3.one;
-        private const float SquashTime = 0.22f;   // impact squash + spring back
-        private const float SquashAmount = 0.18f; // widen x / flatten y at peak impact
+
+        // MOTION IS CONFIG, NOT CONSTANTS (DinoDigger-73a). Squash depth/recovery and the fall
+        // curve are read from GameConfig at the moment they are USED, never cached into a field
+        // at Build time, so dragging a slider in play mode retunes the very next landing. The
+        // fallbacks below are only for a tile built with no config (a legacy/bare scene).
+        private const float DefaultSquashTime = 0.22f;
+        private const float DefaultSquashAmount = 0.18f;
+
+        // ---- Dig toys (Dig Loop 2.0) -----------------------------------------
+        // A toy is still a DirtTile: same collider, same gravity, same clear chokepoint. Only
+        // the art, the hardness and what happens when it breaks differ, which is what keeps the
+        // cascade engine completely unaware that crystals or geodes exist.
+        private DigTileKind _kind = DigTileKind.Dirt;
+        private int _crystalColor;
+        private bool _geodeArmed;   // a geode takes no damage: its FIRST hit lights the fuse
+
+        // Fallback tints for the three crystal colours, used only when the generated crystal art
+        // has not been imported (the dirt sprite is tinted instead). Deliberately vivid: the
+        // colour is the ONLY thing a child has to match, so it must read at a glance either way.
+        private static readonly Color[] CrystalTints =
+        {
+            new Color(0.35f, 0.85f, 0.85f),  // teal
+            new Color(1.00f, 0.55f, 0.45f),  // coral
+            new Color(1.00f, 0.82f, 0.30f),  // gold
+        };
 
         public int Row { get; private set; }
         public int Col { get; private set; }
         public bool HasItem { get; private set; }
         public bool IsSurprise => _isSurprise;
         public bool IsDestroyed => _destroyed;
+
+        /// <summary>What this cell is: plain dirt, a crystal, a boom geode or a pinata pot.</summary>
+        public DigTileKind Kind => _kind;
+
+        /// <summary>Crystal colour index (0 teal / 1 coral / 2 gold). Meaningless for other
+        /// kinds; the flood fill only ever compares it between two crystals.</summary>
+        public int CrystalColor => _crystalColor;
+
+        /// <summary>True once a geode has been hit and its fuse is burning — a second hit must
+        /// not re-light it (that would double the boom).</summary>
+        public bool IsGeodeArmed => _geodeArmed;
+
+        /// <summary>The colour a crystal of <paramref name="color"/> reads as, for its sparkle
+        /// burst and for the art-less fallback tint.</summary>
+        public static Color CrystalTint(int color)
+        {
+            return CrystalTints[Mathf.Clamp(color, 0, CrystalTints.Length - 1)];
+        }
 
         /// <summary>True while this tile is travelling to a cell the cascade already moved
         /// it to. Taps on it are ignored (it lands first) and tests pace to it.</summary>
@@ -69,6 +111,7 @@ namespace DinoDigger.Dig
         internal bool TestPeekEnabled => _peek != null && _peek.enabled;
         internal float TestPeekAlpha => _peek != null ? _peek.color.a : 0f;
         internal bool TestIsSurprise => _isSurprise;
+        internal DigTileKind TestKind => _kind;
 
         /// <summary>TEST HOOK. Re-seat this tile's max health (clamped >= 1) and reset its
         /// damage, refreshing the crack sprite, so a test can verify the proportional
@@ -81,11 +124,12 @@ namespace DinoDigger.Dig
             RefreshSprite();
         }
 
-        public void Build(DigModeController owner, PlaceholderLibrary lib, int row, int col,
-            int maxHealth, ParticleSystem crumbs)
+        public void Build(DigModeController owner, PlaceholderLibrary lib, GameConfig config,
+            int row, int col, int maxHealth, ParticleSystem crumbs)
         {
             _owner = owner;
             _lib = lib;
+            _config = config;
             Row = row;
             Col = col;
             _maxHealth = Mathf.Max(1, maxHealth);
@@ -117,10 +161,48 @@ namespace DinoDigger.Dig
         public void SetDirtTint(Color tint)
         {
             _dirtTint = tint;
-            if (_dirt != null)
+            ApplyTint();
+        }
+
+        /// <summary>Turn this cell into a dig toy (or back into plain dirt): art, hardness and
+        /// break behaviour in one call. Site generation and the demo/test hooks both go through
+        /// here, so a hand-placed crystal is indistinguishable from a rolled one.
+        ///
+        /// A toy NEVER also hides a buried item — the caller (site gen) picks from item-free
+        /// tiles — so this clears any peek defensively rather than leaving a hint glowing under
+        /// art that will never be dug out of.
+        ///
+        /// Hardness is the toy's whole difficulty story: a crystal is 1 (it pops), a geode is 1
+        /// (its first crack lights the fuse, and it never actually takes the hit), a pot is 2
+        /// (crack, then break). Dirt keeps whatever the theme rolled.</summary>
+        public void SetKind(DigTileKind kind, int crystalColor)
+        {
+            _kind = kind;
+            _crystalColor = Mathf.Clamp(crystalColor, 0, CrystalTints.Length - 1);
+            _geodeArmed = false;
+            _damage = 0;
+
+            switch (kind)
             {
-                _dirt.color = tint;
+                case DigTileKind.Crystal:
+                case DigTileKind.Geode:
+                    _maxHealth = 1;
+                    break;
+                case DigTileKind.Pot:
+                    _maxHealth = 2;
+                    break;
             }
+
+            if (kind != DigTileKind.Dirt)
+            {
+                HasItem = false;
+                if (_peek != null)
+                {
+                    _peek.enabled = false;
+                }
+            }
+
+            RefreshSprite();
         }
 
         public void SetPeek(Sprite itemSprite, Color tint)
@@ -215,7 +297,10 @@ namespace DinoDigger.Dig
                 }
 
                 float u = hold >= 1f ? 1f : Mathf.Clamp01((t - hold) / (1f - hold));
-                transform.position = Vector3.LerpUnclamped(from, target, u * u); // accelerate: heavy, not floaty
+                // Shape read from config EVERY FRAME (DinoDigger-73a): switching FallEase in the
+                // inspector re-curves even the falls already in the air.
+                float e = _config != null ? _config.DigFallCurve(u) : u * u;
+                transform.position = Vector3.LerpUnclamped(from, target, e);
             }, () =>
             {
                 if (this == null)
@@ -238,7 +323,17 @@ namespace DinoDigger.Dig
         {
             Tween.CancelPunch(transform);
             EndSquash();
-            _squash = Tween.Run(SquashTime, t =>
+
+            // Read at IMPACT TIME, not at build time (DinoDigger-73a): a tweak to the squash
+            // knobs shows up on the very next tile that lands.
+            float time = _config != null
+                ? Mathf.Clamp(_config.DigSquashRecoverSeconds, 0.01f, 2f)
+                : DefaultSquashTime;
+            float amount = _config != null
+                ? Mathf.Clamp(_config.DigSquashAmplitude, 0f, 0.9f)
+                : DefaultSquashAmount;
+
+            _squash = Tween.Run(time, t =>
             {
                 if (this == null)
                 {
@@ -247,8 +342,8 @@ namespace DinoDigger.Dig
 
                 float e = Mathf.Sin(t * Mathf.PI) * (1f - t); // impact spike, decaying to rest
                 transform.localScale = new Vector3(
-                    _restScale.x * (1f + SquashAmount * e),
-                    _restScale.y * (1f - SquashAmount * e),
+                    _restScale.x * (1f + amount * e),
+                    _restScale.y * (1f - amount * e),
                     _restScale.z);
             }, () =>
             {
@@ -290,11 +385,28 @@ namespace DinoDigger.Dig
             _owner?.OnTileTapped(this);
         }
 
-        /// <summary>Apply one hit. Returns true when this hit destroys the tile.</summary>
+        /// <summary>Apply one hit. Returns true when this hit destroys the tile.
+        ///
+        /// A BOOM GEODE never takes a hit at all: the first thing that touches it — a tap, a
+        /// tile landing on it, a crew clear — lights its fuse instead and reports "not
+        /// destroyed", so the geode is still standing (and still sparkling) right up until it
+        /// goes off. That single interception is what makes "tapping OR uncovering-by-crack
+        /// triggers it" one code path rather than four.</summary>
         public bool Damage()
         {
             if (_destroyed)
             {
+                return false;
+            }
+
+            if (_kind == DigTileKind.Geode)
+            {
+                if (!_geodeArmed)
+                {
+                    _geodeArmed = true;
+                    _owner?.OnGeodeArmed(this);
+                }
+
                 return false;
             }
 
@@ -330,7 +442,27 @@ namespace DinoDigger.Dig
             }
         }
 
-        private void Crumble()
+        /// <summary>Break this tile RIGHT NOW whatever its hardness, optionally holding the art
+        /// on screen for <paramref name="visualDelay"/> seconds first and then sparkle-shrinking
+        /// it away. Used by the crystal blob pop (whose LOGIC is synchronous — the whole blob is
+        /// cleared and the board settled on the tapped frame — while the VISUAL ripples outward
+        /// ring by ring) and by a geode detonating itself.
+        ///
+        /// The collider and the grid cell go immediately in every case: a corpse must never be
+        /// tappable and gravity must never see a hole that is not there yet. Only the pixels
+        /// linger.</summary>
+        internal void ForceBreak(float visualDelay)
+        {
+            if (_destroyed)
+            {
+                return;
+            }
+
+            _damage = _maxHealth;
+            Crumble(visualDelay);
+        }
+
+        private void Crumble(float visualDelay = 0f)
         {
             _destroyed = true;
             _wiggling = false;
@@ -346,10 +478,6 @@ namespace DinoDigger.Dig
             _falling = false;
             EndSquash();
             transform.localRotation = Quaternion.identity; // undo any surprise sway
-            if (_dirt != null)
-            {
-                _dirt.enabled = false;
-            }
 
             var col = GetComponent<Collider2D>();
             if (col != null)
@@ -361,6 +489,58 @@ namespace DinoDigger.Dig
             {
                 _peek.enabled = false; // item is now uncovered / about to pop
             }
+
+            if (_dirt == null)
+            {
+                return;
+            }
+
+            if (visualDelay <= 0f)
+            {
+                _dirt.enabled = false;
+                return;
+            }
+
+            // Held-then-shrunk exit (a crystal waiting for its ring). The shrink writes scale,
+            // so it hands the transform over from any in-flight punch/squash first and runs off
+            // the RESTING scale — never off whatever pose it happens to be in mid-punch.
+            Tween.CancelPunch(transform);
+            transform.localScale = _restScale;
+            float fade = _config != null
+                ? Mathf.Clamp(_config.DigCrystalPopFadeSeconds, 0.02f, 1f)
+                : 0.14f;
+            Tween.After(visualDelay, () =>
+            {
+                if (this == null || _dirt == null)
+                {
+                    return;
+                }
+
+                Tween.Run(fade, t =>
+                {
+                    if (this == null || _dirt == null)
+                    {
+                        return;
+                    }
+
+                    // A quick bulge-then-nothing: it reads as a pop rather than a fade-out.
+                    float k = Mathf.Sin(Mathf.Clamp01(t) * Mathf.PI * 0.5f);
+                    transform.localScale = _restScale * (1f + 0.25f * k) * (1f - k);
+                }, () =>
+                {
+                    if (this == null)
+                    {
+                        return;
+                    }
+
+                    if (_dirt != null)
+                    {
+                        _dirt.enabled = false;
+                    }
+
+                    transform.localScale = _restScale;
+                });
+            });
         }
 
         private void RefreshSprite()
@@ -370,17 +550,97 @@ namespace DinoDigger.Dig
                 return;
             }
 
-            // Map damage 0..max-1 across the 3 crack-state sprites.
-            int stateCount = 3;
-            int state = _maxHealth <= 1 ? 0
-                : Mathf.Clamp(Mathf.FloorToInt((float)_damage / _maxHealth * stateCount), 0, stateCount - 1);
-            Sprite s = _lib.Dirt(state);
-            if (s != null)
+            switch (_kind)
             {
-                _dirt.sprite = s;
+                case DigTileKind.Crystal:
+                {
+                    Sprite crystal = _lib.Crystal(_crystalColor);
+                    if (crystal != null)
+                    {
+                        _dirt.sprite = crystal;
+                    }
+
+                    break;
+                }
+
+                case DigTileKind.Geode:
+                    if (_lib.BoomGeode != null)
+                    {
+                        _dirt.sprite = _lib.BoomGeode;
+                    }
+
+                    break;
+
+                case DigTileKind.Pot:
+                {
+                    // One crack state: whole until it has been hit, cracked after (and the
+                    // NEXT hit breaks it). Falls back to the whole pot if the cracked art is
+                    // missing rather than blanking the cell.
+                    Sprite pot = _damage > 0 && _lib.PinataPotCracked != null
+                        ? _lib.PinataPotCracked
+                        : _lib.PinataPot;
+                    if (pot != null)
+                    {
+                        _dirt.sprite = pot;
+                    }
+
+                    break;
+                }
+
+                default:
+                {
+                    // Map damage 0..max-1 across the 3 crack-state sprites.
+                    int stateCount = 3;
+                    int state = _maxHealth <= 1 ? 0
+                        : Mathf.Clamp(Mathf.FloorToInt((float)_damage / _maxHealth * stateCount), 0, stateCount - 1);
+                    Sprite s = _lib.Dirt(state);
+                    if (s != null)
+                    {
+                        _dirt.sprite = s;
+                    }
+
+                    break;
+                }
             }
 
-            _dirt.color = _dirtTint; // keep the theme tint across crack-state swaps
+            ApplyTint();
+        }
+
+        /// <summary>Re-apply the renderer tint for this tile's kind. The theme's dirt multiply
+        /// belongs to DIRT only — a crystal's whole job is to read as its own colour, and a
+        /// muddy-brown "gold" crystal would break the one matching rule the game has. A toy with
+        /// no imported art keeps the dirt sprite under its toy tint so it is still readable.</summary>
+        private void ApplyTint()
+        {
+            if (_dirt == null)
+            {
+                return;
+            }
+
+            switch (_kind)
+            {
+                case DigTileKind.Crystal:
+                    _dirt.color = _lib != null && _lib.Crystal(_crystalColor) != null
+                        ? Color.white
+                        : CrystalTint(_crystalColor);
+                    break;
+
+                case DigTileKind.Geode:
+                    _dirt.color = _lib != null && _lib.BoomGeode != null
+                        ? Color.white
+                        : new Color(0.72f, 0.62f, 0.95f);
+                    break;
+
+                case DigTileKind.Pot:
+                    _dirt.color = _lib != null && _lib.PinataPot != null
+                        ? Color.white
+                        : new Color(0.95f, 0.55f, 0.75f);
+                    break;
+
+                default:
+                    _dirt.color = _dirtTint; // keep the theme tint across crack-state swaps
+                    break;
+            }
         }
     }
 }

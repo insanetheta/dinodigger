@@ -202,6 +202,54 @@ namespace DinoDigger.Overworld
             }
         }
 
+        /// <summary>Tiny camera nudge for a dig-site whumph (the boom geode, DinoDigger-z4d).
+        ///
+        /// Shakes around the dig framing this component ALREADY OWNS (<see cref="_digCenter"/>),
+        /// never around a snapshot of wherever the transform happens to be: a snapshot taken
+        /// while another tween is writing the position would settle the camera on a stale spot
+        /// when the shake ends. Only runs while parked in the dig view — during a transition the
+        /// move tween owns the transform, and a second writer would fight it — so a geode that
+        /// goes off as the round ends simply shakes nothing.</summary>
+        public void ShakeDig(float amplitude, float seconds)
+        {
+            if (_camera == null || !_digMode || _transitioning)
+            {
+                return;
+            }
+
+            float amp = Mathf.Clamp(amplitude, 0f, 0.5f);   // a nudge, never a jolt (toddler rule)
+            float dur = Mathf.Clamp(seconds, 0.05f, 1f);
+            if (amp <= 0.0001f)
+            {
+                return;
+            }
+
+            float z = transform.position.z;
+            Vector3 basePos = new Vector3(_digCenter.x, _digCenter.y, z);
+            float seed = Random.value * 10f;
+
+            Tween.Run(dur, t =>
+            {
+                if (_camera == null)
+                {
+                    return;
+                }
+
+                // Decaying wobble on both axes, from two out-of-phase sines so it reads as a
+                // thump rather than a rattle.
+                float decay = 1f - Mathf.Clamp01(t);
+                float dx = Mathf.Sin((seed + t) * 46f) * amp * decay;
+                float dy = Mathf.Cos((seed + t) * 37f) * amp * decay * 0.7f;
+                transform.position = basePos + new Vector3(dx, dy, 0f);
+            }, () =>
+            {
+                if (_camera != null && _digMode && !_transitioning)
+                {
+                    transform.position = basePos; // always land back on the exact framing
+                }
+            });
+        }
+
         /// <summary>Ease back out to following the backhoe.</summary>
         public void ExitDig(System.Action onArrived)
         {

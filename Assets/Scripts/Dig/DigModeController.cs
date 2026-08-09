@@ -12,7 +12,8 @@ namespace DinoDigger.Dig
     /// here by CameraFollow. Tapping a dirt tile swings the scoop and crumbles it;
     /// revealing a buried item pops it out and hands control back to the overworld.
     /// </summary>
-    public class DigModeController : MonoBehaviour
+    // PARTIAL: the V2 arm-art selection (DinoDigger-rrn) lives in DigArmV2.cs.
+    public partial class DigModeController : MonoBehaviour
     {
         private struct Buried
         {
@@ -171,11 +172,43 @@ namespace DinoDigger.Dig
         // dirt is both free and the only readable option: a peek pinned to a fixed cell would
         // end up glowing through a different tile than the one hiding it.
         private const int MaxSettlePasses = 64;   // see SettleGrid: the real bound is ~1 + rows*cols
-        private const float FallRowTime = 0.07f;  // travel time per row dropped...
-        private const float FallMaxTime = 0.28f;  // ...capped, so a deep drop never drags
-        private const float FallStagger = 0.05f;  // per-tile start delay up the column (the tumble)
-        private const float FallStaggerMax = 0.25f;
-        private const float ThumpMinGap = 0.08f;  // one landing thump per beat, not one per tile
+
+        // MOTION LIVES IN GameConfig (DinoDigger-73a). Per-row travel time, the stagger up a
+        // column, the squash, the dust count, the thump throttle — all of it is designer-tunable
+        // and read through the helpers below EVERY time a tile moves, never cached, so Greg can
+        // drag a slider mid-cascade and watch the next one land differently. The literals here
+        // are only the no-config fallback (a bare scene), and they match the shipped defaults.
+        private const float FallbackFallRowTime = 0.07f;
+        private const float FallbackFallMinTime = 0.05f;
+        private const float FallbackFallMaxTime = 0.28f;
+        private const float FallbackFallStagger = 0.05f;
+        private const float FallbackFallStaggerMax = 0.25f;
+        private const float FallbackThumpGap = 0.08f;
+        private const int FallbackDustPerLanding = 4;
+
+        /// <summary>Travel seconds for a tile dropping <paramref name="drop"/> rows.</summary>
+        private float FallSeconds(int drop)
+        {
+            return _config != null
+                ? _config.DigFallSeconds(drop)
+                : Mathf.Min(FallbackFallMaxTime, FallbackFallMinTime + FallbackFallRowTime * drop);
+        }
+
+        /// <summary>Start delay for the <paramref name="order"/>-th mover up a falling column.</summary>
+        private float FallStaggerFor(int order)
+        {
+            return _config != null
+                ? _config.DigFallStagger(order)
+                : Mathf.Min(order * FallbackFallStagger, FallbackFallStaggerMax);
+        }
+
+        /// <summary>Minimum seconds between landing thumps (one per beat, not one per tile).</summary>
+        private float ThumpGap =>
+            _config != null ? Mathf.Max(0f, _config.DigLandingThumpGapSeconds) : FallbackThumpGap;
+
+        /// <summary>Dust particles one landing tile puffs.</summary>
+        private int DustPerLanding =>
+            _config != null ? Mathf.Clamp(_config.DigDustPerLanding, 0, 40) : FallbackDustPerLanding;
 
         /// <summary>One faller and the tile it came to rest on (null = the pit floor).</summary>
         private struct Landing
@@ -185,6 +218,31 @@ namespace DinoDigger.Dig
         }
 
         private readonly List<Landing> _landings = new List<Landing>();
+
+        // ---- Dig toys (DinoDigger-z4d) ---------------------------------------
+        // Crystals, boom geodes and pinata pots are all just DirtTiles with a Kind, so they fall,
+        // crack and clear through the engine above with no special cases inside it. Everything
+        // that makes them TOYS lives in this file, below: the flood-fill pop, the auto-pop pass
+        // that rides the settle loop, the geode's fuse-then-whumph, and the pot's coin fountain.
+        //
+        // Same-colour crystal contacts as they were BEFORE the current settle started (see
+        // SnapshotCrystalPairs). Only contacts that are NEW when the board goes quiet auto-pop —
+        // a cluster that merely rode a column down together is untouched.
+        private readonly HashSet<long> _crystalPairs = new HashSet<long>();
+        private readonly List<DirtTile> _blob = new List<DirtTile>();      // flood-fill scratch
+        private readonly List<int> _blobRing = new List<int>();            // ...and its ring depths
+        private readonly HashSet<DirtTile> _blobSeen = new HashSet<DirtTile>();
+        private ParticleSystem _dust;   // landing/geode dust emitter (built on first use)
+
+        private int _crystalsPopped;    // test-observable: crystals popped this site
+        private int _crystalBlobs;      // test-observable: blob pops (taps + auto-pops)
+        private int _lastBlobSize;      // test-observable: crystals in the last blob popped
+        private int _autoPops;          // test-observable: auto-pop passes that popped something
+        private int _geodeBooms;        // test-observable: geodes detonated this site
+        private int _potsBroken;        // test-observable: pots broken this site
+        private int _lastPotCoins;      // test-observable: coins the last pot sprayed
+        private int _toyCoins;          // test-observable: coins ALL toys paid this site
+
         private bool _settling;        // re-entrancy: a clear DURING a settle rides the running loop
         private float _gridHalfW;      // column 0's x offset from the dig origin
         private float _lastThump;
@@ -349,6 +407,67 @@ namespace DinoDigger.Dig
             }
         }
 
+        // ---- Dig toy test hooks (DinoDigger-z4d) ----
+        internal int TestCrystalsPopped => _crystalsPopped;
+        internal int TestCrystalBlobs => _crystalBlobs;
+        internal int TestLastBlobSize => _lastBlobSize;
+        internal int TestAutoPops => _autoPops;
+        internal int TestGeodeBooms => _geodeBooms;
+        internal int TestPotsBroken => _potsBroken;
+        internal int TestLastPotCoins => _lastPotCoins;
+        internal int TestToyCoins => _toyCoins;
+
+        /// <summary>TEST HOOK. Place NO random toys at the next site, so a case can build an
+        /// exact board by hand (mirrors TestSuppressCrew). Default false = normal play.</summary>
+        internal static bool TestSuppressToys;
+
+        /// <summary>TEST HOOK. Turn the cell at r,c into a crystal of <paramref name="color"/>.
+        /// Refuses (returns false) on a cell that hides a buried item, is the surprise pocket, is
+        /// already a toy, or is gone — exactly the cells site generation refuses too, so a case
+        /// building a blob by hand can never accidentally create a board the game itself would
+        /// never produce.</summary>
+        internal bool TestSetCrystal(int r, int c, int color) =>
+            TestSetToy(r, c, DigTileKind.Crystal, color);
+
+        /// <summary>TEST HOOK. Turn the cell at r,c into a boom geode (same refusals).</summary>
+        internal bool TestSetGeode(int r, int c) => TestSetToy(r, c, DigTileKind.Geode, 0);
+
+        /// <summary>TEST HOOK. Turn the cell at r,c into a pinata pot (same refusals).</summary>
+        internal bool TestSetPot(int r, int c) => TestSetToy(r, c, DigTileKind.Pot, 0);
+
+        private bool TestSetToy(int r, int c, DigTileKind kind, int color)
+        {
+            DirtTile t = TileAt(r, c);
+            if (t == null || t.IsDestroyed || t.HasItem || t.IsSurprise ||
+                t.Kind != DigTileKind.Dirt)
+            {
+                return false;
+            }
+
+            t.SetKind(kind, color);
+            return true;
+        }
+
+        internal DigTileKind TestKindAt(int r, int c)
+        {
+            DirtTile t = TileAt(r, c);
+            return t != null ? t.Kind : DigTileKind.Dirt;
+        }
+
+        internal int TestCrystalColorAt(int r, int c)
+        {
+            DirtTile t = TileAt(r, c);
+            return t != null ? t.CrystalColor : -1;
+        }
+
+        /// <summary>TEST HOOK. Size of the connected same-colour blob at r,c right now, without
+        /// popping it — so a case can prove the flood fill sees exactly the blob it built.</summary>
+        internal int TestBlobSizeAt(int r, int c)
+        {
+            CollectCrystalBlob(TileAt(r, c));
+            return _blob.Count;
+        }
+
         // ---- Gravity cascade test hooks ----
         internal int TestSettlePasses => _settlePasses;
         internal int TestSettleFalls => _settleFalls;
@@ -420,6 +539,123 @@ namespace DinoDigger.Dig
             {
                 FireGeode(t);
             }
+        }
+
+        // ------------------------------------------------------------ DEMO HOOKS
+        // PUBLIC on purpose (DinoDigger-73a): the DinoDigger/Demo/Dig menu lives in the editor
+        // assembly, which cannot see the internal Test* hooks above. These are the same
+        // operations the tests drive, exposed for a human driving a live build by eye — every
+        // one is a no-op (returning false / 0) outside an open dig site, so a stray menu click
+        // in the overworld does nothing at all.
+
+        /// <summary>World position of the dig root — where the whole site is built. The scene-view
+        /// capture frames on this (plus <see cref="DigCenter"/> for the camera framing).</summary>
+        public Vector3 DigRootPosition => _root != null ? _root.position : transform.position;
+
+        /// <summary>DEMO. Drop a 2x2 same-colour crystal cluster into the highest patch of plain
+        /// dirt that can hold one. Returns the cells converted (0 = no room / not in a dig).</summary>
+        public int DemoSpawnCrystalCluster(int color)
+        {
+            if (!_open || _grid == null)
+            {
+                return 0;
+            }
+
+            for (int r = 0; r + 1 < _rows; r++)
+            {
+                for (int c = 0; c + 1 < _cols; c++)
+                {
+                    if (!DemoCellFree(r, c) || !DemoCellFree(r, c + 1) ||
+                        !DemoCellFree(r + 1, c) || !DemoCellFree(r + 1, c + 1))
+                    {
+                        continue;
+                    }
+
+                    TestSetToy(r, c, DigTileKind.Crystal, color);
+                    TestSetToy(r, c + 1, DigTileKind.Crystal, color);
+                    TestSetToy(r + 1, c, DigTileKind.Crystal, color);
+                    TestSetToy(r + 1, c + 1, DigTileKind.Crystal, color);
+                    return 4;
+                }
+            }
+
+            return 0;
+        }
+
+        /// <summary>DEMO. Put a boom geode in the middle of the board (first free cell scanning
+        /// out from the centre). Returns false when there is nowhere to put it.</summary>
+        public bool DemoSpawnGeode() => DemoPlaceCentral(DigTileKind.Geode);
+
+        /// <summary>DEMO. Put a pinata pot in the middle of the board.</summary>
+        public bool DemoSpawnPot() => DemoPlaceCentral(DigTileKind.Pot);
+
+        /// <summary>DEMO. Clear the bottom-middle cell, which drops that whole column and cracks
+        /// whatever it lands on — the plainest way to watch one cascade run. Returns false when
+        /// there is nothing to clear.</summary>
+        public bool DemoCollapseColumn()
+        {
+            if (!_open || _grid == null)
+            {
+                return false;
+            }
+
+            int mid = _cols / 2;
+            for (int step = 0; step < _cols; step++)
+            {
+                // Walk outward from the middle column so a chewed-up board still collapses.
+                int c = step % 2 == 0 ? mid + step / 2 : mid - (step + 1) / 2;
+                if (c < 0 || c >= _cols)
+                {
+                    continue;
+                }
+
+                for (int r = _rows - 1; r >= 0; r--)
+                {
+                    DirtTile t = TileAt(r, c);
+                    if (t != null && !t.IsDestroyed)
+                    {
+                        ClearTileFully(t, "demo column collapse");
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool DemoPlaceCentral(DigTileKind kind)
+        {
+            if (!_open || _grid == null)
+            {
+                return false;
+            }
+
+            int midR = _rows / 2;
+            int midC = _cols / 2;
+            for (int radius = 0; radius < _rows + _cols; radius++)
+            {
+                for (int r = midR - radius; r <= midR + radius; r++)
+                {
+                    for (int c = midC - radius; c <= midC + radius; c++)
+                    {
+                        if (DemoCellFree(r, c) && TestSetToy(r, c, kind, 0))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>A cell a demo toy may take over: alive, plain dirt, no buried item, not the
+        /// surprise pocket — the same bar site generation holds itself to.</summary>
+        private bool DemoCellFree(int r, int c)
+        {
+            DirtTile t = TileAt(r, c);
+            return t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise &&
+                   t.Kind == DigTileKind.Dirt;
         }
 
         // True when the excavator arm is parked and free to accept a fresh tap:
@@ -569,6 +805,17 @@ namespace DinoDigger.Dig
             _landingCracks = 0;
             _landings.Clear();
 
+            // Per-site toy bookkeeping (DinoDigger-z4d).
+            _crystalPairs.Clear();
+            _crystalsPopped = 0;
+            _crystalBlobs = 0;
+            _lastBlobSize = 0;
+            _autoPops = 0;
+            _geodeBooms = 0;
+            _potsBroken = 0;
+            _lastPotCoins = 0;
+            _toyCoins = 0;
+
             for (int r = 0; r < _rows; r++)
             {
                 for (int c = 0; c < _cols; c++)
@@ -581,7 +828,7 @@ namespace DinoDigger.Dig
                     box.size = new Vector2(1.0f, 1.0f); // generous touch target
 
                     var tile = go.AddComponent<DirtTile>();
-                    tile.Build(this, _lib, r, c, RollTileHardness(), _crumbs);
+                    tile.Build(this, _lib, _config, r, c, RollTileHardness(), _crumbs);
                     tile.SetDirtTint(dirtTint); // theme multiply over the crack sprites
 
                     _tiles.Add(tile);
@@ -589,6 +836,11 @@ namespace DinoDigger.Dig
                 }
             }
 
+            // Toys are placed BEFORE the buried items and the surprise pocket, and both of those
+            // then skip any cell that is no longer plain dirt. That ordering is the whole of the
+            // "the buried-item layer stays independent" rule: a crystal can never also be hiding
+            // an egg, so a pop can never silently swallow loot the peek had already promised.
+            PlaceDigToys();
             PlaceItems();
             PlaceSurprisePocket();
             PlaceBackhoe(origin, halfW);
@@ -744,6 +996,10 @@ namespace DinoDigger.Dig
                 _effTarget = RestPoint();
                 SolveIK(_effTarget, float.PositiveInfinity);
             }
+
+            // DigArmV2 (DinoDigger-rrn): if the config selects the V2 art set, remount
+            // the V2 sprites over the freshly assembled V1 rig (art only; see DigArmV2.cs).
+            ApplyDigArmVersion();
 
             SetupCrew(surface);
         }
@@ -969,9 +1225,39 @@ namespace DinoDigger.Dig
         /// to crack the surprise pocket.</summary>
         private void ClearTileFully(DirtTile t, string cause)
         {
+            ClearTileNoSettle(t, cause);
+            SettleGrid(cause);
+        }
+
+        /// <summary>Clear one tile WITHOUT settling — the shared body of every "make this cell go
+        /// away" path, split out so a caller that clears SEVERAL cells (the geode's 3x3, a
+        /// crystal blob, an auto-pop pass) can settle the board exactly once at the end instead
+        /// of once per cell.
+        ///
+        /// This is also where a toy's identity is honoured, so no caller has to know about toys:
+        /// a crystal takes its whole blob (and its coins) with it, a geode lights its fuse rather
+        /// than dying quietly, and everything else is hammered until it crumbles the way dirt
+        /// always has.</summary>
+        private void ClearTileNoSettle(DirtTile t, string cause)
+        {
             if (t == null || t.IsDestroyed)
             {
                 return;
+            }
+
+            switch (t.Kind)
+            {
+                case DigTileKind.Crystal:
+                    // The blob, not just this cell — and deliberately the LOGICAL half, so a
+                    // caller clearing several cells still settles exactly once at the end.
+                    PopCrystalBlobLogical(t, cause);
+                    return;
+
+                case DigTileKind.Geode:
+                    // Damage() lights the fuse and reports "still standing"; the boom itself
+                    // clears this cell (and eight more) when the fuse burns down.
+                    t.Damage();
+                    return;
             }
 
             int guard = 0;
@@ -982,7 +1268,7 @@ namespace DinoDigger.Dig
 
             if (t.IsDestroyed)
             {
-                TileCleared(t, cause);
+                ClearTile(t, cause);
             }
         }
 
@@ -1227,6 +1513,11 @@ namespace DinoDigger.Dig
                     continue; // keep the top layer mostly clear so items feel buried
                 }
 
+                if (tile.Kind != DigTileKind.Dirt)
+                {
+                    continue; // a toy cell never also hides an item (see BuildGrid)
+                }
+
                 Buried b = RollItem();
                 _buried[tile] = b;
 
@@ -1235,14 +1526,120 @@ namespace DinoDigger.Dig
                 placed++;
             }
 
-            // If everything was top-row (tiny grids), just place on whatever is left.
-            if (placed == 0 && candidates.Count > 0)
+            // If everything was top-row / a toy (tiny grids), place on the first plain tile left
+            // so a site always buries SOMETHING and the round can still be finished.
+            if (placed == 0)
             {
-                Buried b = RollItem();
-                _buried[candidates[0]] = b;
-                Sprite peek = PeekSprite(b, out Color tint);
-                candidates[0].SetPeek(peek, tint);
+                for (int i = 0; i < candidates.Count; i++)
+                {
+                    if (candidates[i] == null || candidates[i].Kind != DigTileKind.Dirt)
+                    {
+                        continue;
+                    }
+
+                    Buried b = RollItem();
+                    _buried[candidates[i]] = b;
+                    Sprite peek = PeekSprite(b, out Color tint);
+                    candidates[i].SetPeek(peek, tint);
+                    break;
+                }
             }
+        }
+
+        // ----- Dig toy site generation (DinoDigger-z4d) -----
+
+        /// <summary>Roll this site's toys onto plain dirt cells: up to a couple of crystal
+        /// clusters (each one colour, 4-way connected so a single tap always takes the whole
+        /// thing), then at most one boom geode and one pinata pot.
+        ///
+        /// Runs before the buried items and the pocket, and every placement is on a cell that is
+        /// still plain dirt, so no toy can ever land on another toy. A site rolling NO toys is a
+        /// perfectly normal outcome — the variety between sites is what makes a crystal site feel
+        /// like a treat.</summary>
+        private void PlaceDigToys()
+        {
+            if (_grid == null || _tiles.Count == 0 || TestSuppressToys)
+            {
+                return;
+            }
+
+            float crystalChance = _config != null ? Mathf.Clamp01(_config.DigCrystalSiteChance) : 0.65f;
+            if (Random.value < crystalChance)
+            {
+                int clusters = _config != null ? Mathf.Clamp(_config.DigCrystalClusterCount, 0, 4) : 2;
+                int colors = _lib != null ? Mathf.Max(1, _lib.CrystalColorCount) : 3;
+                int min = 3;
+                int max = 6;
+                _config?.GetCrystalClusterRange(out min, out max);
+
+                for (int i = 0; i < clusters; i++)
+                {
+                    GrowCrystalCluster(Random.Range(min, max + 1), Random.Range(0, colors));
+                }
+            }
+
+            float geodeChance = _config != null ? Mathf.Clamp01(_config.DigGeodeChance) : 0.3f;
+            if (Random.value < geodeChance)
+            {
+                DirtTile t = RandomPlainTile();
+                t?.SetKind(DigTileKind.Geode, 0);
+            }
+
+            float potChance = _config != null ? Mathf.Clamp01(_config.DigPotChance) : 0.35f;
+            if (Random.value < potChance)
+            {
+                DirtTile t = RandomPlainTile();
+                t?.SetKind(DigTileKind.Pot, 0);
+            }
+        }
+
+        /// <summary>Grow one connected crystal cluster of up to <paramref name="size"/> cells in
+        /// <paramref name="color"/>, by random 4-way walk from a plain seed cell. Stops early
+        /// rather than forcing its way through toys or the pit walls, so a cramped board simply
+        /// gets a smaller cluster.</summary>
+        private void GrowCrystalCluster(int size, int color)
+        {
+            DirtTile seed = RandomPlainTile();
+            if (seed == null)
+            {
+                return;
+            }
+
+            seed.SetKind(DigTileKind.Crystal, color);
+            var grown = new List<DirtTile> { seed };
+
+            int[] dr = { -1, 1, 0, 0 };
+            int[] dc = { 0, 0, -1, 1 };
+            int guard = 0;
+            while (grown.Count < size && guard++ < size * 8)
+            {
+                DirtTile from = grown[Random.Range(0, grown.Count)];
+                int d = Random.Range(0, 4);
+                DirtTile next = TileAt(from.Row + dr[d], from.Col + dc[d]);
+                if (next == null || next.Kind != DigTileKind.Dirt || next.IsDestroyed)
+                {
+                    continue;
+                }
+
+                next.SetKind(DigTileKind.Crystal, color);
+                grown.Add(next);
+            }
+        }
+
+        /// <summary>A random still-plain dirt cell, or null when the board has none left.</summary>
+        private DirtTile RandomPlainTile()
+        {
+            var pool = new List<DirtTile>();
+            for (int i = 0; i < _tiles.Count; i++)
+            {
+                DirtTile t = _tiles[i];
+                if (t != null && !t.IsDestroyed && t.Kind == DigTileKind.Dirt)
+                {
+                    pool.Add(t);
+                }
+            }
+
+            return pool.Count > 0 ? pool[Random.Range(0, pool.Count)] : null;
         }
 
         private Sprite PeekSprite(Buried b, out Color tint)
@@ -1362,9 +1759,9 @@ namespace DinoDigger.Dig
             for (int i = 0; i < _tiles.Count; i++)
             {
                 DirtTile t = _tiles[i];
-                if (t == null || t.HasItem)
+                if (t == null || t.HasItem || t.Kind != DigTileKind.Dirt)
                 {
-                    continue;
+                    continue; // the pocket is a plain dirt tile: a toy already has its own hook
                 }
 
                 any.Add(t);
@@ -1630,6 +2027,480 @@ namespace DinoDigger.Dig
             });
         }
 
+        // ============================================================ DIG TOYS (z4d)
+        // Three toys, one rule: a tap ALWAYS wins and every outcome is a bonus. Crystals pop
+        // their whole colour blob, geodes blow a 3x3 after a moment of anticipation, pots break
+        // into a fountain of coins. All three clear through ClearTile, so the gravity cascade
+        // runs exactly as it does for dirt and every toy feeds every other one.
+
+        // ----- Crystals -----
+
+        /// <summary>Pop the whole 4-way connected same-colour blob containing
+        /// <paramref name="start"/>, then let the board fall into it. The entry point for a tap;
+        /// the auto-pop and the geode chain use the logical half directly so their several pops
+        /// share ONE settle.</summary>
+        private void PopCrystalBlob(DirtTile start, string cause)
+        {
+            if (PopCrystalBlobLogical(start, cause) > 0)
+            {
+                SettleGrid(cause);
+            }
+        }
+
+        /// <summary>The blob pop itself: flood-fill from <paramref name="start"/>, clear every
+        /// crystal in the blob, pay for them, and ripple the sparkles outward. Returns the blob
+        /// size (0 when the tile is not a live crystal).
+        ///
+        /// LOGIC IS SYNCHRONOUS, THE LOOK IS STAGGERED — the same split the cascade engine uses
+        /// for falling tiles, and for the same reason: the whole blob is cleared and the grid
+        /// vacated on the tapped frame (so a test can assert it, and so nothing can wedge if the
+        /// site closes a frame later), while each crystal HOLDS its pixels for ring * config
+        /// seconds before sparkle-shrinking away. What the child sees is a pop rippling out from
+        /// their finger; what the engine sees is one clean multi-cell clear.</summary>
+        private int PopCrystalBlobLogical(DirtTile start, string cause)
+        {
+            if (start == null || start.IsDestroyed || start.Kind != DigTileKind.Crystal)
+            {
+                return 0;
+            }
+
+            CollectCrystalBlob(start);
+            int count = _blob.Count;
+            if (count == 0)
+            {
+                return 0;
+            }
+
+            // Copy out of the shared scratch before clearing anything: a clear runs the collect
+            // chokepoint, and an auto-pop pass pops several blobs back to back — neither may be
+            // iterating a list the next flood fill is allowed to overwrite.
+            var cells = _blob.ToArray();
+            var rings = _blobRing.ToArray();
+
+            float ringTime = _config != null
+                ? Mathf.Clamp(_config.DigCrystalPopRingSeconds, 0f, 0.5f)
+                : 0.03f;
+            int sparkles = _config != null
+                ? Mathf.Clamp(_config.DigCrystalSparkleCount, 0, 40)
+                : 12;
+            int gen = _siteGeneration;
+
+            for (int i = 0; i < count; i++)
+            {
+                DirtTile t = cells[i];
+                if (t == null || t.IsDestroyed)
+                {
+                    continue;
+                }
+
+                float delay = rings[i] * ringTime;
+                Color tint = DirtTile.CrystalTint(t.CrystalColor);
+                Vector3 at = t.transform.position;
+
+                t.ForceBreak(delay);   // cell vacated + collider off NOW, pixels linger
+                ClearTile(t, cause);
+                _crystalsPopped++;
+
+                if (sparkles > 0)
+                {
+                    // The burst is the only DEFERRED part, and it addresses a captured world
+                    // point rather than a grid cell, so a site that closes inside the ripple
+                    // window simply drops it (guarded on the generation like every other
+                    // delayed flourish here).
+                    Tween.After(delay, () =>
+                    {
+                        if (!_open || gen != _siteGeneration)
+                        {
+                            return;
+                        }
+
+                        SpawnPitBurst(at, tint, sparkles);
+                    });
+                }
+            }
+
+            _crystalBlobs++;
+            _lastBlobSize = count;
+            GameManager.Instance?.Audio?.Chime();
+            PayToyCoins(_config != null ? _config.DigCrystalCoins(count) : count);
+            return count;
+        }
+
+        /// <summary>Flood-fill (4-way, same colour) from <paramref name="start"/> into
+        /// <see cref="_blob"/>, with each cell's RING DEPTH from the start in
+        /// <see cref="_blobRing"/> — a breadth-first walk, so ring depth is exactly the number of
+        /// crystals between it and the tapped one, which is what the pop ripples along.</summary>
+        private void CollectCrystalBlob(DirtTile start)
+        {
+            _blob.Clear();
+            _blobRing.Clear();
+            _blobSeen.Clear();
+
+            if (start == null || start.IsDestroyed || start.Kind != DigTileKind.Crystal)
+            {
+                return;
+            }
+
+            int color = start.CrystalColor;
+            _blob.Add(start);
+            _blobRing.Add(0);
+            _blobSeen.Add(start);
+
+            int[] dr = { -1, 1, 0, 0 };
+            int[] dc = { 0, 0, -1, 1 };
+            for (int head = 0; head < _blob.Count; head++)
+            {
+                DirtTile cur = _blob[head];
+                int ring = _blobRing[head];
+                for (int i = 0; i < 4; i++)
+                {
+                    DirtTile n = TileAt(cur.Row + dr[i], cur.Col + dc[i]);
+                    if (n == null || n.IsDestroyed || n.Kind != DigTileKind.Crystal ||
+                        n.CrystalColor != color || _blobSeen.Contains(n))
+                    {
+                        continue;
+                    }
+
+                    _blobSeen.Add(n);
+                    _blob.Add(n);
+                    _blobRing.Add(ring + 1);
+                }
+            }
+        }
+
+        /// <summary>Record which same-colour crystal pairs are touching RIGHT NOW. Taken at the
+        /// top of every settle so <see cref="AutoPopCrystals"/> can tell a contact gravity just
+        /// made from one that was always there.</summary>
+        private void SnapshotCrystalPairs()
+        {
+            _crystalPairs.Clear();
+            if (_grid == null)
+            {
+                return;
+            }
+
+            for (int r = 0; r < _rows; r++)
+            {
+                for (int c = 0; c < _cols; c++)
+                {
+                    DirtTile t = TileAt(r, c);
+                    if (t == null || t.IsDestroyed || t.Kind != DigTileKind.Crystal)
+                    {
+                        continue;
+                    }
+
+                    AddPairIfMatching(t, TileAt(r + 1, c));
+                    AddPairIfMatching(t, TileAt(r, c + 1));
+                }
+            }
+        }
+
+        private void AddPairIfMatching(DirtTile a, DirtTile b)
+        {
+            if (b != null && !b.IsDestroyed && b.Kind == DigTileKind.Crystal &&
+                b.CrystalColor == a.CrystalColor)
+            {
+                _crystalPairs.Add(CrystalPairKey(a, b));
+            }
+        }
+
+        /// <summary>Order-independent identity for a pair of tiles, by instance id. Keyed this
+        /// way (rather than by row/col) because gravity renames every coordinate under the
+        /// board — the PAIR is what has to stay recognisable, not where it sits.</summary>
+        private static long CrystalPairKey(DirtTile a, DirtTile b)
+        {
+            int x = a.GetInstanceID();
+            int y = b.GetInstanceID();
+            if (x > y)
+            {
+                (x, y) = (y, x);
+            }
+
+            return ((long)(uint)x << 32) | (uint)y;
+        }
+
+        /// <summary>The settle loop's auto-pop pass: pop every blob that gravity has just
+        /// created a NEW same-colour contact inside. Returns how many crystals went.
+        ///
+        /// Newness is the whole design. Popping "any blob of 2+" would evaporate the clusters a
+        /// site is generated with the instant the child dug under one — they would never get to
+        /// tap it. Popping only NEW contacts means a cluster riding a column down together is
+        /// left alone, while a crystal that lands beside its own colour rewards the child with a
+        /// free chain they did not have to plan.</summary>
+        private int AutoPopCrystals(int gen)
+        {
+            if (_grid == null || gen != _siteGeneration || !_open || _finished)
+            {
+                return 0;
+            }
+
+            int popped = 0;
+            for (int r = 0; r < _rows && !_finished; r++)
+            {
+                for (int c = 0; c < _cols && !_finished; c++)
+                {
+                    DirtTile t = TileAt(r, c);
+                    if (t == null || t.IsDestroyed || t.Kind != DigTileKind.Crystal)
+                    {
+                        continue;
+                    }
+
+                    if (!HasNewCrystalContact(t))
+                    {
+                        continue;
+                    }
+
+                    popped += PopCrystalBlobLogical(t, "crystal auto-pop");
+                }
+            }
+
+            if (popped > 0)
+            {
+                _autoPops++;
+            }
+
+            return popped;
+        }
+
+        /// <summary>True when this crystal now touches a same-colour crystal it was NOT touching
+        /// when the current settle began.</summary>
+        private bool HasNewCrystalContact(DirtTile t)
+        {
+            int[] dr = { -1, 1, 0, 0 };
+            int[] dc = { 0, 0, -1, 1 };
+            for (int i = 0; i < 4; i++)
+            {
+                DirtTile n = TileAt(t.Row + dr[i], t.Col + dc[i]);
+                if (n == null || n.IsDestroyed || n.Kind != DigTileKind.Crystal ||
+                    n.CrystalColor != t.CrystalColor)
+                {
+                    continue;
+                }
+
+                if (!_crystalPairs.Contains(CrystalPairKey(t, n)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // ----- Boom geode -----
+
+        /// <summary>A geode has just been hit (tapped, cracked by a landing tile, or caught by a
+        /// crew clear — <see cref="DirtTile.Damage"/> funnels all of them here). Light the fuse:
+        /// sparkle, chime, and a short beat of anticipation before the whumph. The tile stays
+        /// standing and fully solid while it burns, so the board around it keeps behaving
+        /// normally; only the fuse callback has to prove its site is still current.</summary>
+        internal void OnGeodeArmed(DirtTile geode)
+        {
+            if (geode == null || !_open || _finished)
+            {
+                return;
+            }
+
+            GameManager.Instance?.Audio?.Chime();
+            SpawnPitBurst(geode.transform.position, new Color(0.75f, 0.95f, 1f), 10);
+            Tween.PunchScale(geode.transform, 0.22f, 0.22f);
+
+            float fuse = _config != null ? Mathf.Clamp(_config.DigGeodeFuseSeconds, 0f, 3f) : 0.4f;
+            int gen = _siteGeneration;
+            Tween.After(fuse, () =>
+            {
+                if (!_open || _finished || _grid == null || gen != _siteGeneration ||
+                    geode == null || geode.IsDestroyed)
+                {
+                    return;
+                }
+
+                FireBoomGeode(geode);
+            });
+        }
+
+        /// <summary>The whumph: a soft 3x3 clear centred on the geode, with a dust ring, a tiny
+        /// camera nudge and a giggle hook for the audio pass.
+        ///
+        /// The centre is read from the geode's CURRENT row/col, not from where it was when the
+        /// fuse was lit — a geode that fell during its own fuse blows up where it actually is.
+        /// Cells are cleared TOP-DOWN so no step drops tiles into a cell a later step is about to
+        /// clear (the same ordering trick the Trike headbutt uses), and the whole 3x3 shares ONE
+        /// settle so the hole collapses as a single tumble rather than nine.</summary>
+        private void FireBoomGeode(DirtTile geode)
+        {
+            int centerRow = geode.Row;
+            int centerCol = geode.Col;
+            Vector3 at = geode.transform.position;
+            _geodeBooms++;
+
+            GameManager gm = GameManager.Instance;
+            gm?.Audio?.Roar();      // AUDIO HOOK: the dig pass swaps in a soft whumph + giggle
+            gm?.DigShakeCamera(
+                _config != null ? _config.DigGeodeShakeAmplitude : 0.09f,
+                _config != null ? _config.DigGeodeShakeSeconds : 0.28f);
+
+            SpawnPitBurst(at, new Color(0.85f, 0.95f, 1f), 24);
+            SpawnDust(at, _config != null ? Mathf.Clamp(_config.DigGeodeDustCount, 0, 40) : 18);
+
+            // The geode itself goes first (it is the centre of its own hole), then the ring.
+            geode.ForceBreak(0f);
+            ClearTile(geode, "boom geode");
+
+            for (int r = centerRow - 1; r <= centerRow + 1; r++)
+            {
+                for (int c = centerCol - 1; c <= centerCol + 1; c++)
+                {
+                    if (r == centerRow && c == centerCol)
+                    {
+                        continue;
+                    }
+
+                    DirtTile t = TileAt(r, c);
+                    if (t == null || t.IsDestroyed)
+                    {
+                        continue;
+                    }
+
+                    SpawnDust(t.transform.position, 3);
+                    ClearTileNoSettle(t, "boom geode");   // a crystal here takes its blob with it
+                }
+            }
+
+            SettleGrid("boom geode");
+        }
+
+        // ----- Pinata pot -----
+
+        /// <summary>A pot just broke: spray 5-8 (config) coins that arc out over the pit, bounce,
+        /// sit and shine, then auto-collect. Nothing to chase and nothing to miss — the child
+        /// watches them get banked.
+        ///
+        /// Each coin is a throwaway sprite in the PIT plus, when it lands, one real reward
+        /// pickup through the normal guarded bank path (the same split the Big Bone surprise
+        /// uses): the spectacle lives where the child is looking, the money lives where the
+        /// wallet can see it.</summary>
+        private void SprayPotCoins(DirtTile pot)
+        {
+            GameManager gm = GameManager.Instance;
+            if (gm == null)
+            {
+                return;
+            }
+
+            int min = 5;
+            int max = 8;
+            _config?.GetPotCoinRange(out min, out max);
+            int coins = Random.Range(min, max + 1);
+            _potsBroken++;
+            _lastPotCoins = coins;
+
+            Vector3 at = pot != null ? pot.transform.position : _origin;
+            gm.Audio?.ItemPop();
+            SpawnPitBurst(at, new Color(1f, 0.85f, 0.4f), 20);
+
+            float arc = _config != null ? Mathf.Clamp(_config.DigPotCoinArcSeconds, 0.1f, 2f) : 0.55f;
+            float sit = _config != null ? Mathf.Clamp(_config.DigPotCoinCollectSeconds, 0.05f, 3f) : 1f;
+            Sprite coinArt = _lib != null ? _lib.Treasure(0) : null;
+
+            for (int i = 0; i < coins; i++)
+            {
+                // Fan the spray out both ways with a bit of scatter, so no two pots throw the
+                // same shape and the fountain never reads as a queue.
+                float spread = coins > 1 ? (i / (float)(coins - 1)) * 2f - 1f : 0f;
+                Vector3 landing = at + new Vector3(
+                    spread * Random.Range(1.1f, 2.0f),
+                    Random.Range(-0.5f, 0.3f),
+                    0f);
+                SpawnPotCoinVisual(coinArt, at, landing, arc, sit);
+            }
+
+            _toyCoins += coins; // banked coin-by-coin above, so this is bookkeeping only
+        }
+
+        /// <summary>One sprayed coin: arc out of the pot, a little bounce as it lands, a moment
+        /// of shine, then it shrinks away (its banked twin has already been paid).</summary>
+        private void SpawnPotCoinVisual(Sprite art, Vector3 from, Vector3 to, float arc, float sit)
+        {
+            // The SPECTACLE is optional (a placeholder-only run with no coin art just shows
+            // nothing); the BANK below is not. Keeping them separate is what guarantees "the pot
+            // sprayed N coins" and "the wallet got N coins" can never disagree.
+            if (art != null)
+            {
+                var go = new GameObject("PotCoinFX");
+                go.transform.SetParent(_root != null ? _root : transform, false);
+                var sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = art;
+                sr.sortingOrder = 30;
+                go.transform.position = from;
+
+                Tween.MoveArc(go.transform, from, to, Random.Range(1.0f, 1.6f), arc, () =>
+                {
+                    if (go == null)
+                    {
+                        return;
+                    }
+
+                    // Bounce: a small hop in place, then it settles and shines.
+                    Tween.MoveArc(go.transform, to, to, 0.28f, 0.22f, () =>
+                    {
+                        if (go != null)
+                        {
+                            Tween.PunchScale(go.transform, 0.25f, 0.2f);
+                        }
+                    });
+
+                    Tween.After(sit, () =>
+                    {
+                        if (go == null)
+                        {
+                            return;
+                        }
+
+                        Tween.ScaleTo(go.transform, Vector3.zero, 0.2f, () =>
+                        {
+                            if (go != null)
+                            {
+                                Destroy(go);
+                            }
+                        });
+                    });
+                });
+            }
+
+            // The real money: one coin banked per sprayed coin, timed to its landing so the
+            // counter ticks along with the fountain. Deliberately NOT generation-guarded — a
+            // pot the child broke pays even if the round ends while the coins are still in the
+            // air (same rule as the Giggle Pocket's coins). It touches nothing site-owned.
+            Tween.After(arc + sit * 0.5f, () =>
+            {
+                GameManager g = GameManager.Instance;
+                g?.SpawnRewardPickup(ItemType.Treasure, DinoType.TRex, 0, g.RewardSpawnPoint);
+            });
+        }
+
+        /// <summary>Bank a crystal blob's coins through the normal guarded reward path — one
+        /// pickup per coin, trickling out so the counter ticks up instead of jumping. The pot
+        /// does NOT come through here: its coins are banked one at a time by the fountain, each
+        /// timed to its own landing.</summary>
+        private void PayToyCoins(int coins)
+        {
+            coins = Mathf.Max(0, coins);
+            _toyCoins += coins;
+            if (coins <= 0 || GameManager.Instance == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < coins; i++)
+            {
+                Tween.After(i * 0.08f, () =>
+                {
+                    GameManager g = GameManager.Instance;
+                    g?.SpawnRewardPickup(ItemType.Treasure, DinoType.TRex, 0, g.RewardSpawnPoint);
+                });
+            }
+        }
+
         // ----- Gravity cascade -----
 
         /// <summary>World position of a grid cell (row 0 is the top layer, one unit per row).
@@ -1658,6 +2529,14 @@ namespace DinoDigger.Dig
                 _grid[t.Row, t.Col] = null; // the corpse object lives on (it dies with the site)
             }
 
+            // A PINATA POT pays here and nowhere else: this is the one place every "that tile is
+            // gone" path meets, so the fountain fires whether the child tapped it twice, a crew
+            // power smashed it, or a falling rock cracked it open by accident.
+            if (t.Kind == DigTileKind.Pot)
+            {
+                SprayPotCoins(t);
+            }
+
             _clearCause = cause;
             CollectIfBuried(t);
         }
@@ -1681,7 +2560,15 @@ namespace DinoDigger.Dig
         ///
         /// The loop re-checks the site every pass, so a close/rebuild/finish landing mid-cascade
         /// aborts it cleanly and silently. A re-entrant call (a clear raised from inside the
-        /// loop) is a no-op: the running loop already sees that hole.</summary>
+        /// loop) is a no-op: the running loop already sees that hole.
+        ///
+        /// AUTO-POP (DinoDigger-z4d) rides this loop as ONE extra pass, not a second engine:
+        /// when the compaction has gone quiet, crystals that gravity has just pushed into a
+        /// same-colour neighbour pop themselves, and — only if that popped something — the loop
+        /// goes round again to settle into the new holes. The "one auto-pop pass per settle"
+        /// rule is what bounds it: a chain started by an auto-pop settles fully but does not get
+        /// to auto-pop again until the child's NEXT action, so a lucky board can cascade
+        /// beautifully and still cannot loop forever. It shares the existing pass cap on top.</summary>
         private int SettleGrid(string cause)
         {
             if (_grid == null || _settling || !_open || _finished)
@@ -1695,6 +2582,13 @@ namespace DinoDigger.Dig
             int falls = 0;
             bool stable = false;
             bool aborted = false;
+            bool autoPopSpent = false;
+
+            // Which same-colour crystal pairs were ALREADY touching before anything moved. Only
+            // contacts that are new when the dust settles auto-pop, so a cluster the site was
+            // generated with (or one a test placed by hand) is the child's to tap — it never
+            // evaporates the first time the column under it is dug out.
+            SnapshotCrystalPairs();
 
             try
             {
@@ -1709,11 +2603,22 @@ namespace DinoDigger.Dig
                     passes++;
                     int moved = SettlePass(gen);
                     falls += moved;
-                    if (moved == 0)
+                    if (moved != 0)
                     {
-                        stable = true;
-                        break;
+                        continue;
                     }
+
+                    if (!autoPopSpent)
+                    {
+                        autoPopSpent = true;
+                        if (AutoPopCrystals(gen) > 0)
+                        {
+                            continue; // fall into the holes the auto-pop just opened
+                        }
+                    }
+
+                    stable = true;
+                    break;
                 }
             }
             finally
@@ -1777,8 +2682,8 @@ namespace DinoDigger.Dig
                         t.SetCell(write, c); // logical move NOW; the tween below is pure travel
 
                         int drop = write - r;
-                        float delay = Mathf.Min(order * FallStagger, FallStaggerMax);
-                        float time = Mathf.Min(FallMaxTime, 0.05f + FallRowTime * drop);
+                        float delay = FallStaggerFor(order); // config, re-read per mover
+                        float time = FallSeconds(drop);
                         Vector3 landAt = CellPosition(write, c);
                         t.FallTo(landAt, delay, time, () => OnTileLanded(landAt, gen));
 
@@ -1806,7 +2711,14 @@ namespace DinoDigger.Dig
         /// The SURPRISE POCKET is exempt: it must be DISCOVERED, never squashed. A pocket that a
         /// falling tile could complete would fire its one-shot with the child never having
         /// cracked it — the wiggle would simply vanish mid-cascade, which is the opposite of the
-        /// "find the mystery tile" beat. It still takes its thump and dust, just no damage.</summary>
+        /// "find the mystery tile" beat. It still takes its thump and dust, just no damage.
+        ///
+        /// CRYSTALS are exempt too, for the mirror-image reason: a crystal is 1-hardness, so a
+        /// single landing would shatter it — the child would watch a colour they were lining up
+        /// get crushed by falling dirt, and it would leave the pit through a path that pays no
+        /// coins. Crystal is hard: dirt lands ON it and stops. It only ever leaves by a tap, an
+        /// auto-pop or a geode. (A PINATA POT is deliberately NOT exempt: getting cracked open by
+        /// a falling rock is a lovely accident and it still sprays its coins.)</summary>
         private void ApplyLandingCracks(int gen)
         {
             for (int i = 0; i < _landings.Count; i++)
@@ -1817,7 +2729,8 @@ namespace DinoDigger.Dig
                 }
 
                 DirtTile victim = _landings[i].Victim;
-                if (victim == null || victim.IsDestroyed || victim.IsSurprise)
+                if (victim == null || victim.IsDestroyed || victim.IsSurprise ||
+                    victim.Kind == DigTileKind.Crystal)
                 {
                     continue;
                 }
@@ -1842,13 +2755,36 @@ namespace DinoDigger.Dig
                 return;
             }
 
-            if (_crumbs != null)
+            SpawnDust(at + new Vector3(0f, -0.45f, 0f), DustPerLanding);
+            PlayThump();
+        }
+
+        /// <summary>Puff <paramref name="count"/> dust particles at a world point, on the
+        /// generated dust art when it has been imported and on the crumb particle otherwise.
+        /// The emitter is built once per site and reused, so a long cascade does not spawn a
+        /// GameObject per landing.</summary>
+        private void SpawnDust(Vector3 at, int count)
+        {
+            if (count <= 0)
             {
-                _crumbs.transform.position = at + new Vector3(0f, -0.45f, 0f);
-                _crumbs.Emit(4);
+                return;
             }
 
-            PlayThump();
+            if (_dust == null && _lib != null && _lib.DustPuff != null)
+            {
+                _dust = GameManager.Instance?.TownCreateParticles(
+                    _root != null ? _root : transform, _lib.DustPuff,
+                    new Color(0.92f, 0.86f, 0.74f, 0.9f), 0.5f);
+            }
+
+            ParticleSystem ps = _dust != null ? _dust : _crumbs;
+            if (ps == null)
+            {
+                return;
+            }
+
+            ps.transform.position = at;
+            ps.Emit(count);
         }
 
         /// <summary>Soft landing thump. AUDIO HOOK: the dig audio pass gives falls their own low
@@ -1856,7 +2792,7 @@ namespace DinoDigger.Dig
         /// a ten-tile cascade lands as one thud rather than a rattle.</summary>
         private void PlayThump()
         {
-            if (Time.time - _lastThump < ThumpMinGap)
+            if (Time.time - _lastThump < ThumpGap)
             {
                 return;
             }
@@ -1905,6 +2841,24 @@ namespace DinoDigger.Dig
             }
 
             _bites++;
+
+            // A CRYSTAL tap is its own resolution: the bucket's bite pops the whole connected
+            // same-colour blob (which clears through the same chokepoint and cascades once), and
+            // the crew powers still fire on the bite afterwards. Nothing else about the bite
+            // changes — the tap always wins, it just wins bigger.
+            //
+            // The one power this bite does NOT also run is the Big T-Rex adjacent clear below:
+            // the blob pop has already cleared several cells and paid for them, so the bite is
+            // strictly more generous than a normal one either way. Worth revisiting if the T-Rex
+            // should visibly help on crystals too (it would want the logical pop + the adjacent
+            // clear + a single shared settle, in that order).
+            if (tile.Kind == DigTileKind.Crystal)
+            {
+                PopCrystalBlob(tile, "crystal tap");
+                FireCrewPowers(tile);
+                return;
+            }
+
             bool destroyed = tile.Damage();
             GameManager.Instance?.Audio?.Crumble();
 
@@ -1930,8 +2884,13 @@ namespace DinoDigger.Dig
                         Tween.PunchScale(trex.Sprite.transform, 0.25f, 0.25f);
                     }
 
-                    bool adjDestroyed = adjacent.Damage();
-                    if (adjDestroyed)
+                    if (adjacent.Kind == DigTileKind.Crystal)
+                    {
+                        // The big fella's helping bite pops a neighbouring blob properly (coins
+                        // and all) rather than shattering one crystal for nothing.
+                        PopCrystalBlobLogical(adjacent, "T-Rex adjacent clear");
+                    }
+                    else if (adjacent.Damage())
                     {
                         ClearTile(adjacent, "T-Rex adjacent clear");
                     }
@@ -2285,6 +3244,10 @@ namespace DinoDigger.Dig
             _tiles.Clear();
             _buried.Clear();
             _landings.Clear(); // a cascade in flight has nothing left to land on
+            _crystalPairs.Clear();
+            _blob.Clear();
+            _blobRing.Clear();
+            _blobSeen.Clear();
             _grid = null;
         }
 

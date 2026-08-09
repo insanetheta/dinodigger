@@ -107,6 +107,16 @@ namespace DinoDigger.Testing
                 // random amount of treasure into the persistent wallet.
                 new TestCase("TilesFallAndSettle",   60f, Case_TilesFallAndSettle),
                 new TestCase("CascadeNeverWedges",   90f, Case_CascadeNeverWedges),
+                // Dig toys (DinoDigger-z4d) run late for the same wallet reason as everything
+                // above: every one of them BANKS COINS on purpose, which would inflate the
+                // persistent wallet ahead of a count-exact treasure/town case.
+                new TestCase("CrystalPopFloodFill",  60f, Case_CrystalPopFloodFill),
+                new TestCase("BoomChainsResolve",    70f, Case_BoomChainsResolve),
+                new TestCase("PinataPotPays",        60f, Case_PinataPotPays),
+                // Dig-arm V2 live swap (DinoDigger-rrn): digs full tiles, so it can
+                // finish a round and bank treasure — late, like the cases above. Body
+                // lives in IntegrationTestCasesDigArm.cs.
+                new TestCase("DigArmV2Swaps",        60f, Case_DigArmV2Swaps),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }
@@ -840,90 +850,102 @@ namespace DinoDigger.Testing
             // case asserts exact per-type collection outcomes.
             gm.TestSpawnDino(DinoType.TRex, GrowthStage.Baby);
 
-            yield return EnterDig(ctx);
-            DigModeController dm = gm.TestDigMode;
-
-            List<DirtTile> buried = dm.TestBuriedTiles();
-            ctx.Assert(buried.Count > 0, "no buried items to collect");
-
-            int eggs = 0, fruit = 0, treasure = 0;
-            int expectedTreasureGain = 0; // denominations: each treasure banks its variant value
-            for (int i = 0; i < buried.Count; i++)
-            {
-                switch (dm.TestBuriedType(buried[i]))
-                {
-                    case ItemType.Egg: eggs++; break;
-                    case ItemType.Fruit: fruit++; break;
-                    default:
-                        treasure++;
-                        expectedTreasureGain += gm.TestConfig.TreasureValue(dm.TestBuriedVariant(buried[i]));
-                        break;
-                }
-            }
-
-            int treasureBefore = gm.Save.Data.TreasureCount;
-            int expectedPickups = eggs + fruit;
-
-            // The town builder must not spend out of the wallet this case counts to the coin
-            // (see Case_TreasureCounter for the full story) — freeze the queue while we dig.
-            TownController.TestSuspendBuilds = true;
+            // Dig toys off (DinoDigger-z4d) — pinned BEFORE the site is built, since the roll
+            // happens in BuildGrid. This case asserts an EXACT wallet delta from the BURIED loot,
+            // and every toy is a second, deliberate source of coins: a pot cracked open by a
+            // falling tile pays 5-8 on its own. Their own cases cover them.
+            DigModeController.TestSuppressToys = true;
             try
             {
-                // Dig every buried tile. State must remain Dig until the last is uncovered.
-                int guard = 0;
-                while (gm.State.Is(GameState.Dig) && dm.TestBuriedCount > 0 && guard++ < 60)
+                yield return EnterDig(ctx);
+                DigModeController dm = gm.TestDigMode;
+
+                List<DirtTile> buried = dm.TestBuriedTiles();
+                ctx.Assert(buried.Count > 0, "no buried items to collect");
+
+                int eggs = 0, fruit = 0, treasure = 0;
+                int expectedTreasureGain = 0; // denominations: each treasure banks its variant value
+                for (int i = 0; i < buried.Count; i++)
                 {
-                    List<DirtTile> remaining = dm.TestBuriedTiles();
-                    if (remaining.Count == 0)
+                    switch (dm.TestBuriedType(buried[i]))
                     {
-                        break;
+                        case ItemType.Egg: eggs++; break;
+                        case ItemType.Fruit: fruit++; break;
+                        default:
+                            treasure++;
+                            expectedTreasureGain += gm.TestConfig.TreasureValue(dm.TestBuriedVariant(buried[i]));
+                            break;
                     }
-
-                    if (dm.TestBuriedCount > 1)
-                    {
-                        ctx.Assert(gm.State.Is(GameState.Dig), "left dig before all items were uncovered");
-                    }
-
-                    yield return TapTileUntilDestroyed(ctx, dm, remaining[0]);
                 }
 
-                ctx.Assert(!gm.State.Is(GameState.Dig), "still in dig after clearing every item");
-                yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam), 20f,
-                    "never returned to roam after the last item was uncovered");
+                int treasureBefore = gm.Save.Data.TreasureCount;
+                int expectedPickups = eggs + fruit;
 
-                // Non-treasure items become pickups; treasure auto-flies to the counter and
-                // banks its per-variant denomination (coin=1, gem=3, boot=1, bone=2).
-                //
-                // DEFLAKE (DinoDigger-dzs): the alive-pickup count is only equal to the
-                // expected total inside a WINDOW — after every item lands, before the first
-                // egg wobbles open (~1.2s of scaled time). Under editor load one frame can
-                // carry a full second of scaled time, so a poll for an exact instantaneous
-                // count could step straight over that window and then wait forever. Track the
-                // PEAK instead: it is reached as soon as the last item lands and it never
-                // decays, so no amount of frame-hitching can hide it. The wallet side waits
-                // on >= (monotone) and is asserted exact afterwards, same as TreasureCounter.
-                int peakPickups = 0;
-                yield return ctx.WaitUntil(() =>
+                // The town builder must not spend out of the wallet this case counts to the coin
+                // (see Case_TreasureCounter for the full story) — freeze the queue while we dig.
+                TownController.TestSuspendBuilds = true;
+                try
                 {
-                    peakPickups = Mathf.Max(peakPickups, CountOverworldPickups(gm, true));
-                    return peakPickups >= expectedPickups &&
-                           gm.Save.Data.TreasureCount >= treasureBefore + expectedTreasureGain;
-                }, 25f, () => $"dug batch never fully surfaced (pickups peaked at {peakPickups}/{expectedPickups}, " +
-                              $"treasure +{gm.Save.Data.TreasureCount - treasureBefore}/{expectedTreasureGain})");
+                    // Dig every buried tile. State must remain Dig until the last is uncovered.
+                    int guard = 0;
+                    while (gm.State.Is(GameState.Dig) && dm.TestBuriedCount > 0 && guard++ < 60)
+                    {
+                        List<DirtTile> remaining = dm.TestBuriedTiles();
+                        if (remaining.Count == 0)
+                        {
+                            break;
+                        }
 
-                ctx.Assert(peakPickups == expectedPickups,
-                    $"{peakPickups} pickups spawned (expected {expectedPickups})");
-                ctx.Assert(gm.Save.Data.TreasureCount == treasureBefore + expectedTreasureGain,
-                    $"treasure +{gm.Save.Data.TreasureCount - treasureBefore} (expected +{expectedTreasureGain})");
+                        if (dm.TestBuriedCount > 1)
+                        {
+                            ctx.Assert(gm.State.Is(GameState.Dig), "left dig before all items were uncovered");
+                        }
 
-                ctx.Log($"eggs={eggs} fruit={fruit} treasure={treasure}: {expectedPickups} pickups spawned, treasure+={expectedTreasureGain}");
+                        yield return TapTileUntilDestroyed(ctx, dm, remaining[0]);
+                    }
+
+                    ctx.Assert(!gm.State.Is(GameState.Dig), "still in dig after clearing every item");
+                    yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam), 20f,
+                        "never returned to roam after the last item was uncovered");
+
+                    // Non-treasure items become pickups; treasure auto-flies to the counter and
+                    // banks its per-variant denomination (coin=1, gem=3, boot=1, bone=2).
+                    //
+                    // DEFLAKE (DinoDigger-dzs): the alive-pickup count is only equal to the
+                    // expected total inside a WINDOW — after every item lands, before the first
+                    // egg wobbles open (~1.2s of scaled time). Under editor load one frame can
+                    // carry a full second of scaled time, so a poll for an exact instantaneous
+                    // count could step straight over that window and then wait forever. Track the
+                    // PEAK instead: it is reached as soon as the last item lands and it never
+                    // decays, so no amount of frame-hitching can hide it. The wallet side waits
+                    // on >= (monotone) and is asserted exact afterwards, same as TreasureCounter.
+                    int peakPickups = 0;
+                    yield return ctx.WaitUntil(() =>
+                    {
+                        peakPickups = Mathf.Max(peakPickups, CountOverworldPickups(gm, true));
+                        return peakPickups >= expectedPickups &&
+                               gm.Save.Data.TreasureCount >= treasureBefore + expectedTreasureGain;
+                    }, 25f, () => $"dug batch never fully surfaced (pickups peaked at {peakPickups}/{expectedPickups}, " +
+                                  $"treasure +{gm.Save.Data.TreasureCount - treasureBefore}/{expectedTreasureGain})");
+
+                    ctx.Assert(peakPickups == expectedPickups,
+                        $"{peakPickups} pickups spawned (expected {expectedPickups})");
+                    ctx.Assert(gm.Save.Data.TreasureCount == treasureBefore + expectedTreasureGain,
+                        $"treasure +{gm.Save.Data.TreasureCount - treasureBefore} (expected +{expectedTreasureGain})");
+
+                    ctx.Log($"eggs={eggs} fruit={fruit} treasure={treasure}: {expectedPickups} pickups spawned, treasure+={expectedTreasureGain}");
+                }
+                finally
+                {
+                    TownController.TestSuspendBuilds = false;
+                }
+
+                gm.TestReset();
             }
             finally
             {
-                TownController.TestSuspendBuilds = false;
+                DigModeController.TestSuppressToys = false;
             }
-
-            gm.TestReset();
         }
 
         // Dig Postcards: themed dig sites. Mounds roll a WEIGHTED theme and tint themselves;
@@ -1003,11 +1025,28 @@ namespace DinoDigger.Testing
             }
 
             // ---- Golden tints landed on the dirt tiles + the backdrop. ----
+            // Sampled from a DIRT tile specifically (DinoDigger-z4d): a site now also rolls dig
+            // toys, and a crystal/geode/pot deliberately does NOT take the theme's dirt multiply —
+            // its whole job is to read as its own colour, and a muddy-brown "gold" crystal would
+            // break the one matching rule the game has. This case is about the tint landing on
+            // dirt, so it samples dirt; the toys coexisting on a themed site is left as real
+            // coverage rather than suppressed.
             DigTheme goldenTheme = cfg.GetTheme(golden);
             var tiles = new List<DirtTile>(dm.TestTiles);
             ctx.Assert(tiles.Count > 0, "golden site built no tiles");
-            ctx.Assert(ColorsClose(tiles[0].TestDirtColor, goldenTheme.DirtTint),
-                $"tile dirt tint {tiles[0].TestDirtColor} != golden DirtTint {goldenTheme.DirtTint}");
+
+            DirtTile dirtSample = null;
+            for (int i = 0; i < tiles.Count && dirtSample == null; i++)
+            {
+                if (tiles[i] != null && tiles[i].Kind == DigTileKind.Dirt)
+                {
+                    dirtSample = tiles[i];
+                }
+            }
+
+            ctx.Assert(dirtSample != null, "golden site built no plain dirt tile to check the tint on");
+            ctx.Assert(ColorsClose(dirtSample.TestDirtColor, goldenTheme.DirtTint),
+                $"tile dirt tint {dirtSample.TestDirtColor} != golden DirtTint {goldenTheme.DirtTint}");
             ctx.Assert(ColorsClose(dm.TestBackgroundColor, goldenTheme.BackgroundTint),
                 $"backdrop tint {dm.TestBackgroundColor} != golden BackgroundTint {goldenTheme.BackgroundTint}");
 
@@ -1052,114 +1091,130 @@ namespace DinoDigger.Testing
             GameConfig cfg = gm.TestConfig;
             ctx.Assert(cfg != null, "no config");
 
-            int berry = FindThemeIndex(cfg, "Berry Bog");
-            int sparkle = FindThemeIndex(cfg, "Sparkle Cave");
-            ctx.Assert(berry >= 0 && sparkle >= 0, "Berry Bog / Sparkle Cave themes not found by name");
-
-            cfg.GetTheme(berry).GetTapRange(out int bMin, out int bMax);
-            cfg.GetTheme(sparkle).GetTapRange(out int sMin, out int sMax);
-            ctx.Assert(bMin == 1 && bMax == 2, $"Berry Bog tap range {bMin}-{bMax} (expected 1-2)");
-            ctx.Assert(sMin == 3 && sMax == 4, $"Sparkle Cave tap range {sMin}-{sMax} (expected 3-4)");
-
-            DigModeController dm = gm.TestDigMode;
-
-            // ---- Sample many tiles across several rebuilds per theme. ----
-            double berrySum = 0; int berryTiles = 0, berryAtMin = 0, berryAtMax = 0;
-            double sparkleSum = 0; int sparkleTiles = 0, sparkleAtMin = 0, sparkleAtMax = 0;
-            const int rebuilds = 6;
-
-            for (int build = 0; build < rebuilds; build++)
+            // Dig toys (DinoDigger-z4d) are OFF for this case. A crystal/geode/pot seats its own
+            // hardness (1/1/2) AFTER the theme roll, so a toy tile is simply not evidence about
+            // the roll this case certifies — sampling one would fail the range assertion for a
+            // reason that has nothing to do with hardness. Suppressing them at BuildGrid time
+            // keeps the sample a complete census of RollTileHardness (and keeps the crack-sprite
+            // probe at the end on real dirt: a geode arms instead of taking a hit, so it would
+            // never crumble). Cleared in the finally so a failed assertion cannot leak the pin
+            // into the rest of the run.
+            DigModeController.TestSuppressToys = true;
+            try
             {
-                gm.TestBuildThemedDigSite(berry);
-                yield return ctx.WaitFrames(1);
-                foreach (DirtTile t in dm.TestTiles)
+                int berry = FindThemeIndex(cfg, "Berry Bog");
+                int sparkle = FindThemeIndex(cfg, "Sparkle Cave");
+                ctx.Assert(berry >= 0 && sparkle >= 0, "Berry Bog / Sparkle Cave themes not found by name");
+
+                cfg.GetTheme(berry).GetTapRange(out int bMin, out int bMax);
+                cfg.GetTheme(sparkle).GetTapRange(out int sMin, out int sMax);
+                ctx.Assert(bMin == 1 && bMax == 2, $"Berry Bog tap range {bMin}-{bMax} (expected 1-2)");
+                ctx.Assert(sMin == 3 && sMax == 4, $"Sparkle Cave tap range {sMin}-{sMax} (expected 3-4)");
+
+                DigModeController dm = gm.TestDigMode;
+
+                // ---- Sample many tiles across several rebuilds per theme. ----
+                double berrySum = 0; int berryTiles = 0, berryAtMin = 0, berryAtMax = 0;
+                double sparkleSum = 0; int sparkleTiles = 0, sparkleAtMin = 0, sparkleAtMax = 0;
+                const int rebuilds = 6;
+
+                for (int build = 0; build < rebuilds; build++)
                 {
-                    int h = t.TestMaxHealth;
-                    ctx.Assert(h >= 1 && h <= 4, $"berry tile health {h} outside the hard cap [1,4]");
-                    ctx.Assert(h >= bMin && h <= bMax, $"berry tile health {h} outside theme range [{bMin},{bMax}]");
-                    berrySum += h; berryTiles++;
-                    if (h == bMin) berryAtMin++;
-                    if (h == bMax) berryAtMax++;
+                    gm.TestBuildThemedDigSite(berry);
+                    yield return ctx.WaitFrames(1);
+                    foreach (DirtTile t in dm.TestTiles)
+                    {
+                        int h = t.TestMaxHealth;
+                        ctx.Assert(h >= 1 && h <= 4, $"berry tile health {h} outside the hard cap [1,4]");
+                        ctx.Assert(h >= bMin && h <= bMax, $"berry tile health {h} outside theme range [{bMin},{bMax}]");
+                        berrySum += h; berryTiles++;
+                        if (h == bMin) berryAtMin++;
+                        if (h == bMax) berryAtMax++;
+                    }
+
+                    gm.TestForceRoam();
+                    yield return ctx.WaitFrames(1);
+
+                    gm.TestBuildThemedDigSite(sparkle);
+                    yield return ctx.WaitFrames(1);
+                    foreach (DirtTile t in dm.TestTiles)
+                    {
+                        int h = t.TestMaxHealth;
+                        ctx.Assert(h >= 1 && h <= 4, $"sparkle tile health {h} outside the hard cap [1,4]");
+                        ctx.Assert(h >= sMin && h <= sMax, $"sparkle tile health {h} outside theme range [{sMin},{sMax}]");
+                        sparkleSum += h; sparkleTiles++;
+                        if (h == sMin) sparkleAtMin++;
+                        if (h == sMax) sparkleAtMax++;
+                    }
+
+                    gm.TestForceRoam();
+                    yield return ctx.WaitFrames(1);
                 }
 
-                gm.TestForceRoam();
-                yield return ctx.WaitFrames(1);
+                ctx.Assert(berryTiles > 100 && sparkleTiles > 100,
+                    $"too few tiles sampled (berry={berryTiles}, sparkle={sparkleTiles})");
 
+                // ---- LOW bias: a healthy share sit at MinTaps and few at MaxTaps. ----
+                float berryMinFrac = berryAtMin / (float)berryTiles;
+                float berryMaxFrac = berryAtMax / (float)berryTiles;
+                ctx.Assert(berryMinFrac > 0.5f, $"Berry MinTaps share {berryMinFrac:F2} not >0.5 (should skew soft)");
+                ctx.Assert(berryMinFrac > berryMaxFrac,
+                    $"Berry not low-biased (min share {berryMinFrac:F2} <= max share {berryMaxFrac:F2})");
+
+                float sparkleMinFrac = sparkleAtMin / (float)sparkleTiles;
+                float sparkleMaxFrac = sparkleAtMax / (float)sparkleTiles;
+                ctx.Assert(sparkleMinFrac > sparkleMaxFrac,
+                    $"Sparkle not low-biased (min share {sparkleMinFrac:F2} <= max share {sparkleMaxFrac:F2})");
+
+                // ---- Sparkle Cave is harder on average than Berry Bog. ----
+                float berryAvg = (float)(berrySum / berryTiles);
+                float sparkleAvg = (float)(sparkleSum / sparkleTiles);
+                ctx.Assert(sparkleAvg > berryAvg,
+                    $"Sparkle avg {sparkleAvg:F2} not > Berry avg {berryAvg:F2}");
+
+                // ---- Crack-sprite state maps correctly at maxHealth != 3 (Damage() alone crumbles
+                //      a tile; it never runs the controller's collect/finish path, so no side effects). ----
                 gm.TestBuildThemedDigSite(sparkle);
                 yield return ctx.WaitFrames(1);
-                foreach (DirtTile t in dm.TestTiles)
+                var tiles = new List<DirtTile>(dm.TestTiles);
+                ctx.Assert(tiles.Count >= 2, "built site has too few tiles to probe crack states");
+
+                // maxHealth 1 -> one hit crumbles it.
+                DirtTile one = tiles[0];
+                one.TestSetMaxHealth(1);
+                bool crumbled = one.Damage();
+                ctx.Assert(crumbled && one.IsDestroyed, "maxHealth-1 tile did not crumble in a single hit");
+
+                // maxHealth 4 -> intermediate crack states across the first 3 hits, crumbles on the 4th.
+                DirtTile four = tiles[1];
+                four.TestSetMaxHealth(4);
+                var states = new HashSet<Sprite> { four.TestDirtSprite };
+                for (int hit = 1; hit <= 4; hit++)
                 {
-                    int h = t.TestMaxHealth;
-                    ctx.Assert(h >= 1 && h <= 4, $"sparkle tile health {h} outside the hard cap [1,4]");
-                    ctx.Assert(h >= sMin && h <= sMax, $"sparkle tile health {h} outside theme range [{sMin},{sMax}]");
-                    sparkleSum += h; sparkleTiles++;
-                    if (h == sMin) sparkleAtMin++;
-                    if (h == sMax) sparkleAtMax++;
+                    bool d = four.Damage();
+                    if (hit < 4)
+                    {
+                        ctx.Assert(!d && !four.IsDestroyed, $"maxHealth-4 tile crumbled early on hit {hit}");
+                        states.Add(four.TestDirtSprite);
+                    }
+                    else
+                    {
+                        ctx.Assert(d && four.IsDestroyed, "maxHealth-4 tile did not crumble on the 4th hit");
+                    }
                 }
+
+                ctx.Assert(states.Count >= 2, "maxHealth-4 tile never showed intermediate crack states");
 
                 gm.TestForceRoam();
-                yield return ctx.WaitFrames(1);
+                ctx.Log($"berry avg={berryAvg:F2} (minFrac={berryMinFrac:F2}, maxFrac={berryMaxFrac:F2}); " +
+                        $"sparkle avg={sparkleAvg:F2} (minFrac={sparkleMinFrac:F2}, maxFrac={sparkleMaxFrac:F2}); " +
+                        $"crack states at max4={states.Count}");
+                gm.TestReset();
             }
-
-            ctx.Assert(berryTiles > 100 && sparkleTiles > 100,
-                $"too few tiles sampled (berry={berryTiles}, sparkle={sparkleTiles})");
-
-            // ---- LOW bias: a healthy share sit at MinTaps and few at MaxTaps. ----
-            float berryMinFrac = berryAtMin / (float)berryTiles;
-            float berryMaxFrac = berryAtMax / (float)berryTiles;
-            ctx.Assert(berryMinFrac > 0.5f, $"Berry MinTaps share {berryMinFrac:F2} not >0.5 (should skew soft)");
-            ctx.Assert(berryMinFrac > berryMaxFrac,
-                $"Berry not low-biased (min share {berryMinFrac:F2} <= max share {berryMaxFrac:F2})");
-
-            float sparkleMinFrac = sparkleAtMin / (float)sparkleTiles;
-            float sparkleMaxFrac = sparkleAtMax / (float)sparkleTiles;
-            ctx.Assert(sparkleMinFrac > sparkleMaxFrac,
-                $"Sparkle not low-biased (min share {sparkleMinFrac:F2} <= max share {sparkleMaxFrac:F2})");
-
-            // ---- Sparkle Cave is harder on average than Berry Bog. ----
-            float berryAvg = (float)(berrySum / berryTiles);
-            float sparkleAvg = (float)(sparkleSum / sparkleTiles);
-            ctx.Assert(sparkleAvg > berryAvg,
-                $"Sparkle avg {sparkleAvg:F2} not > Berry avg {berryAvg:F2}");
-
-            // ---- Crack-sprite state maps correctly at maxHealth != 3 (Damage() alone crumbles
-            //      a tile; it never runs the controller's collect/finish path, so no side effects). ----
-            gm.TestBuildThemedDigSite(sparkle);
-            yield return ctx.WaitFrames(1);
-            var tiles = new List<DirtTile>(dm.TestTiles);
-            ctx.Assert(tiles.Count >= 2, "built site has too few tiles to probe crack states");
-
-            // maxHealth 1 -> one hit crumbles it.
-            DirtTile one = tiles[0];
-            one.TestSetMaxHealth(1);
-            bool crumbled = one.Damage();
-            ctx.Assert(crumbled && one.IsDestroyed, "maxHealth-1 tile did not crumble in a single hit");
-
-            // maxHealth 4 -> intermediate crack states across the first 3 hits, crumbles on the 4th.
-            DirtTile four = tiles[1];
-            four.TestSetMaxHealth(4);
-            var states = new HashSet<Sprite> { four.TestDirtSprite };
-            for (int hit = 1; hit <= 4; hit++)
+            finally
             {
-                bool d = four.Damage();
-                if (hit < 4)
-                {
-                    ctx.Assert(!d && !four.IsDestroyed, $"maxHealth-4 tile crumbled early on hit {hit}");
-                    states.Add(four.TestDirtSprite);
-                }
-                else
-                {
-                    ctx.Assert(d && four.IsDestroyed, "maxHealth-4 tile did not crumble on the 4th hit");
-                }
+                DigModeController.TestSuppressToys = false;
             }
-
-            ctx.Assert(states.Count >= 2, "maxHealth-4 tile never showed intermediate crack states");
-
-            gm.TestForceRoam();
-            ctx.Log($"berry avg={berryAvg:F2} (minFrac={berryMinFrac:F2}, maxFrac={berryMaxFrac:F2}); " +
-                    $"sparkle avg={sparkleAvg:F2} (minFrac={sparkleMinFrac:F2}, maxFrac={sparkleMaxFrac:F2}); " +
-                    $"crack states at max4={states.Count}");
-            gm.TestReset();
         }
 
         /// <summary>Index of the dig theme with the given name, or -1.</summary>
@@ -1705,47 +1760,60 @@ namespace DinoDigger.Testing
             GameManager gm = ctx.GM;
             gm.TestReset();
 
-            // The dig helper is the T-REX superpower now: a BIG T-Rex that is a
-            // walk BUDDY (fresh reset -> first spawn takes a free buddy slot).
-            DinoController big = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
-            ctx.Assert(big != null && big.IsBig, "big dino spawn failed");
-            ctx.Assert(big.IsBuddy, "big T-Rex did not take a free buddy slot");
-            yield return ctx.WaitFrames(2);
-
-            yield return EnterDig(ctx);
-            DigModeController dm = gm.TestDigMode;
-            ctx.Assert(dm.TestHelperEnabled, "big-dino helper renderer not enabled in dig");
-
-            DirtTile tile = null;
-            for (int r = 1; r < dm.TestRows && tile == null; r++)
+            // Dig toys off (DinoDigger-z4d): this case picks an arbitrary interior tile and its
+            // neighbour to prove the Big T-Rex bite also damages an adjacent cell, and a toy
+            // answers a tap differently by design — a crystal pops its blob (and takes the whole
+            // bite with it), a geode ARMS instead of taking damage at all, so a wait on "damage
+            // went up" would never finish. The power itself is what is under test here.
+            DigModeController.TestSuppressToys = true;
+            try
             {
-                for (int c = 0; c < dm.TestCols; c++)
+                // The dig helper is the T-REX superpower now: a BIG T-Rex that is a
+                // walk BUDDY (fresh reset -> first spawn takes a free buddy slot).
+                DinoController big = gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
+                ctx.Assert(big != null && big.IsBig, "big dino spawn failed");
+                ctx.Assert(big.IsBuddy, "big T-Rex did not take a free buddy slot");
+                yield return ctx.WaitFrames(2);
+
+                yield return EnterDig(ctx);
+                DigModeController dm = gm.TestDigMode;
+                ctx.Assert(dm.TestHelperEnabled, "big-dino helper renderer not enabled in dig");
+
+                DirtTile tile = null;
+                for (int r = 1; r < dm.TestRows && tile == null; r++)
                 {
-                    DirtTile t = dm.TestTileAt(r, c);
-                    if (t != null && !t.HasItem && !t.IsDestroyed && NeighborsIntactCount(dm, t) > 0)
+                    for (int c = 0; c < dm.TestCols; c++)
                     {
-                        tile = t;
-                        break;
+                        DirtTile t = dm.TestTileAt(r, c);
+                        if (t != null && !t.HasItem && !t.IsDestroyed && NeighborsIntactCount(dm, t) > 0)
+                        {
+                            tile = t;
+                            break;
+                        }
                     }
                 }
+
+                ctx.Assert(tile != null, "no suitable plain interior tile with a neighbor");
+
+                // Hold the neighbours as REFERENCES, not coordinates: if this bite crumbles the
+                // tile, gravity drops the column into its cell and a coordinate-addressed sum would
+                // be comparing different tiles before and after (see NeighborTilesOf).
+                int tileBefore = tile.TestDamage;
+                List<DirtTile> neighbors = NeighborTilesOf(dm, tile);
+                int neighborBefore = DamageSumOf(neighbors);
+                ctx.TapWorld(tile.transform.position);
+                yield return ctx.WaitUntil(() => tile.TestDamage > tileBefore);
+
+                int neighborAfter = DamageSumOf(neighbors);
+                ctx.Assert(tile.TestDamage >= tileBefore + 1, "tapped tile not damaged");
+                ctx.Assert(neighborAfter >= neighborBefore + 1, "helper did not also damage an adjacent tile");
+                ctx.Log($"helper enabled; tap damaged tile + adjacent (neighborSum {neighborBefore}->{neighborAfter})");
+                gm.TestForceRoam();
             }
-
-            ctx.Assert(tile != null, "no suitable plain interior tile with a neighbor");
-
-            // Hold the neighbours as REFERENCES, not coordinates: if this bite crumbles the
-            // tile, gravity drops the column into its cell and a coordinate-addressed sum would
-            // be comparing different tiles before and after (see NeighborTilesOf).
-            int tileBefore = tile.TestDamage;
-            List<DirtTile> neighbors = NeighborTilesOf(dm, tile);
-            int neighborBefore = DamageSumOf(neighbors);
-            ctx.TapWorld(tile.transform.position);
-            yield return ctx.WaitUntil(() => tile.TestDamage > tileBefore);
-
-            int neighborAfter = DamageSumOf(neighbors);
-            ctx.Assert(tile.TestDamage >= tileBefore + 1, "tapped tile not damaged");
-            ctx.Assert(neighborAfter >= neighborBefore + 1, "helper did not also damage an adjacent tile");
-            ctx.Log($"helper enabled; tap damaged tile + adjacent (neighborSum {neighborBefore}->{neighborAfter})");
-            gm.TestForceRoam();
+            finally
+            {
+                DigModeController.TestSuppressToys = false;
+            }
         }
 
         // Buddy Dig Crew: every buddy species gets an automatic dig superpower, fired on
@@ -1757,174 +1825,189 @@ namespace DinoDigger.Testing
         {
             GameManager gm = ctx.GM;
 
-            // ---- Two-helper crew + Stego treasure-map + Trike headbutt cadence ----
-            gm.TestReset();
-            gm.TestSpawnDino(DinoType.Triceratops, GrowthStage.Big); // Big -> headbutt every 4th bite
-            gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Kid);
-            yield return ctx.WaitFrames(2);
-
-            yield return EnterDig(ctx);
-            DigModeController dm = gm.TestDigMode;
-            ctx.Assert(dm.TestCrewCount == 2, $"crew shows {dm.TestCrewCount} helpers (expected 2 buddies)");
-            ctx.Assert(dm.TestCrewHas(DinoType.Triceratops) && dm.TestCrewHas(DinoType.Stegosaurus),
-                "crew missing the Triceratops/Stegosaurus helpers");
-            ctx.Assert(dm.TestHelperEnabled, "slot-0 helper renderer not shown for a staffed crew");
-
-            // Stego treasure-map: the buried peeks flash and settle brighter than the 0.55 default.
-            List<DirtTile> buried = dm.TestBuriedTiles();
-            ctx.Assert(buried.Count > 0, "no buried tiles to brighten");
-            yield return ctx.WaitSecondsScaled(1f); // let the flash tween settle (~0.6s)
-            bool anyBright = false;
-            for (int i = 0; i < buried.Count; i++)
+            // Dig toys off for this case (DinoDigger-z4d): it certifies the CREW superpowers,
+            // and a toy in the wrong cell changes what a power is allowed to leave behind — a
+            // boom geode caught by the Trike headbutt (or the T-Rex adjacent bite) ARMS instead
+            // of crumbling, so the column is cleared by its whumph a beat later rather than by
+            // the power itself, and the "power left nothing standing" assertions below would
+            // read that correct behaviour as a failure. The toys have their own cases.
+            DigModeController.TestSuppressToys = true;
+            try
             {
-                if (buried[i] != null && buried[i].TestPeekAlpha > 0.7f)
+
+                // ---- Two-helper crew + Stego treasure-map + Trike headbutt cadence ----
+                gm.TestReset();
+                gm.TestSpawnDino(DinoType.Triceratops, GrowthStage.Big); // Big -> headbutt every 4th bite
+                gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Kid);
+                yield return ctx.WaitFrames(2);
+
+                yield return EnterDig(ctx);
+                DigModeController dm = gm.TestDigMode;
+                ctx.Assert(dm.TestCrewCount == 2, $"crew shows {dm.TestCrewCount} helpers (expected 2 buddies)");
+                ctx.Assert(dm.TestCrewHas(DinoType.Triceratops) && dm.TestCrewHas(DinoType.Stegosaurus),
+                    "crew missing the Triceratops/Stegosaurus helpers");
+                ctx.Assert(dm.TestHelperEnabled, "slot-0 helper renderer not shown for a staffed crew");
+
+                // Stego treasure-map: the buried peeks flash and settle brighter than the 0.55 default.
+                List<DirtTile> buried = dm.TestBuriedTiles();
+                ctx.Assert(buried.Count > 0, "no buried tiles to brighten");
+                yield return ctx.WaitSecondsScaled(1f); // let the flash tween settle (~0.6s)
+                bool anyBright = false;
+                for (int i = 0; i < buried.Count; i++)
                 {
-                    anyBright = true;
-                    break;
-                }
-            }
-
-            ctx.Assert(anyBright, "Stego treasure-map did not brighten any buried peek at round start");
-
-            // Trike headbutt: every 4th bite (Big) clears the last-tapped tile's whole column.
-            int budget = 0;
-            while (dm.TestHeadbuttCount == 0 && dm.IsOpen && budget++ < 30)
-            {
-                DirtTile plain = FindPlainTile(dm);
-                if (plain == null)
-                {
-                    break;
-                }
-
-                // Pace to the arm and to gravity alike (a falling tile drops taps).
-                yield return ctx.WaitUntil(() => (dm.TestArmReady && !plain.IsFalling) || !dm.IsOpen);
-                if (!dm.IsOpen)
-                {
-                    break;
-                }
-
-                int before = plain.TestDamage;
-                ctx.TapWorld(plain.transform.position);
-                yield return ctx.WaitUntil(() => plain.TestDamage > before || plain.IsDestroyed || !dm.IsOpen);
-            }
-
-            ctx.Assert(dm.TestHeadbuttCount >= 1, "Trike headbutt never fired on cadence");
-            int col = dm.TestHeadbuttColumn;
-            ctx.Assert(col >= 0, "headbutt column not recorded");
-            yield return ctx.WaitSecondsScaled(0.7f); // let the top-to-bottom cascade finish
-            if (dm.IsOpen)
-            {
-                for (int r = 0; r < dm.TestRows; r++)
-                {
-                    DirtTile t = dm.TestTileAt(r, col);
-                    ctx.Assert(t == null || t.IsDestroyed, $"headbutt left tile ({r},{col}) intact");
-                }
-            }
-
-            gm.TestForceRoam();
-
-            // ---- Brachiosaurus one-shot bonus fruit, routed through ResolveDugItem ----
-            gm.TestReset();
-            gm.TestSpawnDino(DinoType.Brachiosaurus, GrowthStage.Big); // Big -> bonus after the 6th bite
-            yield return ctx.WaitFrames(2);
-            yield return EnterDig(ctx);
-            dm = gm.TestDigMode;
-
-            int foundBefore = dm.TestFoundCount;
-            budget = 0;
-            while (dm.TestBonusFruitDropped == 0 && dm.IsOpen && budget++ < 40)
-            {
-                DirtTile plain = FindPlainTile(dm);
-                if (plain == null)
-                {
-                    break;
-                }
-
-                yield return ctx.WaitUntil(() => (dm.TestArmReady && !plain.IsFalling) || !dm.IsOpen);
-                if (!dm.IsOpen)
-                {
-                    break;
-                }
-
-                int before = plain.TestDamage;
-                ctx.TapWorld(plain.transform.position);
-                yield return ctx.WaitUntil(() => plain.TestDamage > before || plain.IsDestroyed || !dm.IsOpen);
-            }
-
-            ctx.Assert(dm.TestBonusFruitDropped == 1,
-                $"Brachio bonus fruit dropped {dm.TestBonusFruitDropped}x (expected exactly 1)");
-            ctx.Assert(dm.TestFoundCount > foundBefore, "bonus fruit not banked into the dug batch");
-
-            // More bites must NOT drop a second bonus (strictly one-shot per round).
-            DirtTile more = FindPlainTile(dm);
-            if (more != null && dm.IsOpen)
-            {
-                yield return TapTileUntilDestroyed(ctx, dm, more);
-            }
-
-            ctx.Assert(dm.TestBonusFruitDropped == 1, "Brachio bonus fruit dropped more than once");
-
-            // ResolveDugItem coverage: the bonus rides the normal dug-item batch (_found),
-            // which FinishDig runs through ResolveDugItem exactly like any dug fruit. Prove
-            // that a bonus-fruit DugItemInfo passes cleanly through the REAL resolution (the
-            // glut guard may downgrade it to treasure — that IS the guard applying), so it
-            // can never wedge or throw. We deliberately do NOT finish the round here: a
-            // dig-out spills+banks a random amount of treasure, which would inflate the
-            // persistent wallet over the town's build threshold and let the always-on town
-            // builder spend during a later count-exact case (TreasureCounter).
-            DugItemInfo bonusResolved = gm.TestResolveItem(
-                new DugItemInfo(ItemType.Fruit, DinoType.TRex, 0, Vector3.zero));
-            ctx.Assert(bonusResolved.Type == ItemType.Fruit || bonusResolved.Type == ItemType.Treasure,
-                $"bonus fruit resolved to an unexpected {bonusResolved.Type}");
-            gm.TestForceRoam();
-
-            // ---- No-buddy dig: no helpers, plain digging still works ----
-            gm.TestReset();
-            yield return EnterDig(ctx);
-            dm = gm.TestDigMode;
-            ctx.Assert(dm.TestCrewCount == 0, $"no-buddy dig shows {dm.TestCrewCount} helpers (expected 0)");
-            ctx.Assert(!dm.TestHelperEnabled, "no-buddy dig still shows a helper renderer");
-
-            DirtTile plainSolo = FindPlainTile(dm);
-            ctx.Assert(plainSolo != null, "no plain tile in the no-buddy dig");
-            yield return TapTileUntilDestroyed(ctx, dm, plainSolo);
-            ctx.Assert(plainSolo.IsDestroyed, "plain tile did not crumble in the no-buddy dig");
-            gm.TestForceRoam();
-
-            // ---- Big T-Rex still clears an adjacent tile ----
-            gm.TestReset();
-            gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
-            yield return ctx.WaitFrames(2);
-            yield return EnterDig(ctx);
-            dm = gm.TestDigMode;
-            ctx.Assert(dm.TestCrewHas(DinoType.TRex) && dm.TestHelperEnabled, "Big T-Rex helper not shown");
-
-            DirtTile target = null;
-            for (int r = 1; r < dm.TestRows && target == null; r++)
-            {
-                for (int c = 0; c < dm.TestCols; c++)
-                {
-                    DirtTile t = dm.TestTileAt(r, c);
-                    if (t != null && !t.HasItem && !t.IsDestroyed && NeighborsIntactCount(dm, t) > 0)
+                    if (buried[i] != null && buried[i].TestPeekAlpha > 0.7f)
                     {
-                        target = t;
+                        anyBright = true;
                         break;
                     }
                 }
+
+                ctx.Assert(anyBright, "Stego treasure-map did not brighten any buried peek at round start");
+
+                // Trike headbutt: every 4th bite (Big) clears the last-tapped tile's whole column.
+                int budget = 0;
+                while (dm.TestHeadbuttCount == 0 && dm.IsOpen && budget++ < 30)
+                {
+                    DirtTile plain = FindPlainTile(dm);
+                    if (plain == null)
+                    {
+                        break;
+                    }
+
+                    // Pace to the arm and to gravity alike (a falling tile drops taps).
+                    yield return ctx.WaitUntil(() => (dm.TestArmReady && !plain.IsFalling) || !dm.IsOpen);
+                    if (!dm.IsOpen)
+                    {
+                        break;
+                    }
+
+                    int before = plain.TestDamage;
+                    ctx.TapWorld(plain.transform.position);
+                    yield return ctx.WaitUntil(() => plain.TestDamage > before || plain.IsDestroyed || !dm.IsOpen);
+                }
+
+                ctx.Assert(dm.TestHeadbuttCount >= 1, "Trike headbutt never fired on cadence");
+                int col = dm.TestHeadbuttColumn;
+                ctx.Assert(col >= 0, "headbutt column not recorded");
+                yield return ctx.WaitSecondsScaled(0.7f); // let the top-to-bottom cascade finish
+                if (dm.IsOpen)
+                {
+                    for (int r = 0; r < dm.TestRows; r++)
+                    {
+                        DirtTile t = dm.TestTileAt(r, col);
+                        ctx.Assert(t == null || t.IsDestroyed, $"headbutt left tile ({r},{col}) intact");
+                    }
+                }
+
+                gm.TestForceRoam();
+
+                // ---- Brachiosaurus one-shot bonus fruit, routed through ResolveDugItem ----
+                gm.TestReset();
+                gm.TestSpawnDino(DinoType.Brachiosaurus, GrowthStage.Big); // Big -> bonus after the 6th bite
+                yield return ctx.WaitFrames(2);
+                yield return EnterDig(ctx);
+                dm = gm.TestDigMode;
+
+                int foundBefore = dm.TestFoundCount;
+                budget = 0;
+                while (dm.TestBonusFruitDropped == 0 && dm.IsOpen && budget++ < 40)
+                {
+                    DirtTile plain = FindPlainTile(dm);
+                    if (plain == null)
+                    {
+                        break;
+                    }
+
+                    yield return ctx.WaitUntil(() => (dm.TestArmReady && !plain.IsFalling) || !dm.IsOpen);
+                    if (!dm.IsOpen)
+                    {
+                        break;
+                    }
+
+                    int before = plain.TestDamage;
+                    ctx.TapWorld(plain.transform.position);
+                    yield return ctx.WaitUntil(() => plain.TestDamage > before || plain.IsDestroyed || !dm.IsOpen);
+                }
+
+                ctx.Assert(dm.TestBonusFruitDropped == 1,
+                    $"Brachio bonus fruit dropped {dm.TestBonusFruitDropped}x (expected exactly 1)");
+                ctx.Assert(dm.TestFoundCount > foundBefore, "bonus fruit not banked into the dug batch");
+
+                // More bites must NOT drop a second bonus (strictly one-shot per round).
+                DirtTile more = FindPlainTile(dm);
+                if (more != null && dm.IsOpen)
+                {
+                    yield return TapTileUntilDestroyed(ctx, dm, more);
+                }
+
+                ctx.Assert(dm.TestBonusFruitDropped == 1, "Brachio bonus fruit dropped more than once");
+
+                // ResolveDugItem coverage: the bonus rides the normal dug-item batch (_found),
+                // which FinishDig runs through ResolveDugItem exactly like any dug fruit. Prove
+                // that a bonus-fruit DugItemInfo passes cleanly through the REAL resolution (the
+                // glut guard may downgrade it to treasure — that IS the guard applying), so it
+                // can never wedge or throw. We deliberately do NOT finish the round here: a
+                // dig-out spills+banks a random amount of treasure, which would inflate the
+                // persistent wallet over the town's build threshold and let the always-on town
+                // builder spend during a later count-exact case (TreasureCounter).
+                DugItemInfo bonusResolved = gm.TestResolveItem(
+                    new DugItemInfo(ItemType.Fruit, DinoType.TRex, 0, Vector3.zero));
+                ctx.Assert(bonusResolved.Type == ItemType.Fruit || bonusResolved.Type == ItemType.Treasure,
+                    $"bonus fruit resolved to an unexpected {bonusResolved.Type}");
+                gm.TestForceRoam();
+
+                // ---- No-buddy dig: no helpers, plain digging still works ----
+                gm.TestReset();
+                yield return EnterDig(ctx);
+                dm = gm.TestDigMode;
+                ctx.Assert(dm.TestCrewCount == 0, $"no-buddy dig shows {dm.TestCrewCount} helpers (expected 0)");
+                ctx.Assert(!dm.TestHelperEnabled, "no-buddy dig still shows a helper renderer");
+
+                DirtTile plainSolo = FindPlainTile(dm);
+                ctx.Assert(plainSolo != null, "no plain tile in the no-buddy dig");
+                yield return TapTileUntilDestroyed(ctx, dm, plainSolo);
+                ctx.Assert(plainSolo.IsDestroyed, "plain tile did not crumble in the no-buddy dig");
+                gm.TestForceRoam();
+
+                // ---- Big T-Rex still clears an adjacent tile ----
+                gm.TestReset();
+                gm.TestSpawnDino(DinoType.TRex, GrowthStage.Big);
+                yield return ctx.WaitFrames(2);
+                yield return EnterDig(ctx);
+                dm = gm.TestDigMode;
+                ctx.Assert(dm.TestCrewHas(DinoType.TRex) && dm.TestHelperEnabled, "Big T-Rex helper not shown");
+
+                DirtTile target = null;
+                for (int r = 1; r < dm.TestRows && target == null; r++)
+                {
+                    for (int c = 0; c < dm.TestCols; c++)
+                    {
+                        DirtTile t = dm.TestTileAt(r, c);
+                        if (t != null && !t.HasItem && !t.IsDestroyed && NeighborsIntactCount(dm, t) > 0)
+                        {
+                            target = t;
+                            break;
+                        }
+                    }
+                }
+
+                ctx.Assert(target != null, "no interior plain tile with an intact neighbor");
+                List<DirtTile> targetNeighbors = NeighborTilesOf(dm, target); // references: gravity moves cells
+                int nBefore = DamageSumOf(targetNeighbors);
+                int tBefore = target.TestDamage;
+                ctx.TapWorld(target.transform.position);
+                yield return ctx.WaitUntil(() => target.TestDamage > tBefore || target.IsDestroyed);
+                int nAfter = DamageSumOf(targetNeighbors);
+                ctx.Assert(nAfter >= nBefore + 1, "Big T-Rex did not also clear an adjacent tile");
+
+                ctx.Log("crew: 2 helpers + Stego map + Trike headbutt; Brachio bonus x1 through ResolveDugItem; " +
+                        "no-buddy clean; Big T-Rex adjacent clear ok");
+                gm.TestForceRoam();
             }
-
-            ctx.Assert(target != null, "no interior plain tile with an intact neighbor");
-            List<DirtTile> targetNeighbors = NeighborTilesOf(dm, target); // references: gravity moves cells
-            int nBefore = DamageSumOf(targetNeighbors);
-            int tBefore = target.TestDamage;
-            ctx.TapWorld(target.transform.position);
-            yield return ctx.WaitUntil(() => target.TestDamage > tBefore || target.IsDestroyed);
-            int nAfter = DamageSumOf(targetNeighbors);
-            ctx.Assert(nAfter >= nBefore + 1, "Big T-Rex did not also clear an adjacent tile");
-
-            ctx.Log("crew: 2 helpers + Stego map + Trike headbutt; Brachio bonus x1 through ResolveDugItem; " +
-                    "no-buddy clean; Big T-Rex adjacent clear ok");
-            gm.TestForceRoam();
+            finally
+            {
+                DigModeController.TestSuppressToys = false;
+            }
         }
 
         // Surprise Pockets: one wiggling non-item tile per site fires a delightful one-shot
@@ -1953,6 +2036,12 @@ namespace DinoDigger.Testing
                 // case entirely; BuddyDigCrew still covers them), and the case now prints
                 // DigModeController's firing breadcrumb if the pocket ever fires anyway.
                 DigModeController.TestSuppressCrew = true;
+
+                // Dig toys off too (DinoDigger-z4d), for the same "no other path" reason the crew
+                // pin exists: this case banks an EXACT 3 coins for the Giggle Pocket, and a
+                // crystal auto-pop or a pot cracked open by a falling tile would quietly add coins
+                // to that count. The toys have their own cases.
+                DigModeController.TestSuppressToys = true;
 
                 // ---- Placement: exactly one surprise tile, on a non-item tile, no peek ----
                 gm.TestReset();
@@ -2108,6 +2197,7 @@ namespace DinoDigger.Testing
             {
                 DigModeController.TestForceSurpriseKind = -1;
                 DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
             }
         }
 
@@ -2131,6 +2221,14 @@ namespace DinoDigger.Testing
                 // about what exactly ONE clear does. (BuddyDigCrew covers the powers;
                 // CascadeNeverWedges covers them all cascading together.)
                 DigModeController.TestSuppressCrew = true;
+
+                // No toys either (DinoDigger-z4d), for exactly the same reason: a crystal is
+                // exempt from landing cracks, a geode arms instead of taking one, and a pot pays
+                // coins — each of them a different answer to "what does ONE clear do". They also
+                // eat the columns this case needs a clean full one of. BoomChainsResolve covers
+                // toys cascading; the real-site smoke cases (DirtTileDamage, PeekVisible,
+                // MoundToDig...) still dig sites with the toy roller live.
+                DigModeController.TestSuppressToys = true;
 
                 yield return EnterDig(ctx);
                 DigModeController dm = gm.TestDigMode;
@@ -2259,6 +2357,7 @@ namespace DinoDigger.Testing
             finally
             {
                 DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
             }
 
             gm.TestForceRoam();
@@ -2279,6 +2378,14 @@ namespace DinoDigger.Testing
             try
             {
                 DigModeController.TestSuppressCrew = true;
+
+                // Toys off here too (DinoDigger-z4d): this case grinds a column out cell by cell
+                // and then asserts it is EMPTY, which a boom geode legitimately breaks (it arms
+                // and clears itself a beat later instead of crumbling under the clear). It also
+                // needs a full, clean column to exist at all, and a site that rolled two crystal
+                // clusters plus a geode and a pot can leave none. BoomChainsResolve is the toy
+                // chaos case; this one is the engine's.
+                DigModeController.TestSuppressToys = true;
                 yield return EnterDig(ctx);
                 DigModeController dm = gm.TestDigMode;
 
@@ -2355,6 +2462,335 @@ namespace DinoDigger.Testing
             finally
             {
                 DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
+            }
+
+            gm.TestForceRoam();
+        }
+
+        // ================================================================ DIG TOYS
+        // Crystals, boom geodes and pinata pots (DinoDigger-z4d). All three are DirtTiles with a
+        // Kind, so they fall and clear through the cascade engine above; these cases prove the
+        // toy behaviour ON TOP of it — a tap taking a whole colour blob, a geode's fuse chaining
+        // into that blob without wedging the settle, and a pot paying every coin it promised.
+        //
+        // Every one of them suppresses BOTH the crew and the random toy roll, so the board under
+        // test is exactly the board the case built: a superpower or a rolled cluster wandering
+        // into frame would decide the outcome instead of the feature.
+
+        // Tap ONE crystal, get the whole connected same-colour blob: the flood fill takes every
+        // crystal of that colour reachable 4-way, leaves a touching crystal of a DIFFERENT colour
+        // alone, pays a coin per crystal, and leaves the board fully settled with the cascade
+        // having run through the normal chokepoint.
+        private IEnumerator Case_CrystalPopFloodFill(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+
+            int bankEvents = 0;
+            Action<int> onBank = _ => bankEvents++;
+
+            try
+            {
+                DigModeController.TestSuppressCrew = true;
+                DigModeController.TestSuppressToys = true;
+
+                yield return EnterDig(ctx);
+                DigModeController dm = gm.TestDigMode;
+
+                // A 2x2 of clean cells one row down, so the tiles ABOVE the blob really do fall
+                // into it (a blob in row 0 would pop with nothing over it to cascade).
+                ctx.Assert(FindCleanSquare(dm, out int r0, out int c0),
+                    "no 2x2 patch of plain, item-free tiles to build a crystal blob in");
+
+                // Pin both columns at 3 taps BEFORE converting: a landing crack must not be able
+                // to complete a tile and start a chain that decides this case's coin count. (The
+                // pin resets max health, so it has to happen before SetCrystal seats hardness 1.)
+                PinColumnHardness(dm, c0);
+                PinColumnHardness(dm, c0 + 1);
+
+                ctx.Assert(dm.TestSetCrystal(r0, c0, 0) && dm.TestSetCrystal(r0, c0 + 1, 0) &&
+                           dm.TestSetCrystal(r0 + 1, c0, 0) && dm.TestSetCrystal(r0 + 1, c0 + 1, 0),
+                    "could not seat the 4-crystal blob (a cell refused the conversion)");
+
+                // A different colour touching the blob: it must NOT be swept up by the fill.
+                DirtTile oddColor = null;
+                if (dm.TestSetCrystal(r0 + 2, c0, 1))
+                {
+                    oddColor = dm.TestTileAt(r0 + 2, c0);
+                }
+
+                var blob = new List<DirtTile>
+                {
+                    dm.TestTileAt(r0, c0), dm.TestTileAt(r0, c0 + 1),
+                    dm.TestTileAt(r0 + 1, c0), dm.TestTileAt(r0 + 1, c0 + 1),
+                };
+
+                for (int i = 0; i < blob.Count; i++)
+                {
+                    ctx.Assert(blob[i] != null && blob[i].Kind == DigTileKind.Crystal,
+                        $"blob cell {i} is not a crystal after conversion");
+                }
+
+                ctx.Assert(dm.TestBlobSizeAt(r0, c0) == 4,
+                    $"flood fill sees {dm.TestBlobSizeAt(r0, c0)} crystals (expected exactly the 4 " +
+                    "same-colour ones — a different colour must not join the blob)");
+
+                // ---- One tap pops all four ----
+                GameEvents.TreasureCollected += onBank;
+                bankEvents = 0;
+                int expectedCoins = gm.TestConfig != null ? gm.TestConfig.DigCrystalCoins(4) : 4;
+
+                DirtTile tapped = blob[0];
+                yield return ctx.WaitUntil(() => dm.TestArmReady && !tapped.IsFalling, 10f,
+                    "arm never parked before the crystal tap");
+                ctx.TapWorld(tapped.transform.position);
+
+                yield return ctx.WaitUntil(() => tapped == null || tapped.IsDestroyed || !dm.IsOpen, 20f,
+                    "the tapped crystal never popped");
+
+                // Null-tolerant throughout: if the cascade happened to uncover the last buried
+                // item, the round ends and the site tears its tiles down — a destroyed tile is
+                // still a popped one, and reading a property off it would throw.
+                for (int i = 0; i < blob.Count; i++)
+                {
+                    ctx.Assert(blob[i] == null || blob[i].IsDestroyed,
+                        $"blob crystal {i} survived the tap — the flood fill did not reach it");
+                }
+
+                ctx.Assert(dm.TestLastBlobSize == 4,
+                    $"engine popped a blob of {dm.TestLastBlobSize} (expected 4)");
+                ctx.Assert(dm.TestCrystalsPopped >= 4,
+                    $"only {dm.TestCrystalsPopped} crystal(s) recorded as popped");
+                if (oddColor != null && dm.IsOpen)
+                {
+                    ctx.Assert(!oddColor.IsDestroyed,
+                        "the touching crystal of a DIFFERENT colour popped too — the fill ignored colour");
+                }
+
+                // ---- The cascade ran, and the board is settled ----
+                if (dm.IsOpen)
+                {
+                    ctx.Assert(dm.TestFloaterReport() == "",
+                        $"board not settled after the pop: {dm.TestFloaterReport()}");
+                    ctx.Assert(dm.TestSettlePasses >= 1 && dm.TestSettlePasses < dm.TestSettleCap,
+                        $"pop settled in {dm.TestSettlePasses} passes (cap {dm.TestSettleCap})");
+                    ctx.Assert(dm.TestSettleImmediately() == 1,
+                        "re-settling after a crystal pop moved something (the pop left the board unstable)");
+                }
+
+                // ---- Coins: one per crystal, banked through the normal reward path ----
+                yield return ctx.WaitUntil(() => bankEvents >= expectedCoins, 30f,
+                    () => $"crystal blob banked only {bankEvents}/{expectedCoins} coins");
+                yield return ctx.WaitSecondsScaled(0.5f); // let any stray extra bank surface
+                ctx.Assert(bankEvents == expectedCoins,
+                    $"crystal blob banked {bankEvents} coins (expected {expectedCoins})");
+
+                ctx.Log($"one tap popped all 4 same-colour crystals (a touching odd colour left " +
+                        $"standing), banked {bankEvents} coins, board settled in " +
+                        $"{dm.TestSettlePasses}/{dm.TestSettleCap} passes");
+            }
+            finally
+            {
+                GameEvents.TreasureCollected -= onBank;
+                DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
+            }
+
+            gm.TestForceRoam();
+        }
+
+        // A boom geode next to a crystal blob: the worst chain the toys can make. Tapping the
+        // geode lights its fuse, the whumph clears a 3x3, a crystal caught in that 3x3 takes its
+        // WHOLE blob with it, and every one of those clears feeds the same cascade. The chain
+        // must resolve well inside the settle cap, leave no floating tile and log zero errors.
+        private IEnumerator Case_BoomChainsResolve(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+            int errorsBefore = _errors.Count;
+
+            try
+            {
+                DigModeController.TestSuppressCrew = true;
+                DigModeController.TestSuppressToys = true;
+
+                yield return EnterDig(ctx);
+                DigModeController dm = gm.TestDigMode;
+
+                ctx.Assert(FindCleanSquare(dm, out int r0, out int c0),
+                    "no 2x2 patch of plain, item-free tiles to build the chain in");
+
+                ctx.Assert(dm.TestSetCrystal(r0, c0, 0) && dm.TestSetCrystal(r0 + 1, c0, 0) &&
+                           dm.TestSetCrystal(r0 + 1, c0 + 1, 0),
+                    "could not seat the crystal blob next to the geode");
+
+                var blob = new List<DirtTile>
+                {
+                    dm.TestTileAt(r0, c0), dm.TestTileAt(r0 + 1, c0), dm.TestTileAt(r0 + 1, c0 + 1),
+                };
+
+                // The geode goes DIAGONALLY off the blob's corner, so its 3x3 covers part of the
+                // blob but its own cell is not one of them — the chain has to travel.
+                ctx.Assert(dm.TestSetGeode(r0, c0 + 1),
+                    "could not seat the boom geode beside the blob");
+                DirtTile geode = dm.TestTileAt(r0, c0 + 1);
+                ctx.Assert(geode != null && geode.Kind == DigTileKind.Geode, "geode cell is not a geode");
+
+                yield return ctx.WaitUntil(() => dm.TestArmReady && !geode.IsFalling, 10f,
+                    "arm never parked before the geode tap");
+                ctx.TapWorld(geode.transform.position);
+
+                // The fuse is an anticipation beat, not an instant clear: the geode must still be
+                // standing right after the hit, and go off shortly after.
+                yield return ctx.WaitUntil(
+                    () => geode == null || geode.IsGeodeArmed || geode.IsDestroyed || !dm.IsOpen, 20f,
+                    "the tapped geode never lit its fuse");
+                yield return ctx.WaitUntil(() => dm.TestGeodeBooms >= 1 || !dm.IsOpen, 20f,
+                    () => $"geode fuse never went off ({dm.TestGeodeBooms} boom(s) recorded)");
+
+                yield return ctx.WaitSecondsScaled(1.5f); // let the whole chain + its falls play
+
+                ctx.Assert(dm.TestGeodeBooms == 1,
+                    $"{dm.TestGeodeBooms} geode boom(s) recorded (expected exactly 1 — a re-armed " +
+                    "fuse would double the blast)");
+                // Null-tolerant: a chain that finished the round tears the tiles down, and a
+                // destroyed tile is still a detonated one.
+                ctx.Assert(geode == null || geode.IsDestroyed, "the geode survived its own boom");
+
+                for (int i = 0; i < blob.Count; i++)
+                {
+                    ctx.Assert(blob[i] == null || blob[i].IsDestroyed,
+                        $"crystal {i} of the blob survived — the boom did not chain into it");
+                }
+
+                ctx.Assert(dm.TestCrystalsPopped >= blob.Count,
+                    $"boom popped only {dm.TestCrystalsPopped} crystal(s) (expected at least {blob.Count})");
+
+                if (dm.IsOpen)
+                {
+                    int passes = dm.TestSettleImmediately();
+                    ctx.Assert(passes >= 1 && passes < dm.TestSettleCap,
+                        $"final settle took {passes} passes (cap {dm.TestSettleCap})");
+                    ctx.Assert(dm.TestFloaterReport() == "",
+                        $"board never settled after the chain: {dm.TestFloaterReport()}");
+
+                    // Still playable: the site must accept a tap with the chain behind it.
+                    DirtTile plain = FindPlainTile(dm);
+                    if (plain != null)
+                    {
+                        int before = plain.TestDamage;
+                        yield return ctx.WaitUntil(() => dm.TestArmReady && !plain.IsFalling, 10f,
+                            "arm never parked after the boom chain");
+                        ctx.TapWorld(plain.transform.position);
+                        yield return ctx.WaitUntil(
+                            () => plain.TestDamage > before || plain.IsDestroyed || !dm.IsOpen, 15f,
+                            "site stopped accepting taps after the boom chain");
+                    }
+                }
+                else
+                {
+                    // The chain uncovered every buried item: the round must have ended the normal
+                    // way rather than stranding the player in an empty pit.
+                    yield return ctx.WaitUntil(() => gm.State.Is(GameState.Roam), 25f,
+                        "boom chain finished the dig but never returned to roam");
+                }
+
+                int newErrors = _errors.Count - errorsBefore;
+                ctx.Assert(newErrors == 0,
+                    $"{newErrors} console error(s) during the boom chain: " +
+                    (newErrors > 0 ? _errors[_errors.Count - 1] : ""));
+
+                ctx.Log($"geode fused then cleared its 3x3, chaining into the blob " +
+                        $"({dm.TestCrystalsPopped} crystals popped, {dm.TestAutoPops} auto-pop pass(es)); " +
+                        $"settle {dm.TestSettlePasses}/{dm.TestSettleCap} passes, board clean, zero errors");
+            }
+            finally
+            {
+                DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
+            }
+
+            gm.TestForceRoam();
+        }
+
+        // A pinata pot takes two taps — crack, then break — and pays every coin it sprayed. The
+        // fountain is decorative; the money is banked coin by coin through the normal reward path,
+        // so this counts BANK EVENTS (the town's auto-spend uses SetCount and raises none).
+        private IEnumerator Case_PinataPotPays(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+
+            int bankEvents = 0;
+            Action<int> onBank = _ => bankEvents++;
+
+            try
+            {
+                DigModeController.TestSuppressCrew = true;
+                DigModeController.TestSuppressToys = true;
+
+                yield return EnterDig(ctx);
+                DigModeController dm = gm.TestDigMode;
+
+                ctx.Assert(FindCleanSquare(dm, out int r0, out int c0),
+                    "no plain, item-free cell to put a pinata pot in");
+
+                // Same pin as the crystal case: keep the pot's own column from chain-completing
+                // tiles, so the only coins banked in the window are the pot's.
+                PinColumnHardness(dm, c0);
+                ctx.Assert(dm.TestSetPot(r0, c0), "could not seat the pinata pot");
+                DirtTile pot = dm.TestTileAt(r0, c0);
+                ctx.Assert(pot != null && pot.Kind == DigTileKind.Pot, "pot cell is not a pot");
+                ctx.Assert(pot.TestMaxHealth == 2,
+                    $"pot has {pot.TestMaxHealth} hit points (expected 2: crack, then break)");
+
+                // ---- First tap CRACKS it (and must not pay) ----
+                GameEvents.TreasureCollected += onBank;
+                bankEvents = 0;
+
+                yield return ctx.WaitUntil(() => dm.TestArmReady && !pot.IsFalling, 10f,
+                    "arm never parked before the first pot tap");
+                ctx.TapWorld(pot.transform.position);
+                yield return ctx.WaitUntil(
+                    () => pot == null || pot.TestDamage >= 1 || pot.IsDestroyed || !dm.IsOpen, 20f,
+                    "the first tap never landed on the pot");
+                ctx.Assert(pot != null && !pot.IsDestroyed,
+                    "the pot broke on the FIRST tap (expected a crack first)");
+                ctx.Assert(dm.TestPotsBroken == 0,
+                    "the pot paid out on its crack — the fountain must wait for the break");
+
+                // ---- Second tap BREAKS it: the fountain, and every coin banked ----
+                yield return TapTileUntilDestroyed(ctx, dm, pot);
+                yield return ctx.WaitUntil(() => dm.TestPotsBroken >= 1 || !dm.IsOpen, 20f,
+                    "the pot never broke on the second tap");
+
+                int coins = dm.TestLastPotCoins;
+                ctx.Assert(dm.TestPotsBroken == 1, $"{dm.TestPotsBroken} pot(s) broke (expected 1)");
+                ctx.Assert(coins >= 5 && coins <= 8,
+                    $"pot sprayed {coins} coins (expected the configured 5-8)");
+
+                yield return ctx.WaitUntil(() => bankEvents >= coins, 30f,
+                    () => $"pot banked only {bankEvents}/{coins} sprayed coins");
+                yield return ctx.WaitSecondsScaled(0.6f); // let any stray extra bank surface
+                ctx.Assert(bankEvents == coins,
+                    $"pot banked {bankEvents} coins but sprayed {coins} — the fountain and the " +
+                    "wallet disagree");
+
+                if (dm.IsOpen)
+                {
+                    ctx.Assert(dm.TestFloaterReport() == "",
+                        $"board not settled after the pot broke: {dm.TestFloaterReport()}");
+                }
+
+                ctx.Log($"pot cracked on tap 1, broke on tap 2, sprayed and banked {coins} coins " +
+                        "(crack paid nothing), board settled");
+            }
+            finally
+            {
+                GameEvents.TreasureCollected -= onBank;
+                DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
             }
 
             gm.TestForceRoam();
@@ -4709,13 +5145,21 @@ namespace DinoDigger.Testing
             return found;
         }
 
-        /// <summary>A tappable plain (unburied) tile. Never returns a tile that is mid-FALL: the
-        /// controller drops taps aimed at a travelling tile, so handing one back would spend a
-        /// case's tap budget on bites that can never land.</summary>
+        /// <summary>A tappable plain (unburied) DIRT tile. Never returns a tile that is mid-FALL:
+        /// the controller drops taps aimed at a travelling tile, so handing one back would spend a
+        /// case's tap budget on bites that can never land.
+        ///
+        /// "Plain" now also means Kind == Dirt (DinoDigger-z4d). Every caller taps this tile and
+        /// then expects ORDINARY dirt behaviour — a damage tick per bite, a crack sprite per
+        /// state, a crumble at max health — and no toy does any of that: a crystal pops its whole
+        /// blob on the first bite with no sprite change, a pot has only one crack state, and a
+        /// geode ARMS instead of taking damage at all (a wait on "damage went up" would simply
+        /// never finish). Filtering here fixes every caller at once rather than making each one
+        /// re-learn what a toy is.</summary>
         private DirtTile FindPlainTile(DigModeController dm)
         {
             DirtTile mid = dm.TestTileAt(0, dm.TestCols / 2);
-            if (mid != null && !mid.HasItem && !mid.IsDestroyed && !mid.IsFalling)
+            if (IsPlainDirt(mid))
             {
                 return mid;
             }
@@ -4723,14 +5167,19 @@ namespace DinoDigger.Testing
             IReadOnlyList<DirtTile> tiles = dm.TestTiles;
             for (int i = 0; i < tiles.Count; i++)
             {
-                DirtTile t = tiles[i];
-                if (t != null && !t.HasItem && !t.IsDestroyed && !t.IsFalling)
+                if (IsPlainDirt(tiles[i]))
                 {
-                    return t;
+                    return tiles[i];
                 }
             }
 
             return null;
+        }
+
+        private bool IsPlainDirt(DirtTile t)
+        {
+            return t != null && !t.HasItem && !t.IsDestroyed && !t.IsFalling &&
+                   t.Kind == DigTileKind.Dirt;
         }
 
         private int NeighborsIntactCount(DigModeController dm, DirtTile tile)
@@ -4793,9 +5242,16 @@ namespace DinoDigger.Testing
 
         /// <summary>A clean stage for a gravity assertion: a column with every cell still
         /// filled, no surprise pocket in it (the pocket is exempt from landing cracks, which
-        /// would make an expected crack count conditional), and a plain tile one row above the
-        /// floor to clear (clearing a BURIED tile would collect an item, and collecting the last
-        /// one ends the round mid-assertion).</summary>
+        /// would make an expected crack count conditional), NO DIG TOY in it, and a plain tile
+        /// one row above the floor to clear (clearing a BURIED tile would collect an item, and
+        /// collecting the last one ends the round mid-assertion).
+        ///
+        /// The toy exclusion (DinoDigger-z4d) is the same kind of exclusion as the pocket's: a
+        /// crystal is exempt from landing cracks so it would swallow an expected crack, a geode
+        /// ARMS instead of taking one (so a column ground out around it is not empty until its
+        /// whumph fires a beat later), and a pot breaking mid-assertion sprays coins. All of that
+        /// is correct toy behaviour with its own cases; it just is not what a column of dirt
+        /// falling is supposed to be measuring.</summary>
         private int FindDropColumn(DigModeController dm)
         {
             DirtTile pocket = dm.TestSurpriseTile;
@@ -4811,6 +5267,11 @@ namespace DinoDigger.Testing
                     continue;
                 }
 
+                if (ColumnHasToy(dm, c))
+                {
+                    continue;
+                }
+
                 DirtTile target = dm.TestTileAt(dm.TestRows - 2, c);
                 if (target != null && !target.HasItem)
                 {
@@ -4819,6 +5280,20 @@ namespace DinoDigger.Testing
             }
 
             return -1;
+        }
+
+        private bool ColumnHasToy(DigModeController dm, int c)
+        {
+            for (int r = 0; r < dm.TestRows; r++)
+            {
+                DirtTile t = dm.TestTileAt(r, c);
+                if (t != null && t.Kind != DigTileKind.Dirt)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>Pin every tile in a column at the canonical 3 taps.
@@ -4837,6 +5312,41 @@ namespace DinoDigger.Testing
                     t.TestSetMaxHealth(3);
                 }
             }
+        }
+
+        /// <summary>A 2x2 block of cells a dig TOY may be planted in: all four alive, plain
+        /// dirt, item-free and not the surprise pocket — exactly the bar site generation holds
+        /// itself to, so a hand-built board is one the game could really have produced.
+        ///
+        /// Starts at row 1, never row 0: a toy in the top row has nothing above it, so popping
+        /// it would drop no tiles at all and the case would assert a cascade that never ran.
+        /// Returns the TOP-LEFT cell.</summary>
+        private bool FindCleanSquare(DigModeController dm, out int row, out int col)
+        {
+            for (int r = 1; r + 1 < dm.TestRows; r++)
+            {
+                for (int c = 0; c + 1 < dm.TestCols; c++)
+                {
+                    if (IsToyCandidate(dm, r, c) && IsToyCandidate(dm, r, c + 1) &&
+                        IsToyCandidate(dm, r + 1, c) && IsToyCandidate(dm, r + 1, c + 1))
+                    {
+                        row = r;
+                        col = c;
+                        return true;
+                    }
+                }
+            }
+
+            row = -1;
+            col = -1;
+            return false;
+        }
+
+        private bool IsToyCandidate(DigModeController dm, int r, int c)
+        {
+            DirtTile t = dm.TestTileAt(r, c);
+            return t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise &&
+                   t.Kind == DigTileKind.Dirt;
         }
 
         /// <summary>Any tile still standing (for driving a cascade into a board that several

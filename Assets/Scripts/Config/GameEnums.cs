@@ -57,6 +57,19 @@ namespace DinoDigger.Config
         Shard = 3   // sparkly egg-shell piece; flies to the nest, banked as ShardCount
     }
 
+    /// <summary>What one cell of the dig grid actually IS. Every kind is still a
+    /// <c>DirtTile</c> — same collider, same gravity, same clear chokepoint — so the cascade
+    /// engine never needs to know about toys; only the art, the hardness and what happens when
+    /// it breaks differ. Dirt is the default for every cell a site does not turn into a toy.
+    /// </summary>
+    public enum DigTileKind
+    {
+        Dirt = 0,
+        Crystal = 1,   // taps pop the whole connected same-colour blob
+        Geode = 2,     // any crack lights a fuse, then a 3x3 whumph
+        Pot = 3        // two taps, then a fountain of coins
+    }
+
     /// <summary>Growth stage for a dino. Scale is driven from GameConfig.</summary>
     public enum GrowthStage
     {

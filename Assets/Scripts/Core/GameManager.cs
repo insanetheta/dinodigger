@@ -809,6 +809,15 @@ namespace DinoDigger.Core
             return CreatePickup(info, landing);
         }
 
+        /// <summary>Tiny camera nudge for a dig-site whumph (the boom geode). Routed through the
+        /// camera rig, which owns the dig framing and shakes around it — the dig controller has
+        /// no business touching the camera transform itself. Silently does nothing when the
+        /// camera is mid-transition or not parked in the dig view.</summary>
+        internal void DigShakeCamera(float amplitude, float seconds)
+        {
+            _cameraFollow?.ShakeDig(amplitude, seconds);
+        }
+
         /// <summary>World spot where a dig-surprise reward pops out: the overworld backhoe's
         /// position (where dug loot spills). SpawnRewardPickup clamps it to walkable ground and
         /// then the coin flies to the corner counter — so surprises fired inside the dig site
