@@ -162,6 +162,65 @@ STRIDE_TRANSFORM = {
               "it, knees bent, caught in the middle of a walking step"),
 }
 
+# --- Four-legged species (DinoDigger-n4b) ----------------------------------------
+# Some idle turnarounds stand on ALL FOURS. The default two-legged stride wording
+# above ("its LEFT leg forward, its RIGHT leg back") has no reading for a quadruped,
+# so the model resolved it by REARING THE DINO UP onto its hind legs and redrawing
+# its front legs as ARMS — an 0-arms -> 2-arms limb change that popped every time
+# the runtime swapped idle -> walk. Quadruped (base, stage) pairs get a four-legged
+# diagonal-gait description plus a hard stance freeze instead. Stage matters: the
+# brachiosaurus BABY is drawn bipedal even though its adult and kid are not.
+QUADRUPED_STAGES = {
+    ("brachiosaurus", None), ("brachiosaurus", "kid"),
+    ("stegosaurus", None), ("stegosaurus", "kid"), ("stegosaurus", "baby"),
+    ("ankylosaurus", None), ("ankylosaurus", "kid"), ("ankylosaurus", "baby"),
+}
+QUAD_STRIDE_TRANSFORM = {
+    "walkA": ("its front-LEFT foot and its back-RIGHT foot each lifted just a little "
+              "way off the ground and swung slightly FORWARD, while its front-RIGHT "
+              "and back-LEFT feet stay planted on the ground — a tiny four-legged "
+              "diagonal walking step"),
+    "walkB": ("its front-RIGHT foot and its back-LEFT foot each lifted just a little "
+              "way off the ground and swung slightly FORWARD, while its front-LEFT "
+              "and back-RIGHT feet stay planted on the ground — a tiny four-legged "
+              "diagonal walking step"),
+}
+QUAD_STANCE_FREEZE = (
+    "READ THIS FIRST — THE REFERENCE IS A FOUR-LEGGED ANIMAL STANDING ON ALL FOURS, "
+    "AND IT MUST STAY THAT WAY. Its body is low and horizontal with its belly close "
+    "to the ground and FOUR legs underneath it: two FRONT legs and two BACK legs, "
+    "four feet on the ground. This creature has NO arms and NO hands whatsoever. "
+    "Keep the body at the SAME low horizontal angle as the reference. Do NOT stand it "
+    "up on its hind legs, do NOT rear it up, do NOT tilt the chest upright, do NOT "
+    "make it a two-legged cartoon walk. Its two FRONT LEGS stay FRONT LEGS reaching "
+    "down to the ground — never redraw them as arms, hands, fists, paws held up, or "
+    "limbs bent across the chest. All four feet stay at the bottom of the figure near "
+    "the ground line. This is only a small step, not a new pose. ")
+
+# --- Limb freeze (DinoDigger-n4b) -------------------------------------------------
+# img2img pose/age edits hallucinate ANATOMY: a two-armed dino comes back with four
+# arms, a QUADRUPED idle comes back standing on two legs with its front legs redrawn
+# as arms, a folded-wing pteranodon unfolds a wing, an extra hind leg sprouts between
+# the two real ones. All of it reads as a limb POP when the runtime swaps frames.
+# This clause is appended to BOTH the stride prompt and the stage (de-age) prompt so
+# no generated frame can ever change the character's limb inventory again. Keep it
+# next to the other freeze clauses; do not weaken the "EXACTLY the same" wording.
+LIMB_FREEZE = (
+    "EXTRA CRITICAL — LIMB COUNT IS FROZEN: the character has EXACTLY the same limbs "
+    "as the reference — the SAME number of arms and the SAME number of legs, in the "
+    "same places on the body. Count the arms and legs in the reference and draw "
+    "EXACTLY that many. Do NOT add, duplicate, invent, split, hide or remove any "
+    "limb; do NOT grow a third arm, a spare hand, an extra leg or an extra foot; do "
+    "NOT turn a leg into an arm or an arm into a leg; do NOT unfold, spread or open "
+    "a wing or a flipper that is folded in the reference. If the reference stands on "
+    "ALL FOURS with four legs on the ground, the new image must ALSO stand on all "
+    "fours with those same four legs on the ground — do NOT rear it up onto two legs "
+    "and do NOT redraw its front legs as arms. Every other feature is frozen too: the "
+    "same single tail (same length, same side, and keeping any club, spikes or fan on "
+    "its end), the same single head crest / frill / horns / back plates / spine "
+    "ridge / sail — never a second one, never a new one, and never removed. "
+)
+
 # Per-species extra freeze clauses appended to the stride prompt. Long-necked and
 # winged species drift their signature feature when only the legs are asked to move,
 # so we pin those features to the reference on top of the generic freeze.
@@ -980,7 +1039,8 @@ def generate_turnaround(spec: dict, force: bool, retries: int = 2) -> str:
 def stage_transform_prompt(stage: str) -> str:
     """img2img prompt that de-ages the supplied reference to `stage`."""
     return (f"Generate an image. Here is a reference picture of a character. "
-            f"{STAGE_TRANSFORM[stage]} Do NOT turn it into a different animal. Keep it "
+            f"{STAGE_TRANSFORM[stage]} Do NOT turn it into a different animal. "
+            f"{LIMB_FREEZE}Keep it "
             f"a single centered full-body figure in a front view facing the camera, "
             f"feet visible. Remove any shadow: NO drop shadow or ground shadow under "
             f"the character. {STYLE}Solid flat magenta #FF00FF background.")
@@ -1054,7 +1114,8 @@ def generate_stages(spec: dict, force: bool, retries: int = 2) -> str:
     return "saved" if ok else "failed"
 
 
-def stride_prompt(pose: str, direction: str = "S", base: str | None = None) -> str:
+def stride_prompt(pose: str, direction: str = "S", base: str | None = None,
+                  stage: str | None = None) -> str:
     """img2img prompt that repositions ONLY the legs of the supplied reference into
     a mid-stride walking pose. Everything else (identity, colors, camera, position,
     scale) must stay bit-for-bit consistent so the walk cycle doesn't flicker.
@@ -1074,15 +1135,19 @@ def stride_prompt(pose: str, direction: str = "S", base: str | None = None) -> s
             "back or tail feature; copy the entire back and tail exactly as drawn and "
             "change ONLY the legs. ")
     species_freeze = SPECIES_STRIDE_FREEZE.get(base, "")
+    is_quad = (base, stage) in QUADRUPED_STAGES
+    move = (QUAD_STRIDE_TRANSFORM if is_quad else STRIDE_TRANSFORM)[pose]
+    quad_freeze = QUAD_STANCE_FREEZE if is_quad else ""
     return (
         f"Generate an image. Here is a reference picture of a character standing. "
+        f"{quad_freeze}"
         f"Redraw the EXACT SAME character — identical design, proportions, colors, "
         f"markings, outline thickness, shading and overall SIZE — but now captured "
-        f"MID-STRIDE while walking, with {STRIDE_TRANSFORM[pose]}. "
+        f"MID-STRIDE while walking, with {move}. "
         f"CRITICAL: change ONLY the legs and feet — a tiny up/down body bob is fine, "
         f"but the HEAD, face, body, belly, arms and tail must stay EXACTLY as in the "
         f"reference, drawn in the SAME position on the canvas at the SAME scale. "
-        f"{back_freeze}"
+        f"{LIMB_FREEZE}{back_freeze}"
         f"THE CAMERA ANGLE MUST BE IDENTICAL TO THE REFERENCE: if the reference shows "
         f"the character from BEHIND (its back, no face visible), the new image must "
         f"ALSO show it from behind with NO face visible; if it is a side profile, keep "
@@ -1138,7 +1203,7 @@ def generate_strides(spec: dict, force: bool, retries: int = 2) -> str:
                     print(f"[skip] {base}_{label_stage}_{pose}_{d} (exists)")
                     continue
                 time.sleep(2)
-                b64 = _attempt(stride_prompt(pose, d, base), seed_b64,
+                b64 = _attempt(stride_prompt(pose, d, base, stage), seed_b64,
                                f"{base}_{label_stage}_{pose}_{d}", retries)
                 if not b64:
                     print(f"       FAILED {base}_{label_stage}_{pose}_{d}")
