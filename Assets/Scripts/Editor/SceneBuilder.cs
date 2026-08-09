@@ -148,6 +148,20 @@ namespace DinoDigger.EditorTools
                 LoadDuckSprite("duck_fly", DuckWorldHeight),
                 overworldRoot.transform);
 
+            // ---- Machine Friends (Doodle / Sprinkles / Tuggy) ----
+            // The service only, NOT the machines: nothing is pre-placed. Each machine arrives
+            // once the child has earned it (first berry harvested, first duck caught, first
+            // building finished) and the service builds it then — so a freshly built scene is
+            // exactly the day-zero island, with three friends still to be discovered.
+            var machinesGo = new GameObject("Machines");
+            machinesGo.transform.SetParent(overworldRoot.transform, false);
+            var machines = machinesGo.AddComponent<MachineFriendController>();
+            // CreateTown puts the TownArea on the same "Town" root as the controller, so this
+            // is the district the town itself is building on — never a second copy.
+            TownArea townArea = town != null ? town.GetComponent<TownArea>() : null;
+            machines.Configure(overworldMap, lib, config, townArea, town, gardenArea, sprouts,
+                streamNetwork, duckController, overworldRoot.transform);
+
             // ---- Dig root (parked far away) ----
             var digRootGo = new GameObject("DigRoot");
             digRootGo.transform.position = DigRootPos;
@@ -290,6 +304,7 @@ namespace DinoDigger.EditorTools
             Wire(gm, "_town", town);
             Wire(gm, "_garden", gardenArea);
             WireSproutList(gm, "_sprouts", sprouts);
+            Wire(gm, "_machines", machines);
 
             // ---- Save + register scene ----
             EditorSceneManager.MarkSceneDirty(scene);

@@ -70,6 +70,29 @@ namespace DinoDigger.Config
         Pot = 3        // two taps, then a fountain of coins
     }
 
+    /// <summary>One bone in a dinosaur skeleton (DinoDigger-0z5). This is the bone's
+    /// IDENTITY, not its shape on the grid: a femur laid across the dig site and a femur
+    /// standing on end are the same bone, banked into the same slot. The dig site's
+    /// cell-offset templates (see DigModeController) map each template onto one of these.
+    ///
+    /// The values are the bone INDEX the skeleton board (D2b) banks against, so they are a
+    /// stable contract: append new bones at the end, never renumber.
+    /// </summary>
+    public enum BoneType
+    {
+        SmallBone = 0,  // 1x2 stub
+        Femur = 1,      // 1x3 long bone, laid flat or stood on end
+        Rib = 2,        // a 3-cell arc inside a 2x2 box
+        Skull = 3       // 2x2 blocky
+    }
+
+    /// <summary>Bone bookkeeping constants shared by the dig site and the bank.</summary>
+    public static class BoneSpecies
+    {
+        /// <summary>How many distinct bones make up one skeleton (see <see cref="BoneType"/>).</summary>
+        public const int BonesPerSkeleton = 4;
+    }
+
     /// <summary>Growth stage for a dino. Scale is driven from GameConfig.</summary>
     public enum GrowthStage
     {

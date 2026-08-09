@@ -313,6 +313,14 @@ namespace DinoDigger.Testing
             TownController.TestSuspendBuilds = false;
             DigModeController.TestSuppressCrew = false;
             DigModeController.TestForceSurpriseKind = -1;
+            DigModeController.TestSuppressToys = false;
+            DigModeController.TestSuppressBones = false;
+
+            // The toy roller's no-repeat history (DinoDigger-qhy) is static AND mirrored into the
+            // save, so a feature rolled by one case would steer the next case's first site. Wiped
+            // here for the same reason as every pin above: a case must never inherit state it did
+            // not ask for.
+            DigModeController.TestResetPrimaryToy();
         }
 
         private void OnLog(string condition, string stackTrace, LogType type)

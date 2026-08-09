@@ -197,6 +197,15 @@ QUAD_STANCE_FREEZE = (
     "limbs bent across the chest. All four feet stay at the bottom of the figure near "
     "the ground line. This is only a small step, not a new pose. ")
 
+# KNOWN RESIDUAL (DinoDigger-awr): the stegosaurus BABY still rears up on its
+# front-ish facings — walkA_S, walkB_S and walkB_SE come back with the chest
+# tilted up and one front leg bent to chest height, reading as a raised arm. It
+# reproduced on THREE independent rolls, including one with a stricter variant
+# clause that froze the front legs entirely and moved only the hind feet, so it is
+# a model limitation on this asset (chibi baby proportions on a front view), not a
+# missing clause. Do not re-attempt by weakening or rewording the freezes above —
+# the same wording renders the ankylosaurus and brachiosaurus babies correctly.
+
 # --- Limb freeze (DinoDigger-n4b) -------------------------------------------------
 # img2img pose/age edits hallucinate ANATOMY: a two-armed dino comes back with four
 # arms, a QUADRUPED idle comes back standing on two legs with its front legs redrawn

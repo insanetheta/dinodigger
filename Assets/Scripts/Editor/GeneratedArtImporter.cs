@@ -115,6 +115,27 @@ namespace DinoDigger.EditorTools
         // per-building art is missing, so it must always be a complete five-state set.
         private const int GenericBuildingStatesSlug = 0;
 
+        // MACHINE FRIENDS (epic DinoDigger-b48), transparent PNGs in Generated/machines/.
+        //
+        // These are, for now, the CONCEPT paintings copied straight over from
+        // Assets/Art/Concepts/machines/ — they are clean, single-subject and already
+        // transparent, so they read fine in-game and unblock the whole feature while the art
+        // agent is busy elsewhere. Dedicated dormant/awake art is a follow-up; the dormant
+        // state is currently a colour multiply on this same sprite (see MachineFriend), which
+        // is why one sprite per machine is enough.
+        //
+        // Sized by HEIGHT to a shared overworld-prop target so the three read as one family
+        // whatever their raw resolution, with a BOTTOM-CENTER pivot so they stand on the
+        // ground line like a building instead of floating half-sunk. Roster order matches
+        // MachineKind / PlaceholderLibrary.Machine(int): Doodle, Sprinkles, Tuggy.
+        private const float MachineTargetH = 1.1f;
+        private static readonly string[] MachineRels =
+        {
+            "machines/doodle",     // 0  wind-up music box on wheels (plaza)
+            "machines/sprinkles",  // 1  squat watering bot (berry garden)
+            "machines/tuggy",      // 2  palm-sized tugboat (streams)
+        };
+
         // Construction-worker props (DinoDigger-771), transparent PNGs in Generated/town/.
         private const string HardHatRel = "town/prop_hardhat";
         private const string ToolHammerRel = "town/prop_tool_hammer";
@@ -449,6 +470,25 @@ namespace DinoDigger.EditorTools
                 missing.Add(signPath + " (no readable source texture)");
             }
 
+            // Machine Friends (DinoDigger-b48): PPU from HEIGHT so each machine stands
+            // ~MachineTargetH tall, and ConfigureBuilding's BOTTOM-CENTER pivot so they plant
+            // on the ground line like the buildings do. Same tolerant shape as everything
+            // above — a machine whose PNG is absent is tracked, skipped, and falls back at
+            // runtime to a tinted mound blob rather than blanking out.
+            foreach (string rel in MachineRels)
+            {
+                string mp = GenPath(rel);
+                int mh = SourceHeight(mp);
+                if (mh > 0)
+                {
+                    ConfigureBuilding(mp, mh / MachineTargetH, missing);
+                }
+                else
+                {
+                    missing.Add(mp + " (no readable source texture)");
+                }
+            }
+
             AssetDatabase.Refresh();
 
             // ------------------------------------------------ 2) DinoDefinitions
@@ -675,6 +715,20 @@ namespace DinoDigger.EditorTools
                 lib.ToolHammer = LoadSpriteTracked(ToolHammerRel, missing);
                 lib.ConstructionSign = LoadSpriteTracked(ConstructionSignRel, missing);
                 wired.Add("Library: builder props hat/hammer/sign (DinoDigger-771)");
+
+                // Machine Friends (DinoDigger-b48). Direct typed assignment, no reflection.
+                // Loaded WITHOUT tracking: the importer pass above already reported anything
+                // missing, and a machine with no art is an expected, handled state (the
+                // runtime draws a tinted mound blob so the friend is still visible + tappable).
+                lib.MachineDoodle = LoadSprite(GenPath(MachineRels[0]));
+                lib.MachineSprinkles = LoadSprite(GenPath(MachineRels[1]));
+                lib.MachineTuggy = LoadSprite(GenPath(MachineRels[2]));
+                int machineCount = (lib.MachineDoodle != null ? 1 : 0) +
+                                   (lib.MachineSprinkles != null ? 1 : 0) +
+                                   (lib.MachineTuggy != null ? 1 : 0);
+                wired.Add($"Library: machine friends {machineCount}/3 " +
+                          $"(~{MachineTargetH}u tall, bottom pivot" +
+                          (machineCount == 3 ? ")" : "; missing ones fall back to a tinted blob)"));
 
                 // Tilemap tiles + MoundSprite + icons intentionally left on placeholders.
                 EditorUtility.SetDirty(lib);

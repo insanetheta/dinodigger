@@ -139,6 +139,14 @@ namespace DinoDigger.Config
                  "landings quietly fall back to the crumb particle.")]
         public Sprite DustPuff;
 
+        [Header("Fossil bones (DinoDigger-0z5)")]
+        [Tooltip("Assembled bone props indexed by BoneType (0 small bone, 1 femur, 2 rib, " +
+                 "3 skull) — the whole bone that rises out of the pit once every cell of it " +
+                 "has been uncovered. Left null (the D2 art ticket has not landed yet) the " +
+                 "dig falls back to the treasure bone sprite, and then to a plain white " +
+                 "silhouette sized to the bone's footprint, so a bone ALWAYS pops visibly.")]
+        public Sprite[] BoneSprites = new Sprite[4];
+
         [Header("Items")]
         public Sprite[] FruitSprites = new Sprite[4];
         public Sprite[] TreasureSprites = new Sprite[4];
@@ -166,6 +174,30 @@ namespace DinoDigger.Config
         public Sprite HardHat;
         public Sprite ToolHammer;
         public Sprite ConstructionSign;
+
+        [Header("Machine Friends (DinoDigger-b48)")]
+        [Tooltip("Overworld sprites for the three helper machines, imported ~1.1 world units " +
+                 "tall with a bottom-center pivot so they stand on the ground like a prop. " +
+                 "Direct typed fields, no reflection. Any slot left null (art not imported, " +
+                 "stale library asset) falls back at runtime to the mound sprite under the " +
+                 "machine's signature tint, so a machine is ALWAYS visible and tappable — a " +
+                 "sleeping friend never turns into an invisible hole in the world.")]
+        public Sprite MachineDoodle;      // wind-up music box on wheels (plaza)
+        public Sprite MachineSprinkles;   // squat watering bot (berry garden)
+        public Sprite MachineTuggy;       // palm-sized tugboat (streams)
+
+        /// <summary>Overworld sprite for <paramref name="machine"/> in roster order
+        /// (0 Doodle, 1 Sprinkles, 2 Tuggy), or null when that art is not imported yet.</summary>
+        public Sprite Machine(int machine)
+        {
+            switch (machine)
+            {
+                case 0: return MachineDoodle;
+                case 1: return MachineSprinkles;
+                case 2: return MachineTuggy;
+                default: return null;
+            }
+        }
 
         [Header("Particles")]
         public Sprite StarParticle;
@@ -197,6 +229,14 @@ namespace DinoDigger.Config
         public Sprite Crystal(int color)
         {
             return Pick(CrystalSprites, color);
+        }
+
+        /// <summary>Assembled bone art for <paramref name="boneIndex"/> ((int)BoneType), or null
+        /// when the fossil art has not been generated yet — the dig site then falls back to the
+        /// treasure bone / a white silhouette rather than popping nothing.</summary>
+        public Sprite Bone(int boneIndex)
+        {
+            return Pick(BoneSprites, boneIndex);
         }
 
         /// <summary>How many crystal colours this library actually carries art for (at least 1,

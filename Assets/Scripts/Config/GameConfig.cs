@@ -263,6 +263,44 @@ namespace DinoDigger.Config
         [Tooltip("Chance a site hides one pinata pot.")]
         public float DigPotChance = 0.35f;
 
+        [Header("Dig toys — the 'every dig has a toy' roller (DinoDigger-qhy)")]
+        [Tooltip("Draw weights for the site's FEATURED toy, indexed 0 crystal cluster / " +
+                 "1 boom geode / 2 pinata pot / 3 surprise pocket. Every site gets exactly one " +
+                 "featured toy GUARANTEED (the chances above then roll SECONDARY toys on top), " +
+                 "and the previous site's feature is excluded from the draw so two digs in a " +
+                 "row never lead with the same treat. A zero weight benches that toy as a " +
+                 "feature without removing it from the game.")]
+        public int[] DigPrimaryToyWeights = { 3, 2, 2, 3 };
+
+        [Header("Fossil bones (DinoDigger-0z5)")]
+        [Tooltip("Chance a site buries a multi-cell bone, once every egg species is owned " +
+                 "(the same gate egg shards use). 1 = every site, which is the shipped default: " +
+                 "the skeleton board is the late-game collection and it should always tick over.")]
+        public float DigBoneSiteChance = 1f;
+
+        [Tooltip("Bones REPLACE dig-site egg shards one-for-one: at a site that buried a bone, " +
+                 "a buried item that rolls a shard becomes treasure instead, so the late-game " +
+                 "reward moves from the nest to the skeleton board. Rock-smash shards are " +
+                 "untouched, so the nest still progresses. Turn off to run bones as pure bonus.")]
+        public bool DigBonesReplaceShardDrops = true;
+
+        [Tooltip("Seconds the assembled bone takes to rise out of the pit when its last cell " +
+                 "is uncovered.")]
+        public float DigBoneRiseSeconds = 0.5f;
+
+        [Tooltip("World units the assembled bone rises.")]
+        public float DigBoneRiseHeight = 1.1f;
+
+        [Tooltip("Rattle: how far the rising bone wobbles (degrees) and for how long.")]
+        public float DigBoneRattleDegrees = 22f;
+        public float DigBoneRattleSeconds = 0.55f;
+
+        [Tooltip("Seconds the bone hangs at the top of its rise before shrinking away.")]
+        public float DigBoneHoldSeconds = 0.8f;
+
+        [Tooltip("Sparkle particles the whole-bone pop throws.")]
+        public int DigBoneSparkleCount = 20;
+
         [Header("Movement")]
         public float BackhoeSpeed = 3.5f;
         public float BackhoeArriveDistance = 0.15f;
@@ -403,6 +441,56 @@ namespace DinoDigger.Config
                  "re-enters the ripen cycle.")]
         public float SproutRegrowSeconds = 25f;
 
+        [Header("Machine Friends (mossy sleepers)")]
+        [Tooltip("PACING GUARD. When on (the default), at most ONE undiscovered machine may " +
+                 "stand in the world at a time: if a second discovery gate trips while a " +
+                 "sleeper is still waiting to be found, the second machine queues and arrives " +
+                 "the moment the first is woken. That is the bible's 'one friend at a time' " +
+                 "arc made mechanical, and it stops two glinting strangers competing for the " +
+                 "same pair of eyes. Turn off only to stage several machines at once.")]
+        public bool MachineOneDiscoveryAtATime = true;
+
+        [Tooltip("Doodle the music-box bot: seconds between plaza dance parties. The visible " +
+                 "gauge under him fills back up over exactly this long, so the wait is never " +
+                 "wordless-mysterious — the child can SEE when the next crank is ready.")]
+        public float DoodleCooldownSeconds = 20f;
+
+        [Tooltip("How long the townsfolk keep dancing around Doodle before drifting home.")]
+        public float DoodlePartySeconds = 6f;
+
+        [Tooltip("How many nearby residents Doodle can call to a party at once. Deliberately " +
+                 "small: the plaza should read as a party, never as a stampede.")]
+        public int DoodleMaxDancers = 4;
+
+        [Tooltip("Radius (world units) around Doodle that residents are summoned from.")]
+        public float DoodleGatherRadius = 6f;
+
+        [Tooltip("Sprinkles the watering bot: how many sprays its belly tank holds. Each tap " +
+                 "spends one; the tank level is drawn on its belly.")]
+        public int SprinklesTankCharges = 3;
+
+        [Tooltip("Seconds Sprinkles takes to sip ONE charge back into its tank.")]
+        public float SprinklesRechargeSeconds = 45f;
+
+        [Tooltip("World units/sec Sprinkles trundles at on its way to a thirsty sprout.")]
+        public float SprinklesTrundleSpeed = 1.1f;
+
+        [Tooltip("Tuggy the tugboat: seconds between toots (each toot tows a fresh duckling line).")]
+        public float TuggyCooldownSeconds = 40f;
+
+        [Tooltip("Seconds a towed duckling line stays out. The ducklings are REAL ducks — they " +
+                 "keep drifting (and stay catchable) until they reach the stream mouth, so this " +
+                 "is only how long Tuggy's tow-line pose lasts.")]
+        public float TuggyTowSeconds = 30f;
+
+        [Tooltip("How many ducklings one toot tows (rolled between min and max, inclusive).")]
+        public int TuggyDucklingsMin = 2;
+        public int TuggyDucklingsMax = 3;
+
+        [Tooltip("World units/sec Tuggy chugs along its stream. Slower than a duck (0.5) so the " +
+                 "boat reads as the big steady one and the ducks still overtake it.")]
+        public float TuggyChugSpeed = 0.32f;
+
         [Header("Feel")]
         public float IdleAttractSeconds = 15f;
         public float ParentGateHoldSeconds = 3f;
@@ -445,6 +533,20 @@ namespace DinoDigger.Config
                     return u < 0.5f ? 4f * u * u * u : 1f - Mathf.Pow(-2f * u + 2f, 3f) / 2f;
                 default: return u * u; // Accelerate
             }
+        }
+
+        /// <summary>Draw weight of featured-toy <paramref name="index"/> for the site roller
+        /// (DinoDigger-qhy). Falls back to an even-ish default for an index the serialized array
+        /// does not cover — a stale asset must never bench a toy by accident — and clamps
+        /// negatives to 0 so a typo in the inspector cannot make a weight subtract.</summary>
+        public int DigPrimaryToyWeight(int index)
+        {
+            if (DigPrimaryToyWeights == null || index < 0 || index >= DigPrimaryToyWeights.Length)
+            {
+                return 2;
+            }
+
+            return Mathf.Max(0, DigPrimaryToyWeights[index]);
         }
 
         /// <summary>Coins one popped crystal blob of <paramref name="blobSize"/> pays: the

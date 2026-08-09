@@ -81,6 +81,17 @@ namespace DinoDigger.Dig
         public bool IsSurprise => _isSurprise;
         public bool IsDestroyed => _destroyed;
 
+        /// <summary>True while this tile sits ON one cell of a buried fossil bone
+        /// (DinoDigger-0z5) and is showing that cell's bone-ish peek.
+        ///
+        /// A bone is NOT a buried item: it belongs to the CELL, not to the tile, so this flag
+        /// travels with whatever tile currently occupies a bone cell — the cascade re-seats it
+        /// after every settle. That is why it is its own flag instead of <see cref="HasItem"/>:
+        /// the buried bookkeeping keys off the TILE and must never gain a phantom entry, and a
+        /// bone cell must never also be pickable loot (site generation keeps the two layers
+        /// apart, exactly as it keeps toys and items apart).</summary>
+        public bool CoversBone { get; private set; }
+
         /// <summary>What this cell is: plain dirt, a crystal, a boom geode or a pinata pot.</summary>
         public DigTileKind Kind => _kind;
 
@@ -112,6 +123,7 @@ namespace DinoDigger.Dig
         internal float TestPeekAlpha => _peek != null ? _peek.color.a : 0f;
         internal bool TestIsSurprise => _isSurprise;
         internal DigTileKind TestKind => _kind;
+        internal bool TestCoversBone => CoversBone;
 
         /// <summary>TEST HOOK. Re-seat this tile's max health (clamped >= 1) and reset its
         /// damage, refreshing the crack sprite, so a test can verify the proportional
@@ -196,6 +208,7 @@ namespace DinoDigger.Dig
             if (kind != DigTileKind.Dirt)
             {
                 HasItem = false;
+                CoversBone = false; // a toy cell is never also a bone cell (see site generation)
                 if (_peek != null)
                 {
                     _peek.enabled = false;
@@ -217,6 +230,51 @@ namespace DinoDigger.Dig
                 _peek.color = new Color(tint.r, tint.g, tint.b, _restPeekAlpha);
                 _peek.transform.localScale = Vector3.one * 0.7f;
                 _peek.enabled = true;
+            }
+        }
+
+        /// <summary>This tile is standing on one cell of a buried bone: show the same peek the
+        /// buried-item layer uses, in a bone-ish tint, so the child reads "something is under
+        /// here" through the cracks exactly as they do for loot.
+        ///
+        /// Deliberately REUSES the single peek renderer rather than adding a second one: a bone
+        /// cell never also hides an item (site generation places bones before items and items
+        /// skip bone cells), so the two can never want the renderer at the same time — and the
+        /// owner re-seats bone peeks after every settle, which is what keeps the hint on
+        /// whichever tile has fallen into the cell. No-op on a tile that hides an item or is a
+        /// toy: those have their own art and it wins.</summary>
+        public void SetBonePeek(Sprite boneSprite, Color tint)
+        {
+            if (HasItem || _isSurprise || _kind != DigTileKind.Dirt)
+            {
+                return;
+            }
+
+            CoversBone = true;
+            _peekTint = tint;
+            if (_peek != null)
+            {
+                _peek.sprite = boneSprite;
+                _peek.color = new Color(tint.r, tint.g, tint.b, _restPeekAlpha);
+                _peek.transform.localScale = Vector3.one * 0.7f;
+                _peek.enabled = boneSprite != null;
+            }
+        }
+
+        /// <summary>This tile has moved OFF the bone cell it was covering (or the bone popped):
+        /// drop the hint. Never touches a buried-item peek — only a tile that is actually
+        /// flagged as bone-covering can be cleared here.</summary>
+        public void ClearBonePeek()
+        {
+            if (!CoversBone)
+            {
+                return;
+            }
+
+            CoversBone = false;
+            if (_peek != null && !HasItem)
+            {
+                _peek.enabled = false;
             }
         }
 
@@ -433,8 +491,11 @@ namespace DinoDigger.Dig
 
         private void RevealPeek()
         {
-            // The hint is visible from the start; brighten it as the dirt cracks.
-            if (HasItem && _peek != null)
+            // The hint is visible from the start; brighten it as the dirt cracks. A BONE cell's
+            // peek brightens on exactly the same curve — from the child's side "there is
+            // something under this tile" is one idea, whether it turns out to be loot or a
+            // piece of a skeleton.
+            if ((HasItem || CoversBone) && _peek != null)
             {
                 _peek.enabled = true;
                 float a = Mathf.Lerp(0.7f, 1f, (float)_damage / Mathf.Max(1, _maxHealth));
@@ -466,6 +527,7 @@ namespace DinoDigger.Dig
         {
             _destroyed = true;
             _wiggling = false;
+            CoversBone = false; // the cell it was covering is now UNCOVERED (owner-side bookkeeping)
 
             // A crumbling tile stops travelling: kill any fall/squash in flight so a
             // corpse can never keep sliding toward a cell it no longer occupies.

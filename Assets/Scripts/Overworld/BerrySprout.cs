@@ -181,16 +181,32 @@ namespace DinoDigger.Overworld
             }
         }
 
+        /// <summary>SPRINKLES' SPRAY (DinoDigger-25j): skip the rest of the ripen timer and
+        /// swell into a ripe berry RIGHT NOW. Returns false when the sprout was already ripe
+        /// (nothing to water), which is what lets the watering bot pick a genuinely thirsty
+        /// target and never waste a tank charge on a finished berry.
+        ///
+        /// Deliberately a real gameplay entry point rather than a test hook: it routes through
+        /// the SAME <see cref="Ripen"/> the timer uses, so a watered sprout is indistinguishable
+        /// from a naturally ripened one — same swell tween, same sparkle, same harvest.</summary>
+        public bool WaterNow()
+        {
+            if (_state == SproutState.Ripe)
+            {
+                return false;
+            }
+
+            _timer = 0f;
+            Ripen();
+            return true;
+        }
+
         // ----------------------------------------------------------- TEST HOOKS
 
         /// <summary>TEST HOOK. Ripen right now instead of waiting out the timer.</summary>
         internal void TestForceRipen()
         {
-            if (_state != SproutState.Ripe)
-            {
-                _timer = 0f;
-                Ripen();
-            }
+            WaterNow();
         }
 
         /// <summary>TEST HOOK. The fruit variant currently on show (and next to harvest).</summary>

@@ -33,6 +33,13 @@ namespace DinoDigger.Overworld
         private float _timer;
         private readonly List<Duck> _alive = new List<Duck>();
 
+        // Ducklings towed out by TUGGY (DinoDigger-xt3), tracked SEPARATELY from _alive on
+        // purpose. Tuggy's whole design brief is "MORE catchable ducks, not fewer": if his
+        // ducklings counted against MaxAlive, a toot would suppress the ambient spawner and
+        // the stream would end up with the same two ducks it always had. They are otherwise
+        // completely ordinary Ducks — same drift, same tap-to-catch, same reward.
+        private readonly List<Duck> _escorts = new List<Duck>();
+
         /// <summary>The side-view duck sprite, borrowed by the Duck! dig surprise so it can
         /// fly the same duck art without its own wiring. Null when no duck art is present.</summary>
         internal Sprite SurpriseSprite => _sideSprite;
@@ -92,9 +99,57 @@ namespace DinoDigger.Overworld
                     _alive.RemoveAt(i);
                 }
             }
+
+            for (int i = _escorts.Count - 1; i >= 0; i--)
+            {
+                if (_escorts[i] == null)
+                {
+                    _escorts.RemoveAt(i);
+                }
+            }
+        }
+
+        /// <summary>
+        /// TUGGY'S TOW-LINE (DinoDigger-xt3). Put ONE extra duckling on the water at
+        /// <paramref name="startCellIndex"/> of course <paramref name="courseIndex"/> — i.e.
+        /// wherever the tugboat currently is, so the line trails out behind him — riding a
+        /// little lily pad. Returns the duckling, or null when the course does not exist.
+        ///
+        /// It is a REAL <see cref="Duck"/> in every way that matters to the child: it drifts
+        /// the same course at the same speed, it is catchable with the same tap, and catching
+        /// it quacks, flies off and pays the same fruit-or-treasure reward. The only two
+        /// differences are cosmetic (a lily pad under it) and bookkeeping (it does not count
+        /// against the ambient <see cref="MaxAlive"/> cap — see <c>_escorts</c>).
+        ///
+        /// The stream is one cell wide and ducks share it today by simply overlapping: every
+        /// water actor is a TRIGGER collider with no Rigidbody2D anywhere in the project, so
+        /// nothing pushes anything. Overlap is purely a TAP question, and GameManager's
+        /// TappableRank answers it deterministically — a duck outranks a machine, so a
+        /// duckling drifting across Tuggy is always the thing a tap catches.
+        /// </summary>
+        internal Duck SpawnEscortDuck(int courseIndex, int startCellIndex, Sprite lilyPad)
+        {
+            Duck d = SpawnDuck(courseIndex, startCellIndex, lilyPad, ambient: false);
+            if (d != null)
+            {
+                _escorts.Add(d);
+            }
+
+            return d;
         }
 
         private Duck SpawnDuck(int courseIndex)
+        {
+            Duck d = SpawnDuck(courseIndex, 0, null, ambient: true);
+            if (d != null)
+            {
+                _alive.Add(d);
+            }
+
+            return d;
+        }
+
+        private Duck SpawnDuck(int courseIndex, int startCellIndex, Sprite lilyPad, bool ambient)
         {
             IReadOnlyList<Vector3Int> cells = _streams != null ? _streams.CourseCells(courseIndex) : null;
             if (cells == null || cells.Count == 0)
@@ -113,9 +168,14 @@ namespace DinoDigger.Overworld
                 underBridge.Add(_map != null && _map.IsWalkableCell(cells[i]));
             }
 
-            var go = new GameObject("Duck");
+            // Ambient ducks always hatch at the COAST head; a towed duckling starts wherever
+            // the tugboat is, so the tow-line trails out behind him instead of teleporting to
+            // the far end of the island. Clamped so a bad index can only ever mean "the head".
+            int start = ambient ? 0 : Mathf.Clamp(startCellIndex, 0, route.Count - 1);
+
+            var go = new GameObject(ambient ? "Duck" : "Duckling");
             go.transform.SetParent(_overworldRoot, false);
-            go.transform.position = route[0]; // the COAST end of the course
+            go.transform.position = route[start];
 
             var sr = go.AddComponent<SpriteRenderer>();
             sr.sortingOrder = DuckSorting;
@@ -125,9 +185,27 @@ namespace DinoDigger.Overworld
             col.radius = 0.3f; // generous toddler touch target, ~0.5-unit duck
             col.isTrigger = true;
 
+            // A towed duckling rides a lily pad: a child renderer UNDER the duck, so the tow
+            // line reads as a little parade of pads. Null-tolerant — no pad sprite, no child,
+            // and the duckling is simply a duck.
+            if (!ambient && lilyPad != null)
+            {
+                var padGo = new GameObject("LilyPad");
+                padGo.transform.SetParent(go.transform, false);
+                padGo.transform.localPosition = new Vector3(0f, -0.14f, 0f);
+                var padSr = padGo.AddComponent<SpriteRenderer>();
+                padSr.sprite = lilyPad;
+                padSr.sortingOrder = DuckSorting - 1;
+                padSr.color = new Color(0.35f, 0.68f, 0.35f);
+                if (lilyPad.bounds.size.y > 0.001f)
+                {
+                    float k = 0.22f / lilyPad.bounds.size.y;
+                    padGo.transform.localScale = new Vector3(k * 1.6f, k, 1f);
+                }
+            }
+
             var duck = go.AddComponent<Duck>();
-            duck.Init(route, underBridge, _sideSprite, _flySprite, sr, col, DuckSorting);
-            _alive.Add(duck);
+            duck.Init(route, underBridge, _sideSprite, _flySprite, sr, col, DuckSorting, start);
             return duck;
         }
 
@@ -139,6 +217,18 @@ namespace DinoDigger.Overworld
         internal Duck TestForceSpawnDuck()
         {
             return _streams != null && _streams.Count > 0 ? SpawnDuck(0) : null;
+        }
+
+        /// <summary>TEST HOOK. Ducklings currently on the water from Tuggy's tow line —
+        /// deliberately NOT counted in <see cref="TestAliveCount"/>, because they are extra
+        /// ducks on top of the ambient pair, not a share of it.</summary>
+        internal int TestEscortCount
+        {
+            get
+            {
+                PruneDead();
+                return _escorts.Count;
+            }
         }
 
         internal int TestAliveCount
@@ -191,8 +281,13 @@ namespace DinoDigger.Overworld
 
         internal bool TestCaught => _caught;
 
+        /// <summary><paramref name="startIndex"/> is where on the course this duck enters the
+        /// water: 0 for an ambient duck hatching at the coast head, and the tugboat's current
+        /// cell for a towed duckling, so the tow line trails out behind Tuggy rather than
+        /// appearing at the far end of the stream. Everything downstream of the entry point is
+        /// identical, which is what keeps a duckling a completely ordinary catchable duck.</summary>
         public void Init(List<Vector3> route, List<bool> underBridge, Sprite side, Sprite fly,
-            SpriteRenderer sr, CircleCollider2D col, int baseSorting)
+            SpriteRenderer sr, CircleCollider2D col, int baseSorting, int startIndex = 0)
         {
             _route = route;
             _underBridge = underBridge;
@@ -202,9 +297,12 @@ namespace DinoDigger.Overworld
             _col = col != null ? col : GetComponent<CircleCollider2D>();
             _baseSorting = baseSorting;
 
+            int count = _route != null ? _route.Count : 0;
+            int start = count > 0 ? Mathf.Clamp(startIndex, 0, count - 1) : 0;
+
             _bobPhase = Random.value * Mathf.PI * 2f;
-            _index = _route != null && _route.Count > 1 ? 1 : 0;
-            _basePos = _route != null && _route.Count > 0 ? _route[0] : transform.position;
+            _index = start + 1 < count ? start + 1 : start;
+            _basePos = count > 0 ? _route[start] : transform.position;
             transform.position = _basePos;
             _fade = 1f;
 
@@ -349,6 +447,12 @@ namespace DinoDigger.Overworld
             GameManager gm = GameManager.Instance;
             if (gm != null)
             {
+                // MACHINE DISCOVERY GATE (DinoDigger-xt3): the first duck the child ever
+                // catches is what summons Tuggy. The duck-amplifier must never arrive before
+                // the ducks — a child has to know and love the catch before the boat that
+                // makes more of them turns up.
+                gm.NotifyDuckCaught();
+
                 // Reuse the wired Honk clip as the quack (a honk-tone fits a duck and
                 // is already mapped to a Kenney sound; avoids a silent new slot).
                 gm.Audio?.Honk();

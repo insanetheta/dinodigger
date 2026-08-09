@@ -39,6 +39,7 @@ namespace DinoDigger.Core
         [SerializeField] private List<DigMound> _mounds = new List<DigMound>();
         [SerializeField] private GardenArea _garden;
         [SerializeField] private List<BerrySprout> _sprouts = new List<BerrySprout>();
+        [SerializeField] private MachineFriendController _machines;
 
         [Header("Audio sources")]
         [SerializeField] private int _sfxVoices = 6;
@@ -130,6 +131,94 @@ namespace DinoDigger.Core
         public int ShardsPerHatch =>
             _config != null ? _config.GetShardRequirement(ShardEggsHatched) : 20;
         public int ShardCount => Save != null ? Save.Data.ShardCount : 0;
+
+        // ---- Fossil bones (DinoDigger-0z5) ----
+        // Multi-cell bones dug out of the pit bank HERE, not into the treasure wallet: they are
+        // the late-game COLLECTION, the reward layer that takes over from egg shards once every
+        // egg species is owned. D2b (the skeleton board + the Dino-Matic) is what displays and
+        // spends them; this is deliberately just the counter it will read, shaped the way that
+        // board wants it — per species, per bone.
+        //
+        // SESSION-ONLY FOR NOW, ON PURPOSE. D2b owns the save version bump; the row shape it
+        // will persist already exists as Managers.BoneSave, and BoneBankSnapshot below hands
+        // back exactly that list, so turning this into save state is a field plus one loop.
+        private readonly Dictionary<int, int> _boneBank = new Dictionary<int, int>();
+
+        /// <summary>Total bones banked this session, across every species and bone.</summary>
+        public int BonesBanked { get; private set; }
+
+        /// <summary>The last bone banked, as species*<see cref="BoneSpecies.BonesPerSkeleton"/> +
+        /// bone index, or -1 before the first one. Cheap breadcrumb for the dig site's own
+        /// flourish and for tests; the board reads the counts, not this.</summary>
+        public int LastBoneBanked { get; private set; } = -1;
+
+        /// <summary>Bank one uncovered fossil bone against <paramref name="species"/>'s skeleton.
+        /// <paramref name="boneIndex"/> is a <see cref="BoneType"/> ordinal — a stable contract,
+        /// so a bone banked today still names the same slot after D2b ships the board.</summary>
+        public void BankBone(Config.DinoType species, int boneIndex)
+        {
+            if (boneIndex < 0 || boneIndex >= BoneSpecies.BonesPerSkeleton)
+            {
+                return; // an unknown bone is dropped rather than corrupting the collection
+            }
+
+            int key = BoneKey(species, boneIndex);
+            _boneBank.TryGetValue(key, out int had);
+            _boneBank[key] = had + 1;
+            BonesBanked++;
+            LastBoneBanked = key;
+        }
+
+        /// <summary>How many of <paramref name="species"/>'s <paramref name="boneIndex"/> bone
+        /// have been banked.</summary>
+        public int BoneCount(Config.DinoType species, int boneIndex)
+        {
+            return _boneBank.TryGetValue(BoneKey(species, boneIndex), out int n) ? n : 0;
+        }
+
+        /// <summary>Bones banked toward one species' skeleton (all bone slots summed).</summary>
+        public int BonesForSpecies(Config.DinoType species)
+        {
+            int n = 0;
+            for (int i = 0; i < BoneSpecies.BonesPerSkeleton; i++)
+            {
+                n += BoneCount(species, i);
+            }
+
+            return n;
+        }
+
+        /// <summary>The bone bank as the serializable rows D2b will persist. Built on demand
+        /// (the bank itself stays a dictionary) so the save bump is a field, not a refactor.</summary>
+        public List<BoneSave> BoneBankSnapshot()
+        {
+            var rows = new List<BoneSave>(_boneBank.Count);
+            foreach (KeyValuePair<int, int> kv in _boneBank)
+            {
+                rows.Add(new BoneSave
+                {
+                    Species = (Config.DinoType)(kv.Key / BoneSpecies.BonesPerSkeleton),
+                    BoneIndex = kv.Key % BoneSpecies.BonesPerSkeleton,
+                    Count = kv.Value,
+                });
+            }
+
+            return rows;
+        }
+
+        private static int BoneKey(Config.DinoType species, int boneIndex) =>
+            (int)species * BoneSpecies.BonesPerSkeleton + boneIndex;
+
+        /// <summary>Remember which FEATURED toy the dig site just led with (DinoDigger-qhy), so
+        /// the next site can refuse to repeat it even across an app restart. Stored index+1 so
+        /// the absent-field default on an older save reads as "no history" (see SaveData).</summary>
+        internal void SetLastDigPrimaryToy(int index)
+        {
+            if (Save != null && Save.Data != null)
+            {
+                Save.Data.LastPrimaryToy = index >= 0 ? index + 1 : 0;
+            }
+        }
 
         // ---------------------------------------------------------------- setup
 
@@ -279,10 +368,23 @@ namespace DinoDigger.Core
             // Show the egg's assembly state for the banked shard count right away.
             _nest?.RefreshAssembly(Save.Data.ShardCount);
 
+            // Hand the dig site back the FEATURED toy the last session ended on, so the very
+            // first dig after a restart still refuses to repeat it (DinoDigger-qhy). Stored
+            // index+1; 0 (a fresh or pre-roller save) restores as "no history".
+            DigModeController.RestoreLastPrimaryToy(Save.Data.LastPrimaryToy - 1);
+
             // Rebuild Dino Town: finished buildings return finished (no crew/confetti), a
             // partial site resumes accepting crew, and the queue continues from the saved
             // index. A v3 (or earlier) save has no town fields, so the town stays empty.
             _town?.RestoreFromSave(Save.Data);
+
+            // Machine Friends (DinoDigger-b48): which discovery gates the child has already
+            // earned, and which machines they have already woken. The machines themselves are
+            // NOT rebuilt here — the service's arrival queue builds them on its next tick, so
+            // "a machine appears" has exactly ONE code path whether it is arriving for the
+            // first time or coming back from a save. Absent save fields = nothing earned yet,
+            // which is also what a brand-new player gets.
+            _machines?.RestoreFromSave(Save.Data);
 
             if (Save.Data.Dinos != null)
             {
@@ -319,6 +421,9 @@ namespace DinoDigger.Core
             // Ambient town builder: auto-spends coins + drives resident construction.
             // Always ticks (you dig; they build) and never touches the player/backhoe.
             _town?.Tick(dt);
+            // Machine Friends: polls the town discovery gate and releases queued arrivals.
+            // Owns no dino, blocks nothing, and does nothing at all until a gate trips.
+            _machines?.Tick(dt);
         }
 
         private void TickIdleAttract(float dt)
@@ -344,6 +449,11 @@ namespace DinoDigger.Core
             NearestActiveMound(from)?.AttractPulse();
             // A ripe berry is a harvest invite too — pulse the nearest one alongside the mound.
             NearestRipeSprout(from)?.AttractPulse();
+            // ...and so is a machine that arrived while the child was busy elsewhere and is
+            // still sitting there glinting, undiscovered. Once woken it drops out of the
+            // rotation on its own (MachineFriend.AttractPulse no-ops on an awake machine), so
+            // a found friend is never nagged about again.
+            _machines?.NearestUndiscovered(from)?.AttractPulse();
             GameEvents.RaiseIdleAttract();
             TryTownAttractTour();
         }
@@ -566,11 +676,12 @@ namespace DinoDigger.Core
         ///   0 dirt tile   — the dig pit is modal; while a site is open its tiles own the taps.
         ///   1 duck        — a fleeting critter that wanders over anything; catching it wins.
         ///   2 dino        — a living buddy/resident.
-        ///   3 pickup      — fruit/egg lying around, the feed-and-hatch loop.
-        ///   4 berry sprout— an interactive plant (harvest).
-        ///   5 dig mound   — a ground prop, and the TRANSIENT one: it vanishes once dug.
-        ///   6 build site  — a building still going up: a tap cheers the crew on (DinoDigger-5y9).
-        ///   7 building    — the permanent town prop underneath everything else.
+        ///   3 machine     — a helper machine: a CHARACTER, not scenery (DinoDigger-b48).
+        ///   4 pickup      — fruit/egg lying around, the feed-and-hatch loop.
+        ///   5 berry sprout— an interactive plant (harvest).
+        ///   6 dig mound   — a ground prop, and the TRANSIENT one: it vanishes once dug.
+        ///   7 build site  — a building still going up: a tap cheers the crew on (DinoDigger-5y9).
+        ///   8 building    — the permanent town prop underneath everything else.
         ///
         /// Mound above building is deliberate: the mound is the smaller, temporary object a
         /// toddler is aiming AT when the two overlap. That overlap should not happen at all
@@ -579,6 +690,14 @@ namespace DinoDigger.Core
         /// The under-construction SITE outranks a finished building for the same reason it sits
         /// below the mound: it is the state that changes, the one with a crew hammering on it,
         /// so if a site somehow overlapped a finished neighbour the live one should answer.
+        ///
+        /// MACHINES slot between the dinos and the pickups because that is what they are: alive
+        /// enough to answer before a prop, but never before an animal. The overlap that really
+        /// happens is Tuggy's: he chugs a one-cell stream that ducks (including the ducklings he
+        /// himself tows out) drift straight across. Duck-over-machine means the fleeting,
+        /// catchable, rewarding thing always wins that tap and the big steady boat underneath
+        /// never steals it — which is precisely the ambiguity the roster eval warned a tugboat
+        /// would create, closed here by construction rather than by hoping it never happens.
         /// Unknown implementors fall to the bottom, which is the old first-hit behaviour.
         /// </summary>
         private static int TappableRank(ITappable t)
@@ -588,11 +707,12 @@ namespace DinoDigger.Core
                 case DirtTile _: return 0;
                 case Duck _: return 1;
                 case DinoController _: return 2;
-                case ItemPickup _: return 3;
-                case BerrySprout _: return 4;
-                case DigMound _: return 5;
-                case BuildingController b: return b.IsFinished ? 7 : 6;
-                default: return 8;
+                case MachineFriend _: return 3;
+                case ItemPickup _: return 4;
+                case BerrySprout _: return 5;
+                case DigMound _: return 6;
+                case BuildingController b: return b.IsFinished ? 8 : 7;
+                default: return 9;
             }
         }
 
@@ -850,6 +970,12 @@ namespace DinoDigger.Core
         /// Trike courier can fetch it. Public so <see cref="BerrySprout"/> can call it.</summary>
         public ItemPickup SpawnSproutFruit(Vector3 sproutWorld, int variant)
         {
+            // MACHINE DISCOVERY GATE (DinoDigger-25j): the garden's only PLAYER verb is this
+            // harvest tap — a sprout ripens on a timer with nobody involved — so a harvest is
+            // the honest signal that the child has actually engaged the garden. That is what
+            // summons Sprinkles; before it, the berry patch is just a berry patch.
+            _machines?.NotifyBerryHarvested();
+
             int variants = _config != null ? Mathf.Max(1, _config.FruitVariants) : 1;
             variant = Mathf.Clamp(variant, 0, variants - 1);
 
@@ -2244,6 +2370,77 @@ namespace DinoDigger.Core
         /// per-building progress is persisted alongside the rest of the save.</summary>
         internal void TownPersist() => SaveNow();
 
+        // ------------------------------------------------- Machine Friends (b48)
+        // Small, explicit hooks the machine service borrows. Every one of them either reuses
+        // an existing shared facility (particles, FX bursts, the save) or applies an EXISTING
+        // eligibility rule — none of them adds a new way to claim a dino.
+
+        /// <summary>A machine was woken, or a discovery gate tripped: persist it, so a friend
+        /// the child found is never re-buried and progress toward the next one is never lost.</summary>
+        internal void MachinePersist() => SaveNow();
+
+        /// <summary>A duck was caught (<see cref="Duck.OnTapped"/>): trip Tuggy's discovery
+        /// gate. Idempotent — only the FIRST catch means anything.</summary>
+        public void NotifyDuckCaught() => _machines?.NotifyDuckCaught();
+
+        /// <summary>Reuse the shared particle-system factory for a machine's sparkle.</summary>
+        internal ParticleSystem MachineCreateParticles(Transform parent, Sprite sprite,
+            Color color, float size) => CreateParticles(parent, sprite, color, size);
+
+        /// <summary>Reuse the shared one-shot FX burst (music notes, spray droplets, a toot
+        /// puff). Same throwaway-system + auto-destroy shape as the town's ambient FX.</summary>
+        internal void MachineSpawnFx(Vector3 pos, Sprite sprite, Color color, float size, int count) =>
+            TownSpawnFx(pos, sprite, color, size, count);
+
+        /// <summary>Residents free to join DOODLE'S DANCE PARTY: the town visit system's
+        /// eligibility rule VERBATIM (<see cref="TownAcquireRecessGoers"/> — non-buddy, not
+        /// busy, not a seller, not the ceremony baby) plus a proximity test, because a party
+        /// should pull in the dinos who can hear the music rather than the whole island.
+        ///
+        /// Reusing that filter is what makes "construction always wins" structural rather than
+        /// policed: <see cref="DinoController.IsBusy"/> already covers working AND commuting to
+        /// a build site, so a builder is never even offered to Doodle. And a dancer that gets
+        /// drafted mid-song is simply taken — <see cref="DinoController.GoWork"/> refuses
+        /// nothing — with the party dropping it on its next beat.</summary>
+        internal List<DinoController> MachineAcquireDancers(Vector3 world, float radius, int max)
+        {
+            var result = new List<DinoController>();
+            if (max <= 0)
+            {
+                return result;
+            }
+
+            float radiusSq = radius * radius;
+            for (int i = 0; i < _dinos.Count; i++)
+            {
+                DinoController d = _dinos[i];
+                if (d == null || d.IsBuddy || d.IsBusy || d == _ceremonyDino)
+                {
+                    continue;
+                }
+
+                if (_buddies.Contains(d) || _sellers.Contains(d))
+                {
+                    continue;
+                }
+
+                Vector3 delta = d.transform.position - world;
+                delta.z = 0f;
+                if (delta.sqrMagnitude > radiusSq)
+                {
+                    continue;
+                }
+
+                result.Add(d);
+                if (result.Count >= max)
+                {
+                    break;
+                }
+            }
+
+            return result;
+        }
+
         /// <summary>Reuse the shared confetti burst for a building completion.</summary>
         internal void TownSpawnConfetti(Vector3 pos) => SpawnConfetti(pos);
 
@@ -2710,6 +2907,12 @@ namespace DinoDigger.Core
             // save — treasure, feed, hatch, or a town build event — persists the town too.
             _town?.WriteSave(Save.Data);
 
+            // Machine Friends: which discovery gates have been earned and which machines have
+            // been woken. Purely additive fields on the v4 schema (see SaveData) — nothing
+            // else in this payload changes shape, so an older build reading this save simply
+            // ignores them and a newer build reading an older save finds none earned.
+            _machines?.WriteSave(Save.Data);
+
             Save.Save();
         }
 
@@ -2735,6 +2938,7 @@ namespace DinoDigger.Core
         internal MeadowArea TestMeadow => _meadow;
         internal NestController TestNest => _nest;
         internal TownController TestTown => _town;
+        internal MachineFriendController TestMachines => _machines;
         internal int TestSnifferPulses => _snifferPulses;
         internal int TestRockSmashPayouts => _rockSmashPayouts;
         internal bool TestParadeActive => _paradeActive;
@@ -2749,6 +2953,9 @@ namespace DinoDigger.Core
         internal PlaceholderLibrary TestLibrary => _library;
         internal int TestShardCount => Save != null ? Save.Data.ShardCount : 0;
         internal bool TestEggSpeciesAllOwned => EggSpeciesAllOwned();
+        internal int TestBonesBanked => BonesBanked;
+        internal int TestBoneCount(Config.DinoType species, int boneIndex) => BoneCount(species, boneIndex);
+        internal int TestBoneRowCount => BoneBankSnapshot().Count;
         internal bool TestAnyShardSpeciesUnowned => AnyShardSpeciesUnowned();
         internal int TestReservedEggSpeciesCount => _reservedEggSpecies.Count;
         internal bool TestFruitStandFinished => FruitStandFinished;
@@ -2896,6 +3103,17 @@ namespace DinoDigger.Core
             Spawn?.SetTown(_town);
         }
 
+        /// <summary>TEST HOOK. Install a machine-friends service when the scene has none (an
+        /// older scene asset, or a hand-built rig). Never replaces a wired one — the built
+        /// scene's service is what the cases should be exercising.</summary>
+        internal void TestInstallMachines(MachineFriendController machines)
+        {
+            if (_machines == null)
+            {
+                _machines = machines;
+            }
+        }
+
         /// <summary>TEST HOOK. The tappable a tap at this world point resolves to, as a
         /// Component (null = nothing tappable there). Lets a case assert the RESOLUTION of an
         /// overlap directly (DinoDigger-lie) instead of inferring it from a side effect.</summary>
@@ -2910,6 +3128,15 @@ namespace DinoDigger.Core
         internal void TestTapWorldRouted(Vector3 world)
         {
             world.z = 0f;
+
+            // Make colliders reflect any transform written THIS frame before the overlap query,
+            // exactly as TestContext.TapWorld already does for the screen-space path. Without
+            // it this hook silently mis-resolves taps on anything that moves under its own
+            // power (a trundling machine, a drifting duck): Physics2D.autoSyncTransforms is
+            // false, so a collider stays at its last FixedUpdate position while the transform
+            // has already advanced, and the tap lands on stale geometry — or on nothing.
+            Physics2D.SyncTransforms();
+
             CancelTownAttractTour(); // same input-wins cancel as the real OnTap
             ITappable tappable = FindTappable(world);
             if (tappable != null)
@@ -3021,6 +3248,19 @@ namespace DinoDigger.Core
             // caller owns Save.Data.Town* (a save-state test sets/clears those explicitly);
             // this only wipes the live scene town between cases.
             _town?.TestResetTown();
+
+            // Machine Friends: tear every machine back out of the world and forget every
+            // discovery gate, so each case starts from day zero and trips exactly the gate it
+            // cares about. Like the town, the caller owns Save.Data.Machine* — this only
+            // wipes the live scene.
+            _machines?.TestResetMachines();
+
+            // Fossil bones are session state, so a case starts with an empty collection —
+            // otherwise a bank delta asserted late in the suite would be measured against
+            // whatever an earlier case happened to dig up.
+            _boneBank.Clear();
+            BonesBanked = 0;
+            LastBoneBanked = -1;
 
             // Re-bud every Berry Sprout (staggered) so a case that force-ripened one starts
             // the next case from a clean, all-budding garden.

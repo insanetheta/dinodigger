@@ -113,10 +113,23 @@ namespace DinoDigger.Testing
                 new TestCase("CrystalPopFloodFill",  60f, Case_CrystalPopFloodFill),
                 new TestCase("BoomChainsResolve",    70f, Case_BoomChainsResolve),
                 new TestCase("PinataPotPays",        60f, Case_PinataPotPays),
+                // The "every dig has a toy" guarantee (DinoDigger-qhy): builds several sites
+                // back to back off-screen, so it is quick, but it runs with the toy roller LIVE
+                // and can therefore bank coins — late, like every case above it.
+                new TestCase("EveryDigHasAToy",      45f, Case_EveryDigHasAToy),
+                // Multi-cell fossil bones (DinoDigger-0z5). Late for two reasons: it owns all
+                // four egg species (which changes the loot table for anything after it until the
+                // next reset) and a bone pop is a reward beat.
+                new TestCase("BoneSpansCells",       60f, Case_BoneSpansCells),
                 // Dig-arm V2 live swap (DinoDigger-rrn): digs full tiles, so it can
                 // finish a round and bank treasure — late, like the cases above. Body
                 // lives in IntegrationTestCasesDigArm.cs.
                 new TestCase("DigArmV2Swaps",        60f, Case_DigArmV2Swaps),
+                // Machine Friends (DinoDigger-b48). Bodies live in IntegrationTestCasesMachines.cs.
+                new TestCase("DoodleDanceParty",     70f, Case_DoodleDanceParty),
+                new TestCase("SprinklesRipensOnTap", 70f, Case_SprinklesRipensOnTap),
+                new TestCase("TuggyTowsDucklings",   70f, Case_TuggyTowsDucklings),
+                new TestCase("MachineDiscoveryQueue", 45f, Case_MachineDiscoveryQueue),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }
@@ -2796,6 +2809,316 @@ namespace DinoDigger.Testing
             gm.TestForceRoam();
         }
 
+        // ==================================================== THE TOY ROLLER (qhy)
+
+        // THE ANTI-DULL GUARANTEE. Site generation used to roll each toy on its own independent
+        // chance, which meant a site could legitimately come up with nothing on it — and two of
+        // those in a row teach a toddler that digging is sometimes boring. Now every site picks
+        // one FEATURED toy from the roster (crystal cluster / boom geode / pinata pot / surprise
+        // pocket) and places it unconditionally, and never leads with the same one twice running.
+        //
+        // Drives site generation directly through TestBuildThemedSite (the same off-screen build
+        // the surprise-pool rotation check uses), so N sites cost a frame each instead of N drives
+        // across the island. Asserts three things per site: a feature was chosen, it is REALLY ON
+        // THE BOARD (not merely recorded), and it is not the one the previous site led with.
+        private IEnumerator Case_EveryDigHasAToy(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            DigModeController dm = gm.TestDigMode;
+            ctx.Assert(dm != null, "no dig controller");
+
+            try
+            {
+                // No crew: a superpower can clear tiles the moment a site opens, and this case is
+                // about what site GENERATION produces, not what survives the first bite.
+                DigModeController.TestSuppressCrew = true;
+
+                // Bones off. They are the reward layer, not a toy — TestSuppressToys deliberately
+                // leaves them alone — and a bone claims cells the roller would otherwise have to
+                // place its feature around. (BoneSpansCells owns that interaction.)
+                DigModeController.TestSuppressBones = true;
+
+                gm.TestReset();
+                DigModeController.TestResetPrimaryToy(); // start from a known "no history"
+                ctx.Assert(DigModeController.TestLastPrimaryToy == -1,
+                    "roller history did not clear — the first site's roll would be steered");
+
+                // TEN sites, not the five the spec asks for. The no-repeat rule alone would be
+                // satisfied forever by two toys ping-ponging, so this case also asserts the
+                // roster actually rotates — and that assertion has to be one a healthy roller
+                // cannot fail. Over 6 sites a legitimate A/B/A/B/A/B run comes up about 1 time in
+                // 60; over 10 it is about 1 in 1500, which is the difference between a gate and a
+                // coin flip. Each site is one off-screen build, so the extra four are free.
+                const int sites = 10;
+                int prev = -1;
+                var seen = new List<int>();
+                for (int s = 0; s < sites; s++)
+                {
+                    dm.TestBuildThemedSite(null);
+                    yield return ctx.WaitFrames(1);
+
+                    int primary = dm.TestPrimaryToy;
+                    ctx.Assert(primary >= 0,
+                        $"site {s} came up with no featured toy at all — the guarantee is broken");
+                    ctx.Assert(primary != prev,
+                        $"site {s} led with feature {primary} again (previous site led with {prev})");
+                    ctx.Assert(DigModeController.TestLastPrimaryToy == primary,
+                        $"site {s} featured {primary} but the roller remembered " +
+                        $"{DigModeController.TestLastPrimaryToy}");
+
+                    // The feature has to be ON THE BOARD. A recorded-but-absent feature would
+                    // pass every assertion above and still be a site with nothing in it.
+                    switch (primary)
+                    {
+                        case 0:
+                            ctx.Assert(dm.TestKindCount(DigTileKind.Crystal) > 0,
+                                $"site {s} featured a crystal cluster but has no crystal cells");
+                            break;
+                        case 1:
+                            ctx.Assert(dm.TestKindCount(DigTileKind.Geode) > 0,
+                                $"site {s} featured a boom geode but has none");
+                            break;
+                        case 2:
+                            ctx.Assert(dm.TestKindCount(DigTileKind.Pot) > 0,
+                                $"site {s} featured a pinata pot but has none");
+                            break;
+                        default:
+                            ctx.Assert(dm.TestSurpriseTile != null,
+                                $"site {s} featured the surprise pocket but none was placed");
+                            break;
+                    }
+
+                    // Whatever the feature was, the pocket is part of every site — the roster
+                    // member that costs the board nothing.
+                    ctx.Assert(dm.TestSurpriseTile != null, $"site {s} has no surprise pocket");
+
+                    seen.Add(primary);
+                    prev = primary;
+                    gm.TestForceRoam();
+                    yield return ctx.WaitFrames(1);
+                }
+
+                // The no-repeat rule alone would be satisfied by ping-ponging between two toys
+                // forever; the weights are there to keep the roster in play.
+                var distinct = new List<int>();
+                for (int i = 0; i < seen.Count; i++)
+                {
+                    if (!distinct.Contains(seen[i]))
+                    {
+                        distinct.Add(seen[i]);
+                    }
+                }
+
+                ctx.Assert(distinct.Count >= 3,
+                    $"{sites} sites only ever featured {distinct.Count} different toys — the " +
+                    "roster is not rotating");
+
+                // Suppression still wins: a case that pins the toys off must get a bare board.
+                DigModeController.TestSuppressToys = true;
+                dm.TestBuildThemedSite(null);
+                yield return ctx.WaitFrames(1);
+                ctx.Assert(dm.TestPrimaryToy == -1,
+                    "the guarantee overrode TestSuppressToys — every hand-built board is now dirty");
+                ctx.Assert(dm.TestKindCount(DigTileKind.Crystal) == 0 &&
+                           dm.TestKindCount(DigTileKind.Geode) == 0 &&
+                           dm.TestKindCount(DigTileKind.Pot) == 0,
+                    "toys placed at a site with the toy roller suppressed");
+                gm.TestForceRoam();
+
+                ctx.Log($"{sites} consecutive sites, every one featured a toy, no repeats, " +
+                        $"{distinct.Count} different features used; suppression still bare");
+            }
+            finally
+            {
+                DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
+                DigModeController.TestSuppressBones = false;
+                DigModeController.TestResetPrimaryToy();
+            }
+        }
+
+        // ======================================================= FOSSIL BONES (0z5)
+
+        // A bone spans several CELLS and lives under the tiles. Uncovering one cell is progress;
+        // uncovering the last one pops the whole bone and banks it. The hard part is gravity: a
+        // cleared cell is immediately refilled by the column above it, so this case clears a known
+        // 1x3 femur cell by cell WITH the cascade running and proves the rule the engine is built
+        // on — bone cells are fixed to the grid, and an uncovered cell STAYS uncovered even when a
+        // falling tile buries it again. Progress toward a bone never regresses.
+        private IEnumerator Case_BoneSpansCells(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            gm.TestReset();
+
+            try
+            {
+                DigModeController.TestSuppressCrew = true;
+                DigModeController.TestSuppressToys = true;
+
+                DigModeController dm = gm.TestDigMode;
+                ctx.Assert(dm != null, "no dig controller");
+
+                // ---- The gate: no bones until every egg species is owned ----
+                dm.TestBuildThemedSite(null);
+                yield return ctx.WaitFrames(1);
+                ctx.Assert(dm.TestBoneCount == 0,
+                    $"{dm.TestBoneCount} bone(s) buried before any egg species was owned — bones " +
+                    "must ride the same gate egg shards do");
+                gm.TestForceRoam();
+
+                gm.TestSpawnDino(DinoType.TRex, GrowthStage.Baby);
+                gm.TestSpawnDino(DinoType.Triceratops, GrowthStage.Baby);
+                gm.TestSpawnDino(DinoType.Brachiosaurus, GrowthStage.Baby);
+                gm.TestSpawnDino(DinoType.Stegosaurus, GrowthStage.Baby);
+                yield return ctx.WaitFrames(1);
+                ctx.Assert(gm.TestEggSpeciesAllOwned, "need all egg species owned to unlock bones");
+
+                // ---- Owned: a site buries a whole bone, every cell of it covered + peeking ----
+                dm.TestBuildThemedSite(null);
+                yield return ctx.WaitFrames(1);
+                ctx.Assert(dm.TestBoneCount >= 1, "no bone buried at a site with every species owned");
+                int cells = dm.TestBoneCells(0);
+                ctx.Assert(cells >= 2 && cells <= 4, $"rolled bone spans {cells} cells (expected 2-4)");
+                ctx.Assert(dm.TestBoneUncovered(0) == 0, "a freshly buried bone starts partly uncovered");
+
+                int peeking = 0;
+                IReadOnlyList<DirtTile> allTiles = dm.TestTiles;
+                for (int i = 0; i < allTiles.Count; i++)
+                {
+                    DirtTile t = allTiles[i];
+                    if (t != null && t.CoversBone)
+                    {
+                        ctx.Assert(t.TestPeekEnabled && t.TestPeekAlpha > 0.01f,
+                            $"bone cell r{t.Row}c{t.Col} shows no peek — nothing telegraphs the bone");
+                        ctx.Assert(!t.HasItem, $"bone cell r{t.Row}c{t.Col} also hides a buried item");
+                        ctx.Assert(!t.IsSurprise, $"bone cell r{t.Row}c{t.Col} is also the surprise pocket");
+                        ctx.Assert(t.Kind == DigTileKind.Dirt, $"bone cell r{t.Row}c{t.Col} is also a toy");
+                        peeking++;
+                    }
+                }
+
+                ctx.Assert(peeking == cells,
+                    $"{peeking} tiles carry the bone peek but the bone spans {cells} cells");
+                gm.TestForceRoam();
+
+                // ---- A KNOWN 1x3 femur, cleared cell by cell, with the cascade running ----
+                DigModeController.TestSuppressBones = true; // no rolled bone competing for cells
+                dm.TestBuildThemedSite(null);
+                yield return ctx.WaitFrames(1);
+                ctx.Assert(dm.TestBoneCount == 0, "TestSuppressBones did not suppress the rolled bone");
+
+                ctx.Assert(FindBoneRow(dm, out int row, out int col),
+                    "no clean 1x3 run of cells with a full column above it to bury a femur in");
+                ctx.Assert(dm.TestPlaceBone(row, col, DigModeController.BoneTemplateFemurH, DinoType.TRex),
+                    $"could not bury the 1x3 femur at r{row}c{col}");
+                ctx.Assert(dm.TestBoneCount == 1 && dm.TestBoneCells(0) == 3,
+                    $"placed bone spans {dm.TestBoneCells(0)} cells (expected 3)");
+
+                // Pin all three columns at 3 taps: a landing crack on a 1-tap tile would COMPLETE
+                // it and chain into another bone cell, so "one cell per clear" would stop being
+                // the thing under test. (CascadeNeverWedges is where chains are the point.)
+                for (int i = 0; i < 3; i++)
+                {
+                    PinColumnHardness(dm, col + i);
+                }
+
+                int bankedBefore = gm.TestBonesBanked;
+                int femurBefore = gm.TestBoneCount(DinoType.TRex, (int)BoneType.Femur);
+
+                for (int i = 0; i < 3; i++)
+                {
+                    ctx.Assert(dm.IsOpen, $"site closed before bone cell {i} could be uncovered");
+                    dm.TestClearCell(row, col + i);
+                    yield return ctx.WaitFrames(1);
+
+                    ctx.Assert(dm.TestBoneUncovered(0) == i + 1,
+                        $"{dm.TestBoneUncovered(0)} bone cells uncovered after clearing {i + 1}");
+                    ctx.Assert(dm.TestBoneCellUncovered(0, i),
+                        $"cell {i} did not register as uncovered when its covering tile cleared");
+
+                    // NO REGRESSION. The column above dropped straight back into the cell we just
+                    // cleared — so the bone is visually buried again — and every cell uncovered so
+                    // far must still read as uncovered.
+                    for (int k = 0; k <= i; k++)
+                    {
+                        ctx.Assert(dm.TestBoneCellUncovered(0, k),
+                            $"bone cell {k} went BACK to covered after cell {i} was cleared — " +
+                            "progress toward a bone must never regress");
+                    }
+
+                    if (i < 2)
+                    {
+                        ctx.Assert(dm.TestBonesPopped == 0,
+                            $"bone popped after only {i + 1} of its 3 cells were uncovered");
+                    }
+                }
+
+                // ---- The last cell pops the WHOLE bone, once, into the bank ----
+                ctx.Assert(dm.TestBonesPopped == 1,
+                    $"{dm.TestBonesPopped} whole-bone pops after uncovering all three cells (expected 1)");
+                ctx.Assert(gm.TestBonesBanked == bankedBefore + 1,
+                    $"bank went {bankedBefore} -> {gm.TestBonesBanked} (expected exactly one bone)");
+                ctx.Assert(gm.TestBoneCount(DinoType.TRex, (int)BoneType.Femur) == femurBefore + 1,
+                    "the banked bone did not land in the T-Rex femur slot");
+
+                // The bone is spent: re-clearing a cell it used to sit under never re-pops it.
+                if (dm.IsOpen && dm.TestTileAt(row, col) != null)
+                {
+                    dm.TestClearCell(row, col);
+                    yield return ctx.WaitFrames(1);
+                }
+
+                ctx.Assert(dm.TestBonesPopped == 1, "a popped bone popped again");
+                ctx.Assert(gm.TestBonesBanked == bankedBefore + 1, "a popped bone banked twice");
+
+                if (dm.IsOpen)
+                {
+                    ctx.Assert(dm.TestFloaterReport() == "",
+                        $"board not settled after the bone came out: {dm.TestFloaterReport()}");
+                }
+
+                ctx.Log($"gate holds until all 4 species owned; rolled bone spans {cells} cells, all " +
+                        "peeking; hand-placed 1x3 femur uncovered cell by cell through a cascade " +
+                        "(no regression), popped whole once and banked to T-Rex/femur");
+            }
+            finally
+            {
+                DigModeController.TestSuppressCrew = false;
+                DigModeController.TestSuppressToys = false;
+                DigModeController.TestSuppressBones = false;
+            }
+
+            gm.TestForceRoam();
+            gm.TestReset();
+        }
+
+        /// <summary>A clean 1x3 horizontal run to bury a femur in: three side-by-side cells that
+        /// site generation would accept (alive, plain dirt, item-free, not the pocket), each with
+        /// at least one tile ABOVE it so clearing the cell really does drop a tile back into it —
+        /// which is what makes the no-regression assertion mean something. Returns the LEFT cell.</summary>
+        private bool FindBoneRow(DigModeController dm, out int row, out int col)
+        {
+            for (int r = dm.TestRows - 1; r >= 1; r--)
+            {
+                for (int c = 0; c + 2 < dm.TestCols; c++)
+                {
+                    if (IsToyCandidate(dm, r, c) && IsToyCandidate(dm, r, c + 1) &&
+                        IsToyCandidate(dm, r, c + 2) &&
+                        dm.TestTileAt(r - 1, c) != null && dm.TestTileAt(r - 1, c + 1) != null &&
+                        dm.TestTileAt(r - 1, c + 2) != null)
+                    {
+                        row = r;
+                        col = c;
+                        return true;
+                    }
+                }
+            }
+
+            row = -1;
+            col = -1;
+            return false;
+        }
+
         // ============================================================ TREASURE / UI
 
         private IEnumerator Case_TreasureCounter(TestContext ctx)
@@ -5344,8 +5667,12 @@ namespace DinoDigger.Testing
 
         private bool IsToyCandidate(DigModeController dm, int r, int c)
         {
+            // CoversBone (DinoDigger-0z5) joins the refusals for the same reason HasItem is
+            // there: the bone layer has already claimed that cell, and the controller's own
+            // Test/Demo placement hooks refuse it too — a hand-built board must stay a board
+            // the game could really have produced.
             DirtTile t = dm.TestTileAt(r, c);
-            return t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise &&
+            return t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise && !t.CoversBone &&
                    t.Kind == DigTileKind.Dirt;
         }
 

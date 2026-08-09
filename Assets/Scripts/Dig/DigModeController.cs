@@ -268,6 +268,111 @@ namespace DinoDigger.Dig
         // a buddy the previous case left behind. Default false = normal play.
         internal static bool TestSuppressCrew;
 
+        // ---- The toy roller: every dig has a toy (DinoDigger-qhy) -------------
+        // THE ANTI-DULL GUARANTEE. Rolling each toy on its own independent chance meant a site
+        // could legitimately roll nothing at all — no crystals, no geode, no pot — and a toddler
+        // who digs two of those in a row has learned that digging is sometimes boring. So site
+        // generation now picks ONE FEATURED toy first and places it unconditionally, and the
+        // per-toy chances above it become SECONDARY rolls layered on top. A site can still be a
+        // quiet one-treat site or a riot of four; it can never be nothing.
+        //
+        // NO TWO DIGS IN A ROW LEAD WITH THE SAME TREAT: the previous site's feature is excluded
+        // from the draw (the same trick the surprise pool uses). The exclusion is what turns "you
+        // always get a toy" into "you always get a DIFFERENT toy", which is the part that
+        // actually keeps a child digging.
+        //
+        // The surprise pocket is a first-class member of the roster: it already exists on every
+        // site, so "the pocket is this site's feature" means the crystals/geode/pot are left to
+        // the secondary rolls and the mystery tile carries the dig. That is a real texture
+        // difference, not a null result.
+        private enum PrimaryToy { CrystalCluster = 0, Geode = 1, Pot = 2, Pocket = 3 }
+        private const int PrimaryToyCount = 4;
+        private static readonly int[] FallbackPrimaryWeights = { 3, 2, 2, 3 };
+
+        // The last site's feature, remembered ACROSS SITES for the whole session (static, like
+        // _lastSurprise) and ALSO across sessions: GameManager mirrors it into SaveData (stored
+        // index+1 so an old save's absent field reads as "no history") and pushes it back in
+        // here on load. No save version bump — the field is purely additive.
+        private static int _lastPrimary = -1;
+        private int _primaryToy = -1; // this site's feature (-1 = toys suppressed / no room)
+
+        // ---- Multi-cell fossil bones (DinoDigger-0z5) -------------------------
+        // A bone spans 2-4 CELLS and lives UNDER the tiles, in its own layer: each covering tile
+        // shows a bone-ish peek (the buried-item peek renderer, reused), and when the LAST of its
+        // cells is uncovered the whole bone rises out of the pit with a rattle and banks to
+        // GameManager. It is not a toy — it is the reward layer that takes over from egg shards
+        // once every egg species is owned — so TestSuppressToys deliberately does NOT suppress it
+        // (TestSuppressBones does).
+        //
+        // BONES vs GRAVITY — the coherence rule, decided here and enforced by UpdateBones:
+        //
+        //   A buried ITEM rides its tile: the item IS the tile's secret, so when the tile falls
+        //   the secret goes with it. A BONE cannot work that way — it spans several cells and
+        //   those cells fall independently, so a bone that rode its tiles would tear apart the
+        //   first time a column dropped under half of it.
+        //
+        //   So: BONE CELLS ARE FIXED TO THE GRID. The bone never moves. A covering tile that
+        //   falls away UNCOVERS its cell, and — this is the toddler promise — AN UNCOVERED CELL
+        //   STAYS UNCOVERED. A tile that later tumbles into that cell hides the bone again
+        //   visually (and picks up the peek, so the hint follows it), but the PROGRESS does not
+        //   regress: uncovering three cells of a femur and then watching gravity fill one back in
+        //   would be the game taking something away, which this game does not do. Progress toward
+        //   a bone only ever goes up, and the pop fires the instant the last cell is first seen.
+        private class Bone
+        {
+            public DinoType Species;
+            public int BoneIndex;    // (int)BoneType — what gets banked
+            public int[] Rows;       // absolute grid cells; never reassigned
+            public int[] Cols;
+            public bool[] Uncovered; // monotonic: set true once, never back to false
+            public bool Popped;
+        }
+
+        // Cell-offset templates, flattened (dRow, dCol) pairs from the shape's top-left anchor.
+        // Every shape fits in a 3x1 / 1x3 / 2x2 box, so a 5x7 board always has somewhere to put
+        // one. Index into BoneTemplateType for the BoneType each template represents.
+        private static readonly int[][] BoneTemplates =
+        {
+            new[] { 0, 0, 0, 1 },                   // small bone, 1x2 laid flat
+            new[] { 0, 0, 0, 1, 0, 2 },             // femur, 1x3 horizontal
+            new[] { 0, 0, 1, 0, 2, 0 },             // femur, 3x1 vertical
+            new[] { 0, 0, 0, 1, 1, 1 },             // rib, a 3-cell arc inside a 2x2
+            new[] { 0, 0, 0, 1, 1, 0, 1, 1 },       // skull, 2x2 blocky
+        };
+
+        private static readonly int[] BoneTemplateType =
+        {
+            (int)BoneType.SmallBone,
+            (int)BoneType.Femur,
+            (int)BoneType.Femur,
+            (int)BoneType.Rib,
+            (int)BoneType.Skull,
+        };
+
+        /// <summary>TEST HOOK. Template index of the 1x3 horizontal femur, so a case can place
+        /// the exact shape the spec names without hard-coding the table's order.</summary>
+        internal const int BoneTemplateFemurH = 1;
+
+        private readonly List<Bone> _bones = new List<Bone>();
+        private bool _boneAssigned;        // this site buried a bone (drives the shard trade)
+        private int _bonesPopped;          // test-observable: whole bones popped this site
+        private int _boneCellsUncovered;   // test-observable: bone cells first uncovered this site
+
+        // The bone peek's tint: bleached ivory, deliberately unlike any fruit/egg/treasure peek
+        // so "a bone is under here" reads differently from "loot is under here".
+        private static readonly Color BonePeekTint = new Color(0.96f, 0.94f, 0.86f);
+
+        // Built once, lazily, and only when neither the real bone art nor the treasure bone
+        // exists: a plain white silhouette scaled to the bone's footprint. A bone must ALWAYS
+        // pop something visible — the D2 art ticket replaces the sprite, never the beat.
+        private static Sprite _whiteBoneFallback;
+
+        // TEST HOOK. Bury NO bone at the next site, whatever the ownership gate says — the bone
+        // twin of TestSuppressToys, kept separate on purpose: bones are not toys, so a case
+        // pinning the toy roller off must not also silently disable the reward layer (and vice
+        // versa). Default false = normal play.
+        internal static bool TestSuppressBones;
+
         // ---- Excavator rig geometry + timing --------------------------------
         // DIG-VIEW STAGING (close-up cutaway): the body renders BIG (2.4 units
         // tall vs 1.3 in the overworld), parked at the LEFT end of the surface
@@ -418,8 +523,92 @@ namespace DinoDigger.Dig
         internal int TestToyCoins => _toyCoins;
 
         /// <summary>TEST HOOK. Place NO random toys at the next site, so a case can build an
-        /// exact board by hand (mirrors TestSuppressCrew). Default false = normal play.</summary>
+        /// exact board by hand (mirrors TestSuppressCrew). Default false = normal play.
+        /// Does NOT suppress bones — see <see cref="TestSuppressBones"/>.</summary>
         internal static bool TestSuppressToys;
+
+        // ---- Toy roller test hooks (DinoDigger-qhy) ----
+
+        /// <summary>TEST HOOK. This site's FEATURED toy as a PrimaryToy ordinal (0 crystal
+        /// cluster / 1 geode / 2 pot / 3 surprise pocket), or -1 when toys are suppressed.</summary>
+        internal int TestPrimaryToy => _primaryToy;
+
+        /// <summary>TEST HOOK. The feature the roller will refuse to repeat at the next site.</summary>
+        internal static int TestLastPrimaryToy => _lastPrimary;
+
+        /// <summary>TEST HOOK. Forget the last site's feature (and the saved copy) so a case
+        /// starts its run of sites from a known "no history" state. Also called by the runner's
+        /// between-case backstop, for the same reason every other static pin is: a feature
+        /// remembered from an unrelated case would silently steer the next one's first roll.</summary>
+        internal static void TestResetPrimaryToy()
+        {
+            _lastPrimary = -1;
+            GameManager.Instance?.SetLastDigPrimaryToy(-1);
+        }
+
+        /// <summary>TEST HOOK. Alive tiles of one kind on the board right now, so a case can
+        /// prove the featured toy is really ON the board and not merely recorded.</summary>
+        internal int TestKindCount(DigTileKind kind)
+        {
+            int n = 0;
+            for (int i = 0; i < _tiles.Count; i++)
+            {
+                DirtTile t = _tiles[i];
+                if (t != null && !t.IsDestroyed && t.Kind == kind)
+                {
+                    n++;
+                }
+            }
+
+            return n;
+        }
+
+        // ---- Fossil bone test hooks (DinoDigger-0z5) ----
+        internal int TestBoneCount => _bones.Count;
+        internal int TestBonesPopped => _bonesPopped;
+        internal int TestBoneCellsUncovered => _boneCellsUncovered;
+
+        /// <summary>TEST HOOK. Cells the <paramref name="bone"/>-th bone spans (0 = no such bone).</summary>
+        internal int TestBoneCells(int bone) =>
+            bone >= 0 && bone < _bones.Count ? _bones[bone].Rows.Length : 0;
+
+        /// <summary>TEST HOOK. How many of that bone's cells have been uncovered so far. Never
+        /// decreases — that is the no-regression rule, and a case asserts it directly.</summary>
+        internal int TestBoneUncovered(int bone)
+        {
+            if (bone < 0 || bone >= _bones.Count)
+            {
+                return 0;
+            }
+
+            int n = 0;
+            bool[] flags = _bones[bone].Uncovered;
+            for (int i = 0; i < flags.Length; i++)
+            {
+                if (flags[i])
+                {
+                    n++;
+                }
+            }
+
+            return n;
+        }
+
+        /// <summary>TEST HOOK. Whether one specific cell of a bone has been uncovered.</summary>
+        internal bool TestBoneCellUncovered(int bone, int cell) =>
+            bone >= 0 && bone < _bones.Count && cell >= 0 && cell < _bones[bone].Uncovered.Length &&
+            _bones[bone].Uncovered[cell];
+
+        /// <summary>TEST HOOK. True when r,c is a cell of some (unpopped) bone.</summary>
+        internal bool TestIsBoneCell(int r, int c) => FindBoneAt(r, c) != null;
+
+        /// <summary>TEST HOOK. Bury a KNOWN bone shape with its top-left cell at r,c, so a case
+        /// can drive an exact multi-cell uncover instead of hunting for a rolled one. Refuses
+        /// (returns false) on exactly the cells site generation refuses — off-grid, gone, hiding
+        /// an item, a toy, the pocket, or already part of another bone — so a hand-placed bone is
+        /// indistinguishable from a rolled one.</summary>
+        internal bool TestPlaceBone(int r, int c, int template, DinoType species) =>
+            PlaceBoneAt(r, c, template, species);
 
         /// <summary>TEST HOOK. Turn the cell at r,c into a crystal of <paramref name="color"/>.
         /// Refuses (returns false) on a cell that hides a buried item, is the surprise pocket, is
@@ -438,7 +627,7 @@ namespace DinoDigger.Dig
         private bool TestSetToy(int r, int c, DigTileKind kind, int color)
         {
             DirtTile t = TileAt(r, c);
-            if (t == null || t.IsDestroyed || t.HasItem || t.IsSurprise ||
+            if (t == null || t.IsDestroyed || t.HasItem || t.IsSurprise || t.CoversBone ||
                 t.Kind != DigTileKind.Dirt)
             {
                 return false;
@@ -650,11 +839,11 @@ namespace DinoDigger.Dig
         }
 
         /// <summary>A cell a demo toy may take over: alive, plain dirt, no buried item, not the
-        /// surprise pocket — the same bar site generation holds itself to.</summary>
+        /// surprise pocket, not covering a bone — the same bar site generation holds itself to.</summary>
         private bool DemoCellFree(int r, int c)
         {
             DirtTile t = TileAt(r, c);
-            return t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise &&
+            return t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise && !t.CoversBone &&
                    t.Kind == DigTileKind.Dirt;
         }
 
@@ -816,6 +1005,14 @@ namespace DinoDigger.Dig
             _lastPotCoins = 0;
             _toyCoins = 0;
 
+            // Per-site bone bookkeeping (DinoDigger-0z5). Cleared BEFORE the tiles exist so
+            // PlaceBones below starts from an empty layer even if the last site was torn down
+            // mid-cascade.
+            _bones.Clear();
+            _boneAssigned = false;
+            _bonesPopped = 0;
+            _boneCellsUncovered = 0;
+
             for (int r = 0; r < _rows; r++)
             {
                 for (int c = 0; c < _cols; c++)
@@ -836,13 +1033,22 @@ namespace DinoDigger.Dig
                 }
             }
 
-            // Toys are placed BEFORE the buried items and the surprise pocket, and both of those
-            // then skip any cell that is no longer plain dirt. That ordering is the whole of the
-            // "the buried-item layer stays independent" rule: a crystal can never also be hiding
-            // an egg, so a pop can never silently swallow loot the peek had already promised.
+            // GENERATION ORDER IS THE LAYER RULE. Each step only ever takes cells the steps
+            // before it left alone, so no two layers can ever occupy one cell:
+            //   toys   — turn plain dirt into crystals/geode/pot (and place this site's
+            //            GUARANTEED feature first, DinoDigger-qhy)
+            //   bones  — claim a contiguous run of still-plain cells for the buried bone layer
+            //            (DinoDigger-0z5); each covering tile takes a bone peek
+            //   items  — bury loot in what is left: never a toy cell, never a bone cell
+            //   pocket — one wiggling mystery tile in what is left after that
+            // A crystal can never also hide an egg, a bone cell can never also be loot, and a
+            // pop can therefore never silently swallow something a peek had promised.
             PlaceDigToys();
+            PlaceBones();
             PlaceItems();
             PlaceSurprisePocket();
+            EnsurePrimaryToy(); // the pocket has landed (or not): make the guarantee true
+            RefreshBonePeeks();
             PlaceBackhoe(origin, halfW);
 
             // Stegosaurus "treasure map": once at the start of the round, every buried
@@ -1513,12 +1719,12 @@ namespace DinoDigger.Dig
                     continue; // keep the top layer mostly clear so items feel buried
                 }
 
-                if (tile.Kind != DigTileKind.Dirt)
+                if (tile.Kind != DigTileKind.Dirt || tile.CoversBone)
                 {
-                    continue; // a toy cell never also hides an item (see BuildGrid)
+                    continue; // a toy or bone cell never also hides an item (see BuildGrid)
                 }
 
-                Buried b = RollItem();
+                Buried b = RollSiteItem();
                 _buried[tile] = b;
 
                 Sprite peek = PeekSprite(b, out Color tint);
@@ -1532,12 +1738,13 @@ namespace DinoDigger.Dig
             {
                 for (int i = 0; i < candidates.Count; i++)
                 {
-                    if (candidates[i] == null || candidates[i].Kind != DigTileKind.Dirt)
+                    if (candidates[i] == null || candidates[i].Kind != DigTileKind.Dirt ||
+                        candidates[i].CoversBone)
                     {
                         continue;
                     }
 
-                    Buried b = RollItem();
+                    Buried b = RollSiteItem();
                     _buried[candidates[i]] = b;
                     Sprite peek = PeekSprite(b, out Color tint);
                     candidates[i].SetPeek(peek, tint);
@@ -1548,20 +1755,25 @@ namespace DinoDigger.Dig
 
         // ----- Dig toy site generation (DinoDigger-z4d) -----
 
-        /// <summary>Roll this site's toys onto plain dirt cells: up to a couple of crystal
-        /// clusters (each one colour, 4-way connected so a single tap always takes the whole
-        /// thing), then at most one boom geode and one pinata pot.
+        /// <summary>Roll this site's toys onto plain dirt cells.
         ///
-        /// Runs before the buried items and the pocket, and every placement is on a cell that is
-        /// still plain dirt, so no toy can ever land on another toy. A site rolling NO toys is a
-        /// perfectly normal outcome — the variety between sites is what makes a crystal site feel
-        /// like a treat.</summary>
+        /// TWO STAGES (DinoDigger-qhy). First the GUARANTEE: one featured toy is drawn from the
+        /// roster — crystal cluster / boom geode / pinata pot / surprise pocket — with the last
+        /// site's feature excluded, and placed unconditionally. Then the old per-toy chances run
+        /// as SECONDARY rolls on top, so a lucky site still stacks clusters and a geode and a pot
+        /// exactly as it used to. What can no longer happen is a site with nothing on it.
+        ///
+        /// Runs before the bones, the buried items and the pocket, and every placement is on a
+        /// cell that is still plain dirt, so no toy can ever land on another toy.</summary>
         private void PlaceDigToys()
         {
+            _primaryToy = -1;
             if (_grid == null || _tiles.Count == 0 || TestSuppressToys)
             {
                 return;
             }
+
+            PlacePrimaryToy();
 
             float crystalChance = _config != null ? Mathf.Clamp01(_config.DigCrystalSiteChance) : 0.65f;
             if (Random.value < crystalChance)
@@ -1593,16 +1805,188 @@ namespace DinoDigger.Dig
             }
         }
 
+        // ----- The toy roller: the anti-dull guarantee (DinoDigger-qhy) -----
+
+        /// <summary>Pick this site's FEATURED toy and put it on the board, guaranteed.
+        ///
+        /// The draw excludes the last site's feature; if that pick has nowhere to go (a board
+        /// already chewed up by a previous layer) the roster is walked from there, still skipping
+        /// the last-seen kind, until something lands. Only if EVERY non-repeat option refuses is
+        /// a repeat allowed — a repeated treat is a far smaller failure than a site with no treat
+        /// at all, and the walk ends at the surprise pocket, which needs only one free cell.</summary>
+        private void PlacePrimaryToy()
+        {
+            int pick = RollPrimaryToy();
+            for (int i = 0; i < PrimaryToyCount; i++)
+            {
+                int k = (pick + i) % PrimaryToyCount;
+                if (k == _lastPrimary)
+                {
+                    continue;
+                }
+
+                if (TryPlacePrimary(k))
+                {
+                    CommitPrimary(k);
+                    return;
+                }
+            }
+
+            for (int k = 0; k < PrimaryToyCount; k++)
+            {
+                if (TryPlacePrimary(k))
+                {
+                    CommitPrimary(k);
+                    return;
+                }
+            }
+        }
+
+        /// <summary>Draw a featured toy by weight with the LAST-SEEN one excluded — the same
+        /// no-repeat draw the surprise pool uses. A config that zeroes every remaining weight
+        /// still returns a valid toy (the first non-repeat one) rather than nothing.</summary>
+        private int RollPrimaryToy()
+        {
+            int total = 0;
+            for (int k = 0; k < PrimaryToyCount; k++)
+            {
+                if (k != _lastPrimary)
+                {
+                    total += PrimaryWeight(k);
+                }
+            }
+
+            if (total <= 0)
+            {
+                for (int k = 0; k < PrimaryToyCount; k++)
+                {
+                    if (k != _lastPrimary)
+                    {
+                        return k;
+                    }
+                }
+
+                return 0;
+            }
+
+            int roll = Random.Range(0, total);
+            int acc = 0;
+            for (int k = 0; k < PrimaryToyCount; k++)
+            {
+                if (k == _lastPrimary)
+                {
+                    continue;
+                }
+
+                acc += PrimaryWeight(k);
+                if (roll < acc)
+                {
+                    return k;
+                }
+            }
+
+            return 0;
+        }
+
+        private int PrimaryWeight(int k) =>
+            _config != null ? _config.DigPrimaryToyWeight(k) : FallbackPrimaryWeights[k];
+
+        /// <summary>Put featured toy <paramref name="k"/> on the board. The POCKET places nothing
+        /// here — PlaceSurprisePocket runs later and always marks a tile — so this only has to
+        /// confirm there will still be a free cell for it; <see cref="EnsurePrimaryToy"/> covers
+        /// the rare board where there is not.</summary>
+        private bool TryPlacePrimary(int k)
+        {
+            switch ((PrimaryToy)k)
+            {
+                case PrimaryToy.CrystalCluster:
+                {
+                    int colors = _lib != null ? Mathf.Max(1, _lib.CrystalColorCount) : 3;
+                    int min = 3;
+                    int max = 6;
+                    _config?.GetCrystalClusterRange(out min, out max);
+                    return GrowCrystalCluster(Random.Range(min, max + 1), Random.Range(0, colors)) > 0;
+                }
+
+                case PrimaryToy.Geode:
+                {
+                    DirtTile t = RandomPlainTile();
+                    if (t == null)
+                    {
+                        return false;
+                    }
+
+                    t.SetKind(DigTileKind.Geode, 0);
+                    return true;
+                }
+
+                case PrimaryToy.Pot:
+                {
+                    DirtTile t = RandomPlainTile();
+                    if (t == null)
+                    {
+                        return false;
+                    }
+
+                    t.SetKind(DigTileKind.Pot, 0);
+                    return true;
+                }
+
+                default:
+                    return RandomPlainTile() != null;
+            }
+        }
+
+        private void CommitPrimary(int k)
+        {
+            _primaryToy = k;
+            _lastPrimary = k;
+            GameManager.Instance?.SetLastDigPrimaryToy(k);
+        }
+
+        /// <summary>Backstop run AFTER the pocket has been placed: if the pocket was this site's
+        /// feature and no pocket actually landed (a tiny board where every free cell ended up
+        /// buried), fall back to a real toy so the guarantee stays true. Practically never fires
+        /// on a shipped 5x7 grid — it exists so the guarantee is a property of the code rather
+        /// than of the grid size.</summary>
+        private void EnsurePrimaryToy()
+        {
+            if (TestSuppressToys || _primaryToy != (int)PrimaryToy.Pocket || _surpriseTile != null)
+            {
+                return;
+            }
+
+            for (int k = 0; k < (int)PrimaryToy.Pocket; k++)
+            {
+                if (TryPlacePrimary(k))
+                {
+                    CommitPrimary(k);
+                    return;
+                }
+            }
+
+            _primaryToy = -1; // truly nowhere to put anything: report it rather than lie
+        }
+
+        /// <summary>Seed the no-repeat history from the save on load (see SaveData.LastPrimaryToy),
+        /// so the first dig of a new SESSION still refuses to repeat the one the child last saw.
+        /// Anything out of range restores as "no history".</summary>
+        internal static void RestoreLastPrimaryToy(int index)
+        {
+            _lastPrimary = index >= 0 && index < PrimaryToyCount ? index : -1;
+        }
+
         /// <summary>Grow one connected crystal cluster of up to <paramref name="size"/> cells in
         /// <paramref name="color"/>, by random 4-way walk from a plain seed cell. Stops early
         /// rather than forcing its way through toys or the pit walls, so a cramped board simply
-        /// gets a smaller cluster.</summary>
-        private void GrowCrystalCluster(int size, int color)
+        /// gets a smaller cluster. Returns the cells actually grown (0 = no room), which is what
+        /// lets the roller tell a placed feature from a refused one.</summary>
+        private int GrowCrystalCluster(int size, int color)
         {
             DirtTile seed = RandomPlainTile();
             if (seed == null)
             {
-                return;
+                return 0;
             }
 
             seed.SetKind(DigTileKind.Crystal, color);
@@ -1616,24 +2000,35 @@ namespace DinoDigger.Dig
                 DirtTile from = grown[Random.Range(0, grown.Count)];
                 int d = Random.Range(0, 4);
                 DirtTile next = TileAt(from.Row + dr[d], from.Col + dc[d]);
-                if (next == null || next.Kind != DigTileKind.Dirt || next.IsDestroyed)
+                if (next == null || next.IsDestroyed || next.HasItem || next.IsSurprise ||
+                    next.CoversBone || next.Kind != DigTileKind.Dirt)
                 {
-                    continue;
+                    continue; // same claimed-cell bar as RandomPlainTile: a cluster grows around them
                 }
 
                 next.SetKind(DigTileKind.Crystal, color);
                 grown.Add(next);
             }
+
+            return grown.Count;
         }
 
-        /// <summary>A random still-plain dirt cell, or null when the board has none left.</summary>
+        /// <summary>A random cell no layer has claimed: alive, plain dirt, hiding no item, not the
+        /// surprise pocket, not covering a bone.
+        ///
+        /// The item/pocket exclusions matter because the roller's LAST-RESORT placement
+        /// (<see cref="EnsurePrimaryToy"/>) runs AFTER those layers exist. SetKind clears a
+        /// tile's HasItem flag, so a toy dropped onto a buried tile would strand that item in the
+        /// bookkeeping — a round that can never finish. Every caller before the items are placed
+        /// is unaffected (nothing has claimed anything yet), so this is free insurance.</summary>
         private DirtTile RandomPlainTile()
         {
             var pool = new List<DirtTile>();
             for (int i = 0; i < _tiles.Count; i++)
             {
                 DirtTile t = _tiles[i];
-                if (t != null && !t.IsDestroyed && t.Kind == DigTileKind.Dirt)
+                if (t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise && !t.CoversBone &&
+                    t.Kind == DigTileKind.Dirt)
                 {
                     pool.Add(t);
                 }
@@ -1676,6 +2071,31 @@ namespace DinoDigger.Dig
         // rolls resolves to a shard downstream too, since no unique species remains —
         // see GameManager.ResolveDugItem — so the nest, not duplicates, gets fed.)
         private const float EggNerfFraction = 0.2f;
+
+        /// <summary>Roll one buried item FOR THIS SITE — the loot table plus the site's own
+        /// context.
+        ///
+        /// BONES REPLACE DIG SHARDS ONE-FOR-ONE (DinoDigger-0z5). Egg shards exist to feed the
+        /// nest once every egg species is owned; fossil bones unlock behind exactly the same
+        /// gate and feed the skeleton board instead. Running both at full rate would just double
+        /// the late-game drip, so at a site that actually buried a bone a rolled shard pays out
+        /// as treasure and the bone is the site's collectible. Deliberately applied HERE and not
+        /// in <see cref="RollItem"/>: that is the pure loot table, which the shard-rate tests
+        /// measure directly and which the rock-smash payout mirrors — rock shards stay live, so
+        /// the nest still progresses while the board fills. One config bool turns the trade off
+        /// and makes bones pure bonus.</summary>
+        private Buried RollSiteItem()
+        {
+            Buried b = RollItem();
+            bool trade = _config == null || _config.DigBonesReplaceShardDrops;
+            if (b.Type == ItemType.Shard && _boneAssigned && trade)
+            {
+                b.Type = ItemType.Treasure;
+                b.Variant = Random.Range(0, _config != null ? Mathf.Max(1, _config.TreasureVariants) : 1);
+            }
+
+            return b;
+        }
 
         private Buried RollItem()
         {
@@ -1759,9 +2179,11 @@ namespace DinoDigger.Dig
             for (int i = 0; i < _tiles.Count; i++)
             {
                 DirtTile t = _tiles[i];
-                if (t == null || t.HasItem || t.Kind != DigTileKind.Dirt)
+                if (t == null || t.HasItem || t.CoversBone || t.Kind != DigTileKind.Dirt)
                 {
-                    continue; // the pocket is a plain dirt tile: a toy already has its own hook
+                    // The pocket is a PLAIN dirt tile: a toy already has its own hook, and a
+                    // bone cell already has its own peek (and its own reason to be dug out).
+                    continue;
                 }
 
                 any.Add(t);
@@ -2025,6 +2447,415 @@ namespace DinoDigger.Dig
                     Destroy(ps.gameObject);
                 }
             });
+        }
+
+        // ========================================================= FOSSIL BONES (0z5)
+        // The reward layer under the tiles. See the Bone class comment above for the data model
+        // and for the ONE rule that makes multi-cell bones survive gravity: bone cells are FIXED
+        // to the grid and uncovering is MONOTONIC, so progress toward a bone never regresses.
+
+        /// <summary>Bury this site's bone, if it gets one.
+        ///
+        /// GATED ON THE SHARD GATE. Bones appear once every egg species is owned — the same
+        /// condition that switches the loot table over to egg shards — because that is the moment
+        /// the game runs out of new dinosaurs to hatch and needs a new thing to collect. Before
+        /// then a site never buries one, so nothing about the early game changes at all.</summary>
+        private void PlaceBones()
+        {
+            if (_grid == null || _tiles.Count == 0 || TestSuppressBones || !BonesUnlocked())
+            {
+                return;
+            }
+
+            float chance = _config != null ? Mathf.Clamp01(_config.DigBoneSiteChance) : 1f;
+            if (Random.value >= chance)
+            {
+                return;
+            }
+
+            _boneAssigned = TryPlaceRolledBone();
+        }
+
+        /// <summary>True once every egg species is owned — the gate egg shards already use.
+        /// Mirrored rather than re-derived so the two can never drift apart.</summary>
+        private bool BonesUnlocked()
+        {
+            GameManager gm = GameManager.Instance;
+            return gm != null && gm.EggSpeciesAllOwned();
+        }
+
+        /// <summary>Roll a shape and a skeleton and find somewhere on the board for it: templates
+        /// are tried in a shuffled order and anchors are scanned from a shuffled start, so a
+        /// cramped board falls back to a smaller bone instead of failing outright. Row 0 is
+        /// avoided while anything deeper fits — a bone lying along the surface would uncover
+        /// itself on the first bite, and the beat is meant to take some digging.</summary>
+        private bool TryPlaceRolledBone()
+        {
+            DinoType species = RandomBoneSpecies();
+
+            var order = new List<int>(BoneTemplates.Length);
+            for (int i = 0; i < BoneTemplates.Length; i++)
+            {
+                order.Add(i);
+            }
+
+            Shuffle(order);
+
+            // Two passes: everything below the top row first, then the top row as a last resort.
+            for (int pass = 0; pass < 2; pass++)
+            {
+                int minRow = pass == 0 ? 1 : 0;
+                for (int i = 0; i < order.Count; i++)
+                {
+                    int template = order[i];
+                    int start = Random.Range(0, Mathf.Max(1, _rows * _cols));
+                    for (int step = 0; step < _rows * _cols; step++)
+                    {
+                        int cell = (start + step) % (_rows * _cols);
+                        int r = cell / _cols;
+                        int c = cell % _cols;
+                        if (r < minRow)
+                        {
+                            continue;
+                        }
+
+                        if (PlaceBoneAt(r, c, template, species))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Bury <paramref name="template"/> with its top-left cell at r,c, for
+        /// <paramref name="species"/>'s skeleton. Returns false — changing nothing — unless EVERY
+        /// cell of the shape is on the board and free, so a partial bone can never exist.</summary>
+        private bool PlaceBoneAt(int r, int c, int template, DinoType species)
+        {
+            if (_grid == null || template < 0 || template >= BoneTemplates.Length)
+            {
+                return false;
+            }
+
+            int[] offsets = BoneTemplates[template];
+            int cells = offsets.Length / 2;
+            var rows = new int[cells];
+            var cols = new int[cells];
+
+            for (int i = 0; i < cells; i++)
+            {
+                rows[i] = r + offsets[i * 2];
+                cols[i] = c + offsets[i * 2 + 1];
+                if (!BoneCellFree(rows[i], cols[i]))
+                {
+                    return false;
+                }
+            }
+
+            var bone = new Bone
+            {
+                Species = species,
+                BoneIndex = BoneTemplateType[template],
+                Rows = rows,
+                Cols = cols,
+                Uncovered = new bool[cells],
+            };
+
+            _bones.Add(bone);
+
+            // Flag the covering tiles NOW (not in RefreshBonePeeks): the later generation steps
+            // read CoversBone to keep loot, toys and the pocket off the bone layer.
+            Sprite peek = BonePeekSprite(bone.BoneIndex);
+            for (int i = 0; i < cells; i++)
+            {
+                TileAt(rows[i], cols[i])?.SetBonePeek(peek, BonePeekTint);
+            }
+
+            return true;
+        }
+
+        /// <summary>A cell the bone layer may claim: on the board, alive, plain dirt, hiding no
+        /// item, not the pocket, and not already part of another bone.</summary>
+        private bool BoneCellFree(int r, int c)
+        {
+            DirtTile t = TileAt(r, c);
+            return t != null && !t.IsDestroyed && !t.HasItem && !t.IsSurprise && !t.CoversBone &&
+                   t.Kind == DigTileKind.Dirt;
+        }
+
+        /// <summary>Which skeleton this bone belongs to. The four EGG species: they are the ones
+        /// the child owns by the time bones unlock, so every bone dug is a bone for a dinosaur
+        /// they know. (D2b owns the real board roster and may widen this.)</summary>
+        private DinoType RandomBoneSpecies()
+        {
+            return (DinoType)Random.Range(0, DinoSpecies.EggHatchableCount);
+        }
+
+        /// <summary>The unpopped bone owning cell r,c, or null.</summary>
+        private Bone FindBoneAt(int r, int c)
+        {
+            for (int i = 0; i < _bones.Count; i++)
+            {
+                Bone b = _bones[i];
+                if (b.Popped)
+                {
+                    continue;
+                }
+
+                for (int k = 0; k < b.Rows.Length; k++)
+                {
+                    if (b.Rows[k] == r && b.Cols[k] == c)
+                    {
+                        return b;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Re-seat every bone peek after the board has moved.
+        ///
+        /// The peek says "a bone lives in this CELL", so it belongs to whichever tile currently
+        /// stands on that cell — a tile that slid off one drops the hint, a tile that tumbled onto
+        /// one picks it up. That is the visible half of the fixed-to-the-grid rule; the invisible
+        /// half (the uncover flags) is <see cref="UpdateBones"/>, and it never goes backwards even
+        /// when the visuals do.
+        ///
+        /// A tile hiding an item, a toy or the pocket keeps its own art: those all have their own
+        /// promise to the child and it outranks the bone hint for that beat.</summary>
+        private void RefreshBonePeeks()
+        {
+            if (_grid == null || _bones.Count == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _tiles.Count; i++)
+            {
+                DirtTile t = _tiles[i];
+                if (t != null && t.CoversBone && (t.IsDestroyed || FindBoneAt(t.Row, t.Col) == null))
+                {
+                    t.ClearBonePeek();
+                }
+            }
+
+            for (int i = 0; i < _bones.Count; i++)
+            {
+                Bone b = _bones[i];
+                if (b.Popped)
+                {
+                    continue;
+                }
+
+                Sprite peek = BonePeekSprite(b.BoneIndex);
+                for (int k = 0; k < b.Rows.Length; k++)
+                {
+                    DirtTile t = TileAt(b.Rows[k], b.Cols[k]);
+                    if (t != null && !t.IsDestroyed && !t.CoversBone)
+                    {
+                        t.SetBonePeek(peek, BonePeekTint); // no-ops on an item/toy/pocket tile
+                    }
+                }
+            }
+        }
+
+        /// <summary>Book any bone cell that is currently EMPTY as uncovered, and pop any bone
+        /// whose every cell has been. Called from the clear chokepoint and again when the board
+        /// settles, so a cell uncovered mid-cascade counts the moment it happens.
+        ///
+        /// THE NO-REGRESSION RULE LIVES HERE, and it is one line: a flag is only ever set to
+        /// true. Gravity may drop a fresh tile straight back onto a cell the child just cleared —
+        /// visually the bone is buried again, and the peek follows the new tile — but the bone
+        /// does not un-progress and the pop still fires on the last cell's FIRST uncovering. A
+        /// toddler who has dug two thirds of a femur has dug two thirds of a femur.</summary>
+        private void UpdateBones()
+        {
+            if (_grid == null || _bones.Count == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _bones.Count; i++)
+            {
+                Bone b = _bones[i];
+                if (b.Popped)
+                {
+                    continue;
+                }
+
+                bool all = true;
+                for (int k = 0; k < b.Rows.Length; k++)
+                {
+                    if (!b.Uncovered[k] && TileAt(b.Rows[k], b.Cols[k]) == null)
+                    {
+                        b.Uncovered[k] = true;
+                        _boneCellsUncovered++;
+                    }
+
+                    all &= b.Uncovered[k];
+                }
+
+                if (all)
+                {
+                    PopBone(b);
+                }
+            }
+        }
+
+        /// <summary>The whole bone comes out: it rises from the middle of its cells with a rattle
+        /// and a sparkle, and banks to the collection. Guarded by the bone's own Popped flag, so
+        /// however many paths uncover the last cell it happens exactly once.</summary>
+        private void PopBone(Bone b)
+        {
+            b.Popped = true;
+            _bonesPopped++;
+
+            Vector3 at = BoneCenter(b);
+            GameManager gm = GameManager.Instance;
+            gm?.Audio?.ItemPop();
+
+            int sparkles = _config != null ? Mathf.Clamp(_config.DigBoneSparkleCount, 0, 60) : 20;
+            SpawnPitBurst(at, BonePeekTint, sparkles);
+            SpawnBoneProp(b, at);
+
+            // The bank, not the wallet: bones are the collection D2b's skeleton board reads.
+            gm?.BankBone(b.Species, b.BoneIndex);
+
+            // Whatever tiles are standing on its cells are no longer covering anything.
+            for (int k = 0; k < b.Rows.Length; k++)
+            {
+                TileAt(b.Rows[k], b.Cols[k])?.ClearBonePeek();
+            }
+        }
+
+        /// <summary>The assembled bone rising out of the pit. All of its motion is on GameConfig
+        /// sliders (rise height/time, rattle, hold), and every sprite lookup is null-tolerant:
+        /// the real fossil art, else the treasure bone, else a plain white silhouette sized to
+        /// the bone's own footprint. A bone ALWAYS pops something the child can see.</summary>
+        private void SpawnBoneProp(Bone b, Vector3 at)
+        {
+            Sprite art = BoneSpriteFor(b.BoneIndex);
+            bool fallback = art == null;
+            if (fallback)
+            {
+                art = WhiteBone();
+            }
+
+            if (art == null)
+            {
+                return; // no renderer to build (bare scene): the sparkle + the bank still ran
+            }
+
+            var go = new GameObject("BonePopFX");
+            go.transform.SetParent(_root != null ? _root : transform, false);
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = art;
+            sr.color = Color.white;
+            sr.sortingOrder = 30;
+            go.transform.position = at;
+
+            BoneFootprint(b, out float wide, out float tall);
+            // The white silhouette is a 1x1 unit sprite, so it is scaled to the footprint
+            // outright; real art keeps its own aspect and is just sized up a little.
+            go.transform.localScale = fallback
+                ? new Vector3(Mathf.Max(0.5f, wide * 0.8f), Mathf.Max(0.35f, tall * 0.45f), 1f)
+                : Vector3.one * Mathf.Max(1f, Mathf.Max(wide, tall) * 0.7f);
+
+            float rise = _config != null ? Mathf.Clamp(_config.DigBoneRiseSeconds, 0.05f, 3f) : 0.5f;
+            float height = _config != null ? Mathf.Clamp(_config.DigBoneRiseHeight, 0f, 5f) : 1.1f;
+            float rattle = _config != null ? Mathf.Clamp(_config.DigBoneRattleDegrees, 0f, 90f) : 22f;
+            float rattleTime = _config != null ? Mathf.Clamp(_config.DigBoneRattleSeconds, 0.05f, 3f) : 0.55f;
+            float hold = _config != null ? Mathf.Clamp(_config.DigBoneHoldSeconds, 0f, 4f) : 0.8f;
+
+            Tween.ShakeRotation(go.transform, rattle, rattleTime);
+            Tween.MoveTo(go.transform, at + new Vector3(0f, height, 0f), rise, () =>
+            {
+                Tween.After(hold, () =>
+                {
+                    Tween.ScaleTo(go.transform, Vector3.zero, 0.3f, () =>
+                    {
+                        if (go != null)
+                        {
+                            Destroy(go);
+                        }
+                    });
+                });
+            });
+        }
+
+        /// <summary>World centre of a bone's cells, where its prop rises from.</summary>
+        private Vector3 BoneCenter(Bone b)
+        {
+            Vector3 sum = Vector3.zero;
+            for (int k = 0; k < b.Rows.Length; k++)
+            {
+                sum += CellPosition(b.Rows[k], b.Cols[k]);
+            }
+
+            return sum / Mathf.Max(1, b.Rows.Length);
+        }
+
+        /// <summary>The bone's bounding box in CELLS (one unit per cell), which sizes its prop.</summary>
+        private static void BoneFootprint(Bone b, out float wide, out float tall)
+        {
+            int minR = int.MaxValue, maxR = int.MinValue, minC = int.MaxValue, maxC = int.MinValue;
+            for (int k = 0; k < b.Rows.Length; k++)
+            {
+                minR = Mathf.Min(minR, b.Rows[k]);
+                maxR = Mathf.Max(maxR, b.Rows[k]);
+                minC = Mathf.Min(minC, b.Cols[k]);
+                maxC = Mathf.Max(maxC, b.Cols[k]);
+            }
+
+            wide = maxC - minC + 1;
+            tall = maxR - minR + 1;
+        }
+
+        /// <summary>Art for one bone: the generated fossil sprite when the D2 art ticket has
+        /// landed, else the existing treasure bone (the same one the Big Bone surprise pops), else
+        /// null — which sends the caller to the white silhouette.</summary>
+        private Sprite BoneSpriteFor(int boneIndex)
+        {
+            if (_lib == null)
+            {
+                return null;
+            }
+
+            // Explicit null checks, not ??: these are UnityEngine.Objects, whose "fake null" only
+            // answers to the == operator.
+            Sprite art = _lib.Bone(boneIndex);
+            return art != null ? art : _lib.Treasure(BigBoneVariant);
+        }
+
+        /// <summary>What a covering tile draws as its bone hint. Never null: a peek renderer with
+        /// no sprite draws nothing at all, and a bone cell with no hint is a bone the child has no
+        /// reason to dig toward — so a stale library falls all the way through to the white
+        /// silhouette rather than to an invisible promise.</summary>
+        private Sprite BonePeekSprite(int boneIndex)
+        {
+            Sprite art = BoneSpriteFor(boneIndex);
+            return art != null ? art : WhiteBone();
+        }
+
+        /// <summary>A 1x1 white sprite, built once: the last-resort bone silhouette, scaled to the
+        /// bone's footprint by the caller. Deliberately unmistakable placeholder art — if this is
+        /// what ships, the missing sprite is obvious rather than invisible.</summary>
+        private static Sprite WhiteBone()
+        {
+            if (_whiteBoneFallback == null)
+            {
+                var tex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+                tex.SetPixel(0, 0, Color.white);
+                tex.Apply();
+                _whiteBoneFallback = Sprite.Create(tex, new Rect(0f, 0f, 1f, 1f),
+                    new Vector2(0.5f, 0.5f), 1f);
+            }
+
+            return _whiteBoneFallback;
         }
 
         // ============================================================ DIG TOYS (z4d)
@@ -2539,6 +3370,12 @@ namespace DinoDigger.Dig
 
             _clearCause = cause;
             CollectIfBuried(t);
+
+            // BONES (DinoDigger-0z5) are booked here, at the vacate chokepoint, so a cell
+            // uncovered in the MIDDLE of a cascade counts the moment it happens rather than
+            // waiting for the board to go quiet — and so a bone whose last cell is uncovered by
+            // a landing crack pops on the same beat as one dug out by hand.
+            UpdateBones();
         }
 
         /// <summary>The ONE chokepoint for "this tile just crumbled": vacate + collect, then let
@@ -2632,6 +3469,17 @@ namespace DinoDigger.Dig
                 // compaction, and the site is still playable, so it must be findable in the log.
                 Debug.LogError($"[Dig] gravity cascade hit its {MaxSettlePasses}-pass cap after " +
                                $"'{cause}' ({falls} falls); board left as-is, site still playable");
+            }
+
+            // The board has stopped moving (or the site went away): re-seat the bone hints onto
+            // whatever tiles now stand on the bone cells, and book any cell the falls left empty.
+            // Peeks are visual and follow the tiles; uncover flags are progress and never go back
+            // (see UpdateBones) — the two are updated together here so they can never disagree
+            // about a cell for longer than one cascade.
+            if (!aborted)
+            {
+                RefreshBonePeeks();
+                UpdateBones();
             }
 
             _settlePasses = passes;
@@ -3243,6 +4091,7 @@ namespace DinoDigger.Dig
 
             _tiles.Clear();
             _buried.Clear();
+            _bones.Clear();    // the bone layer belongs to the site, not to the session
             _landings.Clear(); // a cascade in flight has nothing left to land on
             _crystalPairs.Clear();
             _blob.Clear();
