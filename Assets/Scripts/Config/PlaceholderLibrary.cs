@@ -202,6 +202,19 @@ namespace DinoDigger.Config
         [Tooltip("Full-bleed side-view backdrop behind the dig grid (sky + grass lip + soil).")]
         public Sprite DigBackground;
 
+        [Tooltip("The backdrop's own TOP EDGE colour, re-sampled by GeneratedArtImporter every " +
+                 "time the art is imported. The dig extends the sprite upward with a flat band " +
+                 "in this colour to fill a portrait camera rect (DinoDigger-5k8.1); sampling it " +
+                 "rather than hard-coding it is what stops a regenerated sky from leaving a " +
+                 "seam. Alpha 0 means 'never sampled' and the code falls back to the measured " +
+                 "value. Measured: (103, 205, 249) — the top 34 rows vary by 5/255 in total.")]
+        public Color DigSkyColor = new Color(103f / 255f, 205f / 255f, 249f / 255f, 1f);
+
+        [Tooltip("The backdrop's own BOTTOM EDGE colour, on the same terms as DigSkyColor — the " +
+                 "flat band that carries the soil down past the deepest row. Measured: " +
+                 "(163, 105, 53), the bottom 46 rows varying by 6/255.")]
+        public Color DigSoilColor = new Color(163f / 255f, 105f / 255f, 53f / 255f, 1f);
+
         [Header("Dig toys (Dig Loop 2.0)")]
         [Tooltip("Crystal tiles by colour index: 0 teal, 1 coral, 2 gold. The three sprites are " +
                  "PIXEL-IDENTICAL silhouettes, so the colour is the only thing a child has to " +

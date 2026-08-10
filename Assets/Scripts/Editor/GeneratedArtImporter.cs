@@ -873,6 +873,17 @@ namespace DinoDigger.EditorTools
                 {
                     lib.DigBackground = digBg;
                     wired.Add($"Library.DigBackground = {digBgRel} (PPU {(digBgW > 0 ? digBgW / DigBgTargetW : 0f):F1}, ~{DigBgTargetW} units wide)");
+
+                    // The colours the dig extends this sprite with, taken from the sprite
+                    // itself so they can never drift out of match (DinoDigger-5k8.1).
+                    if (SampleEdgeRows(GenPath(digBgRel), out Color sky, out Color soil))
+                    {
+                        lib.DigSkyColor = sky;
+                        lib.DigSoilColor = soil;
+                        wired.Add($"Library.DigSkyColor/DigSoilColor sampled from {digBgRel} " +
+                                  $"(sky {(Color32)sky}, soil {(Color32)soil}) — the flat bands " +
+                                  "that carry the backdrop out to the camera rect");
+                    }
                 }
                 else
                 {
@@ -1725,6 +1736,72 @@ namespace DinoDigger.EditorTools
 
             importer.GetSourceTextureWidthAndHeight(out int width, out int _);
             return width;
+        }
+
+        /// <summary>
+        /// Average the top and bottom pixel ROWS of an image (DinoDigger-5k8.1).
+        ///
+        /// The dig extends its backdrop past the sprite with flat bands in exactly these two
+        /// colours, which is only seamless while they match the art — so they are SAMPLED here
+        /// rather than written down, and a regenerated sky updates the bands with it. Decoded
+        /// from the PNG bytes into a throwaway texture instead of read off the imported asset:
+        /// the imported one is not Read/Write enabled (and making it so would cost memory in
+        /// every build for a value only the editor ever needs).
+        ///
+        /// Returns false and touches nothing if the file cannot be read, which leaves the
+        /// library's measured defaults in place.
+        /// </summary>
+        private static bool SampleEdgeRows(string assetPath, out Color top, out Color bottom)
+        {
+            top = Color.white;
+            bottom = Color.white;
+
+            byte[] bytes;
+            try
+            {
+                bytes = System.IO.File.ReadAllBytes(assetPath);
+            }
+            catch (System.Exception)
+            {
+                return false;
+            }
+
+            var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            bool loaded = tex.LoadImage(bytes);
+            if (!loaded || tex.width <= 0 || tex.height <= 0)
+            {
+                Object.DestroyImmediate(tex);
+                return false;
+            }
+
+            // Texture2D row 0 is the BOTTOM row (Unity's origin is bottom-left), so the last row
+            // is the image's top — the sky.
+            Color[] bottomRow = tex.GetPixels(0, 0, tex.width, 1);
+            Color[] topRow = tex.GetPixels(0, tex.height - 1, tex.width, 1);
+            top = AverageOpaque(topRow);
+            bottom = AverageOpaque(bottomRow);
+            Object.DestroyImmediate(tex);
+            return true;
+        }
+
+        private static Color AverageOpaque(Color[] row)
+        {
+            float r = 0f, g = 0f, b = 0f;
+            int n = 0;
+            for (int i = 0; i < row.Length; i++)
+            {
+                if (row[i].a < 0.5f)
+                {
+                    continue;
+                }
+
+                r += row[i].r;
+                g += row[i].g;
+                b += row[i].b;
+                n++;
+            }
+
+            return n == 0 ? Color.white : new Color(r / n, g / n, b / n, 1f);
         }
 
         private static Sprite[] LoadArray(string[] relPaths, List<string> missing)

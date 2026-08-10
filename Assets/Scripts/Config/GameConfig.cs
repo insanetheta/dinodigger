@@ -514,6 +514,16 @@ namespace DinoDigger.Config
                  "degenerate window from producing a nonsense camera.")]
         public float DigMaxOrthoSize = 16f;
 
+        [Tooltip("OPEN SEA. Painted behind everything by Core.CameraBackdrop, and used as the " +
+                 "camera's clear colour, so whatever the camera can see past the painted island " +
+                 "reads as more ocean rather than as void (DinoDigger-5k8.1). The island is a " +
+                 "48x48 isometric diamond reaching |x| + 2|y-11.75| <= 23.5, and a PORTRAIT roam " +
+                 "view needs 29.3 of that budget — there is no camera position that fits, so no " +
+                 "clamp can fix it and only more sea can. Matched to the water tiles' own base " +
+                 "colour (117, 178, 225); the shipped clear colour was a lighter blue, which is " +
+                 "why the join used to show.")]
+        public Color SeaColor = new Color(117f / 255f, 178f / 255f, 225f / 255f, 1f);
+
         /// <summary>The overworld framing request: a target visible world width, floored at the
         /// landscape baseline. Derived here rather than in CameraFollow so the numbers and the
         /// tooltips that explain them live together.</summary>

@@ -63,7 +63,11 @@ namespace DinoDigger.EditorTools
             cam.orthographic = true;
             cam.orthographicSize = config != null ? config.RoamOrthoSize : 5.5f;
             cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.55f, 0.8f, 0.95f);
+            // OPEN SEA, not a paler sky-blue: the camera can see past the painted diamond in
+            // portrait (no clamp can prevent it — see GameConfig.SeaColor), so the colour behind
+            // everything has to BE the water tiles' own. CameraFollow re-applies this at runtime
+            // and hangs the backstop quad off the camera, so a baked scene gets it too.
+            cam.backgroundColor = config != null ? config.SeaColor : new Color(0.459f, 0.698f, 0.882f);
             cam.transparencySortMode = TransparencySortMode.CustomAxis;
             cam.transparencySortAxis = new Vector3(0f, 1f, 0f);
             camGo.transform.position = new Vector3(0f, 0f, -10f);

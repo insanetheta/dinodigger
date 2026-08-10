@@ -1279,6 +1279,11 @@ namespace DinoDigger.Dig
             {
                 _background.color = tint;
             }
+
+            // The pieces that cover what the backdrop sprite cannot reach carry the same tint,
+            // or a themed / deep-stratum dig would fade out into a rectangle of surface-coloured
+            // sky at the screen edge (DinoDigger-5k8.1).
+            ApplyCoverageTint(tint);
         }
 
         private void PlaceBackhoe(Vector3 origin, float halfW)
@@ -4193,6 +4198,13 @@ namespace DinoDigger.Dig
 
         private void Update()
         {
+            // COVERAGE FIRST, before every guard below (DinoDigger-5k8.1). The backdrop has to
+            // fill the camera rect whenever the dig is ON SCREEN, which includes the fly-in, the
+            // finished-round beat and the fly-out — none of which the arm's guards allow through.
+            // It self-limits to "the camera is actually looking at the dig", so roaming pays one
+            // subtraction for it.
+            RefreshBackdropCoverage();
+
             if (!_open || _finished || _armPivot == null || _elbow == null || _wrist == null)
             {
                 return;

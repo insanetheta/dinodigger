@@ -436,5 +436,197 @@ namespace DinoDigger.Testing
             board.TestLayoutFor(new Rect(-960f, -540f, 1920f, 1080f));
             yield return null;
         }
+
+        // ===================================================== COVERAGE (DinoDigger-5k8.1)
+
+        /// <summary>
+        /// THE INVARIANT THE FRAMING CASES CANNOT SEE. Framing decides what the camera looks at;
+        /// COVERAGE is whether anything is painted there. They are independent, and fixing the
+        /// first exposed a gap in the second: the dig backdrop is ONE 14x14-unit sprite, so a
+        /// portrait dig rect (11.80 x 25.57) ran 4.46 units off the top and 7.10 off the bottom.
+        ///
+        /// It was never only a portrait problem either. The sprite is +-7 across, and 16:9 has
+        /// always needed 7.47 and 19.5:9 9.10; the MEGA pit needs 9.28 at 16:10 and reaches 1.12
+        /// units below the art's bottom edge at EVERY landscape aspect. Those were shipped bugs
+        /// that no case could fail on, because every case asserted framing.
+        ///
+        /// So: drive the real coverage geometry at five aspects for both board sizes and assert
+        /// the union of art + wings + bands CONTAINS the camera rect — then open an actual dig
+        /// and assert it of the live renderers, before and after a rotate. At 16:10, the shape
+        /// this game was composed at, assert the standard dig draws NO covering pieces at all,
+        /// so the shipped look is provably untouched.
+        /// </summary>
+        private IEnumerator Case_DigBackdropCoversView(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            GameConfig cfg = gm.TestConfig;
+            ctx.Assert(cfg != null, "no GameConfig");
+
+            // The backdrop's world rect about the dig origin: a 14-unit square placed so its
+            // painted grass lip (48% down the image) lands on the surface line at +0.1.
+            const float ArtSize = 14f;
+            const float LipFraction = 0.48f;
+            float artCentreY = 0.1f - ArtSize * (0.5f - LipFraction);
+            Rect art = Rect.MinMaxRect(-ArtSize * 0.5f, artCentreY - ArtSize * 0.5f,
+                                        ArtSize * 0.5f, artCentreY + ArtSize * 0.5f);
+
+            float[] aspects = { PortraitAspect, 4f / 3f, 1.6f, DesktopAspect, LandscapeAspect };
+            string[] names = { "9:19.5", "4:3", "16:10", "16:9", "19.5:9" };
+
+            for (int m = 0; m < 2; m++)
+            {
+                bool mega = m == 1;
+                cfg.GetDigGridSize(mega, out int rows, out int cols);
+                DigModeController.ComputeDigFrame(rows, cols,
+                    out float centreY, out float halfW, out float halfH);
+                CameraFit fit = CameraFit.Content(halfW, halfH, 0f,
+                    mega ? cfg.DigMegaOrthoSize : cfg.DigOrthoSize, cfg.DigMaxOrthoSize);
+
+                for (int i = 0; i < aspects.Length; i++)
+                {
+                    Rect view = CameraFraming.VisibleRect(new Vector2(0f, centreY),
+                        fit.Ortho(aspects[i]), aspects[i]);
+                    DigModeController.ComputeBackdropCoverage(art, view, 0.6f,
+                        out Rect sky, out Rect soil, out Rect wingL, out Rect wingR);
+                    ctx.Assert(
+                        DigModeController.CoverageContains(art, sky, soil, wingL, wingR, view),
+                        $"{(mega ? "mega" : "dig")} at {names[i]}: the backdrop does not cover the " +
+                        $"camera rect {view} (art {art}) — the screen shows nothing there");
+                }
+            }
+
+            // 16:10 is the shape this game was composed at: the standard dig fits inside the
+            // sprite outright, so with no overscan there is nothing to cover — i.e. no covering
+            // piece is ever ON SCREEN there and the shipped composition is untouched. (At
+            // runtime the overscan pushes slivers of band/wing just past the view edge on
+            // purpose, so a rotate cannot flash a hairline; those are off screen by definition.)
+            {
+                cfg.GetDigGridSize(false, out int rows, out int cols);
+                DigModeController.ComputeDigFrame(rows, cols,
+                    out float centreY, out float halfW, out float halfH);
+                CameraFit fit = CameraFit.Content(halfW, halfH, 0f, cfg.DigOrthoSize, cfg.DigMaxOrthoSize);
+                Rect view = CameraFraming.VisibleRect(new Vector2(0f, centreY), fit.Ortho(1.6f), 1.6f);
+                DigModeController.ComputeBackdropCoverage(art, view, 0f,
+                    out Rect sky, out Rect soil, out Rect wingL, out Rect wingR);
+                ctx.Assert(sky.height <= 0f && soil.height <= 0f
+                    && wingL.width <= 0f && wingR.width <= 0f,
+                    "the 16:10 dig is drawing covering pieces it does not need — the shipped " +
+                    "composition has moved");
+            }
+
+            // ---- Live: open a real dig and check the RENDERERS, not just the arithmetic. ----
+            yield return EnterDig(ctx);
+            yield return ctx.WaitFrames(3);
+
+            DigModeController dm = gm.TestDigMode;
+            Camera cam = gm.TestCamera;
+            ctx.Assert(dm != null && cam != null, "no dig/camera after entering a dig");
+            ctx.Assert(dm.TestBackdropArtRect.width > 1f,
+                "the dig has no backdrop renderer to extend");
+            // The geometry above assumed a 14-unit square; if the art is re-imported at another
+            // size, say so here rather than letting the pure half of this case quietly test a
+            // backdrop the game does not have.
+            ctx.Assert(Mathf.Abs(dm.TestBackdropArtRect.width - ArtSize) < 1f
+                && Mathf.Abs(dm.TestBackdropArtRect.height - ArtSize) < 1f,
+                $"the live backdrop is {dm.TestBackdropArtRect.size} — this case's geometry " +
+                $"assumes {ArtSize}x{ArtSize} (GeneratedArtImporter.DigBgTargetW)");
+
+            Rect live = CameraFraming.VisibleRect(
+                new Vector2(cam.transform.position.x, cam.transform.position.y),
+                cam.orthographicSize, CameraFraming.ScreenAspect);
+            ctx.Assert(dm.TestBackdropCovers(live),
+                $"the LIVE dig backdrop (art {dm.TestBackdropArtRect}, sky {dm.TestSkyBandRect}, " +
+                $"soil {dm.TestSoilBandRect}, wings {dm.TestWingLeftRect}/{dm.TestWingRightRect}) " +
+                $"does not cover the camera rect {live}");
+
+            // ...and again after a rotate mid-dig, which is the whole reason it is reactive.
+            try
+            {
+                CameraFraming.TestSetScreen(PhoneWidthPx, PhoneHeightPx);
+                yield return ctx.WaitFrames(4);
+                Rect portrait = CameraFraming.VisibleRect(
+                    new Vector2(cam.transform.position.x, cam.transform.position.y),
+                    cam.orthographicSize, CameraFraming.ScreenAspect);
+                ctx.Assert(dm.TestBackdropCovers(portrait),
+                    $"after rotating to portrait mid-dig the backdrop does not cover {portrait} " +
+                    $"(sky {dm.TestSkyBandRect}, soil {dm.TestSoilBandRect})");
+                ctx.Detail = $"portrait dig view {portrait.width:F1}x{portrait.height:F1} covered";
+            }
+            finally
+            {
+                CameraFraming.TestClearScreen();
+            }
+
+            yield return ctx.WaitFrames(3);
+        }
+
+        /// <summary>
+        /// The overworld half of the same invariant. The island is a 48x48 isometric diamond
+        /// reaching |x| + 2|y - 11.75| &lt;= 23.5, and a camera rect of half-extents (hw, hh)
+        /// only fits inside it where |cx| + 2|cy - 11.75| &lt;= 23.5 - (hw + 2*hh). A portrait
+        /// roam view spends 29.33 of that 23.50 budget, so THERE IS NO CAMERA POSITION THAT
+        /// FITS — no clamp can hold this; and even at 19.5:9 the budget leaves 0.58 units of
+        /// slack, which would pin the camera to the island's exact centre. More painted world
+        /// is the only answer, and the cheapest honest painted world is open sea.
+        ///
+        /// So the assertion is not "the view stays inside the map" (it provably cannot be) but
+        /// "whatever the view reaches is painted": the backstop quad rides the camera and covers
+        /// its rect at every aspect, and the clear colour behind it is the same sea.
+        /// </summary>
+        private IEnumerator Case_SeaCoversBeyondTheMap(TestContext ctx)
+        {
+            GameManager gm = ctx.GM;
+            GameConfig cfg = gm.TestConfig;
+            Camera cam = gm.TestCamera;
+            ctx.Assert(cfg != null && cam != null, "no GameConfig/camera");
+
+            CameraBackdrop sea = cam.GetComponentInChildren<CameraBackdrop>(true);
+            ctx.Assert(sea != null,
+                "no CameraBackdrop on the camera — nothing guarantees the view is painted");
+            ctx.Assert(sea.TestRenderer != null && sea.TestRenderer.sortingOrder < 0,
+                "the sea backstop is not drawn behind the world");
+
+            // The clear colour must agree with the backstop, or the first frame after a resize
+            // (before LateUpdate re-sizes the quad) would flash a different blue.
+            Color clear = cam.backgroundColor;
+            ctx.Assert(Mathf.Abs(clear.r - cfg.SeaColor.r) < 0.01f
+                && Mathf.Abs(clear.g - cfg.SeaColor.g) < 0.01f
+                && Mathf.Abs(clear.b - cfg.SeaColor.b) < 0.01f,
+                $"the camera clears to {clear} but the sea is {cfg.SeaColor}");
+
+            try
+            {
+                float[,] screens =
+                {
+                    { PhoneWidthPx, PhoneHeightPx },
+                    { 1920f, 1080f },
+                    { PhoneHeightPx, PhoneWidthPx },
+                };
+                string[] names = { "9:19.5", "16:9", "19.5:9" };
+
+                for (int i = 0; i < names.Length; i++)
+                {
+                    CameraFraming.TestSetScreen(screens[i, 0], screens[i, 1]);
+                    yield return ctx.WaitFrames(3);
+
+                    Rect view = CameraFraming.VisibleRect(
+                        new Vector2(cam.transform.position.x, cam.transform.position.y),
+                        cam.orthographicSize, CameraFraming.ScreenAspect);
+                    Rect painted = sea.TestWorldRect;
+                    ctx.Assert(painted.xMin <= view.xMin && painted.xMax >= view.xMax
+                        && painted.yMin <= view.yMin && painted.yMax >= view.yMax,
+                        $"at {names[i]} the sea backstop {painted} does not cover the camera " +
+                        $"rect {view} — the screen has an unpainted region");
+                }
+
+                ctx.Detail = "sea backstop covers roam at 9:19.5 / 16:9 / 19.5:9";
+            }
+            finally
+            {
+                CameraFraming.TestClearScreen();
+            }
+
+            yield return ctx.WaitFrames(3);
+        }
     }
 }

@@ -176,6 +176,12 @@ namespace DinoDigger.Testing
                 new TestCase("RoamZoomsOutInPortrait", 10f, Case_RoamZoomsOutInPortrait),
                 new TestCase("AspectChangeReframesLive", 30f, Case_AspectChangeReframesLive),
                 new TestCase("PortraitHudOnScreen",   20f, Case_PortraitHudOnScreen),
+                // COVERAGE, not framing (DinoDigger-5k8.1): the camera can now see further, and
+                // these two assert that something is PAINTED everywhere it looks. The dig one
+                // drives a real dig (hence the fatter budget) so it checks live renderers rather
+                // than only the geometry.
+                new TestCase("DigBackdropCoversView", 60f, Case_DigBackdropCoversView),
+                new TestCase("SeaCoversBeyondTheMap", 20f, Case_SeaCoversBeyondTheMap),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }

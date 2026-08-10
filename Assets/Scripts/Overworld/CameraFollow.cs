@@ -76,6 +76,15 @@ namespace DinoDigger.Overworld
             {
                 _camera.orthographic = true;
                 SetFraming(RoamFit());
+
+                // COVERAGE (DinoDigger-5k8.1). Framing the camera correctly at every aspect is
+                // only half the promise: what it can see has to be PAINTED. The backstop quad
+                // rides the camera and guarantees there is never nothing there, and the clear
+                // colour matches it so the very first frame agrees with every frame after.
+                Color sea = _config != null ? _config.SeaColor : new Color(0.459f, 0.698f, 0.882f);
+                _camera.clearFlags = CameraClearFlags.SolidColor;
+                _camera.backgroundColor = sea;
+                CameraBackdrop.Ensure(_camera, sea);
             }
         }
 
