@@ -21,6 +21,7 @@ Tools/
   slice_sprites.py      # Tools/raw/*.png -> Assets/Art/Generated/<group>/*.png
   bake_builder_anchors.py  # dino PNGs -> Assets/Scripts/Config/BuilderPropAnchors.cs
   builder_prop_anchors.json # its measurements (generated; handy for diffing a re-bake)
+  verify_facing_art.py  # which way each generated facing ACTUALLY points (the flip table)
   .openrouter_key       # your OpenRouter API key (untracked, never printed)
   raw/                  # raw generations: <char>_{S,SE,E,NE,N}.png + item sheets
 Assets/Art/Generated/
@@ -58,7 +59,12 @@ python3 slice_sprites.py               # process everything in raw/
 python3 slice_sprites.py --only trex   # one entry
 python3 slice_sprites.py --pad 12      # override transparent border padding
 
-# 3. MANDATORY after ANY dino re-slice: re-bake the builder-prop anchors (free)
+# 3. MANDATORY after ANY dino REGEN: re-audit which way the new art actually faces (free)
+python3 verify_facing_art.py --audit --raw   # every mirrored cell -> FlippedFacingPairs
+python3 verify_facing_art.py --audit         # after fixing the table: must report 0
+python3 verify_facing_art.py --sheets        # 8-facing x 3-frame sheets in Logs/, to eyeball
+
+# 4. MANDATORY after ANY dino re-slice: re-bake the builder-prop anchors (free)
 python3 bake_builder_anchors.py        # rewrites Assets/Scripts/Config/BuilderPropAnchors.cs
 python3 bake_builder_anchors.py --check   # CI/pre-commit guard: nonzero if the .cs is stale
 python3 bake_builder_anchors.py --report  # drift table + per-stage divergence
@@ -66,6 +72,25 @@ python3 bake_builder_anchors.py --verify --verify-stage kid   # visual sheet in 
 ```
 
 ### Why step 3 is not optional
+
+The image model is given a SCREEN-RELATIVE pose instruction, but a generation can still
+come back horizontally mirrored against the compass name in its own filename — that is
+DinoDigger-bw4, and `GeneratedArtImporter.FlippedFacingPairs` is the remap that fixes it
+without regenerating (the correct sprite already exists as the facing's mirror partner).
+
+That table is keyed by species, GROWTH STAGE and facing, because each stage is its own
+generation and handedness does not survive the growth ladder. Deciding its rows by eye is
+what shipped adult stegosaurus and kid ankylosaurus facing backwards for months
+(DinoDigger-3yb), so `verify_facing_art.py --audit --raw` decides them by measurement
+instead: eye position against the trunk axis, eye-size parallax, tail reach. Fix the
+table, re-import, then `--audit` (no `--raw`) must report zero. Order matters — the
+anchor bake in step 4 resolves every cell through this same table, so audit first.
+
+`verify_facing_art.py` keeps its own copy of the table in step with the importer's via
+`bake_builder_anchors.FLIPPED_FACINGS`; if you edit one, edit the other. The
+`FacingArtNotMirrored` integration case is the same check from inside the engine.
+
+### Why step 4 is not optional
 
 `BuilderPropAnchors.cs` is a GENERATED table of where each dino's head and working hand
 sit, measured in PIXELS, per species x growth stage x facing. Re-slicing moves every

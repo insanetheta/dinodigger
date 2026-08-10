@@ -19,11 +19,12 @@
 // CURRENT-FRAME renderer-bounds (canvas) coordinates, with the bw4 mirror
 // correction (GeneratedArtImporter.FlippedFacingPairs) FOLDED IN: for a facing
 // whose displayed sprite is the mirror-partner FILE, HeadCx/HeadW come from that
-// displayed file and FrontX is placed on the visual facing side. That remap applies to
-// the ADULT rows only — GeneratedArtImporter.StagePath does not consult it, so the
-// baby/kid rows are measured straight off their own files. Sprites are FullRect meshes
-// so renderer.bounds == the full canvas, and consumers apply the fractions directly to
-// renderer.bounds with NO further mirroring. There is no runtime flipX.
+// displayed file and FrontX is placed on the visual facing side. That remap is PER
+// (species, stage, facing) since DinoDigger-3yb, so the baby/kid rows carry it too —
+// they are separate generations and do not share the adult's handedness. Sprites are
+// FullRect meshes so renderer.bounds == the full canvas, and consumers apply the
+// fractions directly to renderer.bounds with NO further mirroring. There is no runtime
+// flipX.
 // </auto-generated>
 using DinoDigger.Core;
 
@@ -88,11 +89,11 @@ namespace DinoDigger.Config
             new[]
             {
                 // TRex / Baby
-                new[] { new BuilderPropAnchor(0.495f, 0.747f, 0.286f, 0.110f), new BuilderPropAnchor(0.503f, 0.712f, 0.960f, 0.110f), new BuilderPropAnchor(0.481f, 0.631f, 0.943f, 0.110f), new BuilderPropAnchor(0.487f, 0.763f, 0.966f, 0.110f), new BuilderPropAnchor(0.499f, 0.741f, 0.714f, 0.110f), new BuilderPropAnchor(0.513f, 0.763f, 0.034f, 0.110f), new BuilderPropAnchor(0.519f, 0.631f, 0.057f, 0.110f), new BuilderPropAnchor(0.497f, 0.712f, 0.040f, 0.110f) },
+                new[] { new BuilderPropAnchor(0.495f, 0.747f, 0.286f, 0.110f), new BuilderPropAnchor(0.503f, 0.712f, 0.960f, 0.110f), new BuilderPropAnchor(0.481f, 0.631f, 0.943f, 0.110f), new BuilderPropAnchor(0.513f, 0.763f, 0.978f, 0.110f), new BuilderPropAnchor(0.499f, 0.741f, 0.714f, 0.110f), new BuilderPropAnchor(0.487f, 0.763f, 0.022f, 0.110f), new BuilderPropAnchor(0.519f, 0.631f, 0.057f, 0.110f), new BuilderPropAnchor(0.497f, 0.712f, 0.040f, 0.110f) },
                 // TRex / Kid
                 new[] { new BuilderPropAnchor(0.495f, 0.766f, 0.287f, 0.110f), new BuilderPropAnchor(0.529f, 0.674f, 0.933f, 0.110f), new BuilderPropAnchor(0.583f, 0.562f, 0.906f, 0.110f), new BuilderPropAnchor(0.559f, 0.662f, 0.894f, 0.110f), new BuilderPropAnchor(0.436f, 0.669f, 0.714f, 0.110f), new BuilderPropAnchor(0.441f, 0.662f, 0.106f, 0.110f), new BuilderPropAnchor(0.417f, 0.562f, 0.094f, 0.110f), new BuilderPropAnchor(0.471f, 0.674f, 0.067f, 0.110f) },
                 // TRex / Big
-                new[] { new BuilderPropAnchor(0.497f, 0.751f, 0.287f, 0.110f), new BuilderPropAnchor(0.545f, 0.683f, 0.896f, 0.110f), new BuilderPropAnchor(0.549f, 0.558f, 0.906f, 0.110f), new BuilderPropAnchor(0.437f, 0.661f, 0.766f, 0.110f), new BuilderPropAnchor(0.468f, 0.688f, 0.713f, 0.110f), new BuilderPropAnchor(0.563f, 0.661f, 0.234f, 0.110f), new BuilderPropAnchor(0.451f, 0.558f, 0.094f, 0.110f), new BuilderPropAnchor(0.455f, 0.683f, 0.104f, 0.110f) },
+                new[] { new BuilderPropAnchor(0.497f, 0.751f, 0.287f, 0.110f), new BuilderPropAnchor(0.545f, 0.683f, 0.896f, 0.110f), new BuilderPropAnchor(0.549f, 0.558f, 0.906f, 0.110f), new BuilderPropAnchor(0.563f, 0.661f, 0.901f, 0.110f), new BuilderPropAnchor(0.468f, 0.688f, 0.713f, 0.110f), new BuilderPropAnchor(0.437f, 0.661f, 0.099f, 0.110f), new BuilderPropAnchor(0.451f, 0.558f, 0.094f, 0.110f), new BuilderPropAnchor(0.455f, 0.683f, 0.104f, 0.110f) },
             },
             // ---- Triceratops
             new[]
@@ -100,7 +101,7 @@ namespace DinoDigger.Config
                 // Triceratops / Baby
                 new[] { new BuilderPropAnchor(0.498f, 0.679f, 0.285f, 0.110f), new BuilderPropAnchor(0.460f, 0.556f, 0.976f, 0.110f), new BuilderPropAnchor(0.522f, 0.460f, 0.970f, 0.136f), new BuilderPropAnchor(0.487f, 0.670f, 0.940f, 0.110f), new BuilderPropAnchor(0.499f, 0.682f, 0.715f, 0.110f), new BuilderPropAnchor(0.513f, 0.670f, 0.060f, 0.110f), new BuilderPropAnchor(0.478f, 0.460f, 0.030f, 0.136f), new BuilderPropAnchor(0.540f, 0.556f, 0.024f, 0.110f) },
                 // Triceratops / Kid
-                new[] { new BuilderPropAnchor(0.497f, 0.673f, 0.286f, 0.110f), new BuilderPropAnchor(0.529f, 0.717f, 0.987f, 0.110f), new BuilderPropAnchor(0.524f, 0.534f, 0.980f, 0.110f), new BuilderPropAnchor(0.468f, 0.757f, 0.895f, 0.110f), new BuilderPropAnchor(0.501f, 0.669f, 0.714f, 0.110f), new BuilderPropAnchor(0.532f, 0.757f, 0.105f, 0.110f), new BuilderPropAnchor(0.476f, 0.534f, 0.020f, 0.110f), new BuilderPropAnchor(0.471f, 0.717f, 0.013f, 0.110f) },
+                new[] { new BuilderPropAnchor(0.497f, 0.673f, 0.286f, 0.110f), new BuilderPropAnchor(0.529f, 0.717f, 0.987f, 0.110f), new BuilderPropAnchor(0.524f, 0.534f, 0.980f, 0.110f), new BuilderPropAnchor(0.532f, 0.757f, 0.986f, 0.110f), new BuilderPropAnchor(0.501f, 0.669f, 0.714f, 0.110f), new BuilderPropAnchor(0.468f, 0.757f, 0.014f, 0.110f), new BuilderPropAnchor(0.476f, 0.534f, 0.020f, 0.110f), new BuilderPropAnchor(0.471f, 0.717f, 0.013f, 0.110f) },
                 // Triceratops / Big
                 new[] { new BuilderPropAnchor(0.500f, 0.670f, 0.286f, 0.110f), new BuilderPropAnchor(0.534f, 0.685f, 0.977f, 0.114f), new BuilderPropAnchor(0.539f, 0.509f, 0.974f, 0.110f), new BuilderPropAnchor(0.515f, 0.755f, 0.912f, 0.110f), new BuilderPropAnchor(0.518f, 0.647f, 0.714f, 0.110f), new BuilderPropAnchor(0.485f, 0.755f, 0.088f, 0.110f), new BuilderPropAnchor(0.461f, 0.509f, 0.026f, 0.110f), new BuilderPropAnchor(0.466f, 0.685f, 0.023f, 0.114f) },
             },
@@ -118,11 +119,11 @@ namespace DinoDigger.Config
             new[]
             {
                 // Stegosaurus / Baby
-                new[] { new BuilderPropAnchor(0.493f, 0.442f, 0.287f, 0.110f), new BuilderPropAnchor(0.343f, 0.349f, 0.697f, 0.110f), new BuilderPropAnchor(0.635f, 0.326f, 0.964f, 0.110f), new BuilderPropAnchor(0.431f, 0.400f, 0.769f, 0.116f), new BuilderPropAnchor(0.421f, 0.408f, 0.715f, 0.114f), new BuilderPropAnchor(0.569f, 0.400f, 0.231f, 0.116f), new BuilderPropAnchor(0.365f, 0.326f, 0.036f, 0.110f), new BuilderPropAnchor(0.657f, 0.349f, 0.303f, 0.110f) },
+                new[] { new BuilderPropAnchor(0.493f, 0.442f, 0.287f, 0.110f), new BuilderPropAnchor(0.657f, 0.349f, 0.975f, 0.110f), new BuilderPropAnchor(0.635f, 0.326f, 0.964f, 0.110f), new BuilderPropAnchor(0.569f, 0.400f, 0.938f, 0.116f), new BuilderPropAnchor(0.421f, 0.408f, 0.715f, 0.114f), new BuilderPropAnchor(0.431f, 0.400f, 0.062f, 0.116f), new BuilderPropAnchor(0.365f, 0.326f, 0.036f, 0.110f), new BuilderPropAnchor(0.343f, 0.349f, 0.025f, 0.110f) },
                 // Stegosaurus / Kid
-                new[] { new BuilderPropAnchor(0.489f, 0.417f, 0.286f, 0.110f), new BuilderPropAnchor(0.354f, 0.378f, 0.699f, 0.116f), new BuilderPropAnchor(0.431f, 0.409f, 0.782f, 0.116f), new BuilderPropAnchor(0.440f, 0.414f, 0.781f, 0.120f), new BuilderPropAnchor(0.430f, 0.411f, 0.715f, 0.116f), new BuilderPropAnchor(0.560f, 0.414f, 0.219f, 0.120f), new BuilderPropAnchor(0.569f, 0.409f, 0.218f, 0.116f), new BuilderPropAnchor(0.646f, 0.378f, 0.301f, 0.116f) },
+                new[] { new BuilderPropAnchor(0.489f, 0.417f, 0.286f, 0.110f), new BuilderPropAnchor(0.646f, 0.378f, 0.969f, 0.116f), new BuilderPropAnchor(0.569f, 0.409f, 0.949f, 0.116f), new BuilderPropAnchor(0.560f, 0.414f, 0.932f, 0.120f), new BuilderPropAnchor(0.430f, 0.411f, 0.715f, 0.116f), new BuilderPropAnchor(0.440f, 0.414f, 0.068f, 0.120f), new BuilderPropAnchor(0.431f, 0.409f, 0.051f, 0.116f), new BuilderPropAnchor(0.354f, 0.378f, 0.031f, 0.116f) },
                 // Stegosaurus / Big
-                new[] { new BuilderPropAnchor(0.485f, 0.448f, 0.287f, 0.110f), new BuilderPropAnchor(0.625f, 0.379f, 0.949f, 0.110f), new BuilderPropAnchor(0.433f, 0.410f, 0.782f, 0.116f), new BuilderPropAnchor(0.576f, 0.388f, 0.933f, 0.112f), new BuilderPropAnchor(0.435f, 0.417f, 0.715f, 0.116f), new BuilderPropAnchor(0.424f, 0.388f, 0.067f, 0.112f), new BuilderPropAnchor(0.567f, 0.410f, 0.218f, 0.116f), new BuilderPropAnchor(0.375f, 0.379f, 0.051f, 0.110f) },
+                new[] { new BuilderPropAnchor(0.485f, 0.448f, 0.287f, 0.110f), new BuilderPropAnchor(0.625f, 0.379f, 0.949f, 0.110f), new BuilderPropAnchor(0.567f, 0.410f, 0.943f, 0.116f), new BuilderPropAnchor(0.576f, 0.388f, 0.933f, 0.112f), new BuilderPropAnchor(0.435f, 0.417f, 0.715f, 0.116f), new BuilderPropAnchor(0.424f, 0.388f, 0.067f, 0.112f), new BuilderPropAnchor(0.433f, 0.410f, 0.057f, 0.116f), new BuilderPropAnchor(0.375f, 0.379f, 0.051f, 0.110f) },
             },
             // ---- Pteranodon
             new[]
@@ -138,9 +139,9 @@ namespace DinoDigger.Config
             new[]
             {
                 // Ankylosaurus / Baby
-                new[] { new BuilderPropAnchor(0.507f, 0.477f, 0.287f, 0.110f), new BuilderPropAnchor(0.638f, 0.415f, 0.985f, 0.110f), new BuilderPropAnchor(0.656f, 0.384f, 0.982f, 0.110f), new BuilderPropAnchor(0.375f, 0.429f, 0.795f, 0.110f), new BuilderPropAnchor(0.379f, 0.423f, 0.715f, 0.110f), new BuilderPropAnchor(0.625f, 0.429f, 0.205f, 0.110f), new BuilderPropAnchor(0.344f, 0.384f, 0.018f, 0.110f), new BuilderPropAnchor(0.362f, 0.415f, 0.015f, 0.110f) },
+                new[] { new BuilderPropAnchor(0.507f, 0.477f, 0.287f, 0.110f), new BuilderPropAnchor(0.638f, 0.415f, 0.985f, 0.110f), new BuilderPropAnchor(0.656f, 0.384f, 0.982f, 0.110f), new BuilderPropAnchor(0.625f, 0.429f, 0.988f, 0.110f), new BuilderPropAnchor(0.379f, 0.423f, 0.715f, 0.110f), new BuilderPropAnchor(0.375f, 0.429f, 0.012f, 0.110f), new BuilderPropAnchor(0.344f, 0.384f, 0.018f, 0.110f), new BuilderPropAnchor(0.362f, 0.415f, 0.015f, 0.110f) },
                 // Ankylosaurus / Kid
-                new[] { new BuilderPropAnchor(0.505f, 0.583f, 0.287f, 0.110f), new BuilderPropAnchor(0.384f, 0.403f, 0.942f, 0.110f), new BuilderPropAnchor(0.337f, 0.368f, 0.795f, 0.110f), new BuilderPropAnchor(0.369f, 0.419f, 0.929f, 0.110f), new BuilderPropAnchor(0.368f, 0.411f, 0.715f, 0.110f), new BuilderPropAnchor(0.631f, 0.419f, 0.071f, 0.110f), new BuilderPropAnchor(0.663f, 0.368f, 0.205f, 0.110f), new BuilderPropAnchor(0.616f, 0.403f, 0.058f, 0.110f) },
+                new[] { new BuilderPropAnchor(0.505f, 0.583f, 0.287f, 0.110f), new BuilderPropAnchor(0.616f, 0.403f, 0.961f, 0.110f), new BuilderPropAnchor(0.663f, 0.368f, 0.985f, 0.110f), new BuilderPropAnchor(0.631f, 0.419f, 0.988f, 0.110f), new BuilderPropAnchor(0.368f, 0.411f, 0.715f, 0.110f), new BuilderPropAnchor(0.369f, 0.419f, 0.012f, 0.110f), new BuilderPropAnchor(0.337f, 0.368f, 0.015f, 0.110f), new BuilderPropAnchor(0.384f, 0.403f, 0.039f, 0.110f) },
                 // Ankylosaurus / Big
                 new[] { new BuilderPropAnchor(0.529f, 0.657f, 0.287f, 0.110f), new BuilderPropAnchor(0.603f, 0.387f, 0.912f, 0.110f), new BuilderPropAnchor(0.652f, 0.358f, 0.981f, 0.110f), new BuilderPropAnchor(0.645f, 0.395f, 0.988f, 0.110f), new BuilderPropAnchor(0.398f, 0.403f, 0.715f, 0.110f), new BuilderPropAnchor(0.355f, 0.395f, 0.012f, 0.110f), new BuilderPropAnchor(0.348f, 0.358f, 0.019f, 0.110f), new BuilderPropAnchor(0.397f, 0.387f, 0.088f, 0.110f) },
             },
@@ -172,7 +173,7 @@ namespace DinoDigger.Config
                 // Velociraptor / Kid
                 new[] { new BuilderPropAnchor(0.500f, 0.755f, 0.287f, 0.110f), new BuilderPropAnchor(0.508f, 0.730f, 0.946f, 0.110f), new BuilderPropAnchor(0.530f, 0.590f, 0.887f, 0.110f), new BuilderPropAnchor(0.527f, 0.734f, 0.907f, 0.110f), new BuilderPropAnchor(0.545f, 0.692f, 0.714f, 0.110f), new BuilderPropAnchor(0.473f, 0.734f, 0.093f, 0.110f), new BuilderPropAnchor(0.470f, 0.590f, 0.113f, 0.110f), new BuilderPropAnchor(0.492f, 0.730f, 0.054f, 0.110f) },
                 // Velociraptor / Big
-                new[] { new BuilderPropAnchor(0.414f, 0.631f, 0.286f, 0.110f), new BuilderPropAnchor(0.606f, 0.599f, 0.948f, 0.110f), new BuilderPropAnchor(0.552f, 0.570f, 0.904f, 0.110f), new BuilderPropAnchor(0.399f, 0.625f, 0.679f, 0.110f), new BuilderPropAnchor(0.393f, 0.649f, 0.715f, 0.110f), new BuilderPropAnchor(0.601f, 0.625f, 0.321f, 0.110f), new BuilderPropAnchor(0.448f, 0.570f, 0.096f, 0.110f), new BuilderPropAnchor(0.394f, 0.599f, 0.052f, 0.110f) },
+                new[] { new BuilderPropAnchor(0.414f, 0.631f, 0.286f, 0.110f), new BuilderPropAnchor(0.606f, 0.599f, 0.948f, 0.110f), new BuilderPropAnchor(0.552f, 0.570f, 0.904f, 0.110f), new BuilderPropAnchor(0.601f, 0.625f, 0.929f, 0.110f), new BuilderPropAnchor(0.393f, 0.649f, 0.715f, 0.110f), new BuilderPropAnchor(0.399f, 0.625f, 0.071f, 0.110f), new BuilderPropAnchor(0.448f, 0.570f, 0.096f, 0.110f), new BuilderPropAnchor(0.394f, 0.599f, 0.052f, 0.110f) },
             },
         };
     }

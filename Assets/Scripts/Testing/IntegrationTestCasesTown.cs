@@ -2618,63 +2618,332 @@ namespace DinoDigger.Testing
             bool[] acc = null;
             foreach (Sprite s in new[] { s0, s1, s2 })
             {
-                Texture2D src = s.texture;
-                if (src == null)
+                Color32[] px = ReadSpritePixels(s, out int sw, out int sh);
+                if (px == null)
                 {
                     return null;
                 }
 
                 if (acc == null)
                 {
-                    w = src.width;
-                    h = src.height;
+                    w = sw;
+                    h = sh;
                     acc = new bool[w * h];
                 }
-                else if (src.width != w || src.height != h)
+                else if (sw != w || sh != h)
                 {
                     // A facing's three frames MUST share one union box (slice_sprites.py);
                     // if they no longer do, the art is broken in a way this case can't judge.
                     return null;
                 }
 
-                RenderTexture rt = RenderTexture.GetTemporary(
-                    w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
-                RenderTexture prev = RenderTexture.active;
-                Texture2D readback = null;
-                try
+                for (int i = 0; i < acc.Length; i++)
                 {
-                    Graphics.Blit(src, rt);
-                    RenderTexture.active = rt;
-                    readback = new Texture2D(w, h, TextureFormat.RGBA32, false);
-                    readback.ReadPixels(new Rect(0, 0, w, h), 0, 0);
-                    readback.Apply(false);
-
-                    Color32[] px = readback.GetPixels32();
-                    for (int y = 0; y < h; y++)
+                    if (px[i].a > AnchorAlphaCut * 255f)
                     {
-                        int srcRow = (h - 1 - y) * w;   // ReadPixels is bottom-up
-                        int dstRow = y * w;
-                        for (int x = 0; x < w; x++)
-                        {
-                            if (px[srcRow + x].a > AnchorAlphaCut * 255f)
-                            {
-                                acc[dstRow + x] = true;
-                            }
-                        }
-                    }
-                }
-                finally
-                {
-                    RenderTexture.active = prev;
-                    RenderTexture.ReleaseTemporary(rt);
-                    if (readback != null)
-                    {
-                        Destroy(readback);
+                        acc[i] = true;
                     }
                 }
             }
 
             return acc;
+        }
+
+        /// <summary>One sprite's whole texture, TOP row first. The dino textures ship
+        /// non-readable and compressed, so the pixels come back through a RenderTexture blit
+        /// rather than GetPixels — that path works on any import setting. Returns null when
+        /// the sprite has no texture (a GPU-less run reads back transparent, which the
+        /// callers treat as "nothing to judge" rather than a failure).</summary>
+        private static Color32[] ReadSpritePixels(Sprite s, out int w, out int h)
+        {
+            w = h = 0;
+            Texture2D src = s != null ? s.texture : null;
+            if (src == null)
+            {
+                return null;
+            }
+
+            w = src.width;
+            h = src.height;
+            RenderTexture rt = RenderTexture.GetTemporary(
+                w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+            RenderTexture prev = RenderTexture.active;
+            Texture2D readback = null;
+            try
+            {
+                Graphics.Blit(src, rt);
+                RenderTexture.active = rt;
+                readback = new Texture2D(w, h, TextureFormat.RGBA32, false);
+                readback.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                readback.Apply(false);
+
+                Color32[] bottomUp = readback.GetPixels32();
+                var topDown = new Color32[w * h];
+                for (int y = 0; y < h; y++)
+                {
+                    Array.Copy(bottomUp, (h - 1 - y) * w, topDown, y * w, w);
+                }
+
+                return topDown;
+            }
+            finally
+            {
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+                if (readback != null)
+                {
+                    Destroy(readback);
+                }
+            }
+        }
+
+        // ===================================== the facing art actually points the right way
+        //
+        // DinoDigger-3yb. FacingCorrectness proves the compass math and the array indexing;
+        // it is structurally blind to which way the ART points, and that blindness is what
+        // let adult stegosaurus and kid ankylosaurus ship mirrored for months. This case
+        // closes that hole by MEASURING the shipped pixels.
+        //
+        // THE INVARIANT: for every species and growth stage, the sprite the game displays
+        // for logical E must have its HEAD on the right of the sprite's own centre, and the
+        // W sprite must have it on the left. That is the one thing that was false in the
+        // shipped build and true in a correct one, whatever the remap table happens to say —
+        // encoding the table itself would only have re-asserted the bug.
+        //
+        // WHERE THE PIXELS ARE MEASURED, AND WHY NOT HERE. This case used to re-measure the
+        // shipped textures itself: find the pupils (the only things in this art that are both
+        // DARK and THICK, so they survive an erosion that erases the 1-3px linework) and check
+        // which side of the sprite's centre they sit on. It measured NOTHING — 0 of 54 — and
+        // the reason is structural, not a tuning problem. Every dino .meta carries a WebGL
+        // platform override at maxTextureSize 256 with crunched compression, so the texture
+        // Unity hands the game is 256px tall where the source PNG this art was authored and
+        // audited at is ~800px. At a third of the raster no pupil survives the erosion (the
+        // biggest solid dark disc left dies at r=3-5 while the rule asks for r=2-3 AND a
+        // near-white sclera pixel beside it, and the resample leaves ~200 near-white pixels
+        // in a whole sprite). Nothing about texture Read/Write changes that — these read-backs
+        // go through a RenderTexture blit, which works fine on a non-readable texture, and the
+        // alpha-only BuilderAnchorsMatchArt above measures the same textures happily. It is
+        // the resolution alone, and re-enabling Read/Write would double texture memory on the
+        // one platform (WebGL on phones) that downsamples hardest, to fix nothing.
+        //
+        // So the pixel truth lives in Tools/verify_facing_art.py, which measures the SOURCE
+        // PNGs, and its verdict is baked into Assets/Scripts/Config/FacingManifest.cs — the
+        // same arrangement BuilderPropAnchors.cs already uses for the anchor pixels.
+        //
+        // WHAT THIS CASE ASSERTS, then: that the sprite the game DISPLAYS for every (actor,
+        // stage, facing) comes from the file the audit says draws that facing — the facing's
+        // own file, or its mirror partner's where the generation came out backwards. Since
+        // the check runs through the very sprite arrays DinoController and BackhoeController
+        // render from, it fails on all three shapes of this bug: a table entry that should not
+        // be there, one that is missing, and a path helper that never consults the table at
+        // all (StagePath, which is the whole of DinoDigger-3yb). It cannot silently measure
+        // nothing: every one of the 224 cells must resolve to a parseable sprite or the case
+        // fails on the count.
+
+        /// <summary>REGRESSION GUARD for DinoDigger-3yb (and the DinoDigger-bw4 class it
+        /// belongs to): the displayed art must face the way its facing NAME claims.
+        ///
+        /// Walks every species x growth stage x facing (plus the backhoe), takes the idle and
+        /// both stride sprites the game would render, and asserts each comes from the source
+        /// file FacingManifest — the baked verdict of the offline pixel audit — says must draw
+        /// that facing. Keeping the manifest honest is the other half of the loop and belongs
+        /// to `python3 Tools/verify_facing_art.py --check`, which re-measures the art and fails
+        /// if the manifest, the importer's table or the anchor baker's copy has drifted.</summary>
+        private IEnumerator Case_FacingArtNotMirrored(TestContext ctx)
+        {
+            GameConfig cfg = ctx.GM != null ? ctx.GM.TestConfig : null;
+            ctx.Assert(cfg != null, "no GameConfig — cannot reach the dino definitions");
+
+            var stages = new[] { GrowthStage.Baby, GrowthStage.Kid, GrowthStage.Big };
+            var wrong = new List<string>();
+            int cells = 0, sprites = 0, fellBack = 0;
+
+            for (int t = 0; t < 9; t++)
+            {
+                var type = (DinoType)t;
+                DinoDefinition def = cfg.GetDino(type);
+                if (def == null)
+                {
+                    wrong.Add($"{type}: no DinoDefinition wired into the config");
+                    continue;
+                }
+
+                foreach (GrowthStage stage in stages)
+                {
+                    Sprite[] idles = def.StageSprites(stage);
+                    Sprite[] strideA = def.StrideSprites(stage, 0);
+                    Sprite[] strideB = def.StrideSprites(stage, 1);
+                    for (int d = 0; d < 8; d++)
+                    {
+                        var dir = (Dir8)d;
+                        cells++;
+
+                        // The idle set is mandatory at every stage (StageSprites falls back to
+                        // the adult art rather than returning null). The stride sets are not:
+                        // StrideSprites returns null for a species with no walk art, and a
+                        // missing stride is WalkAnimCycles' business, not this case's.
+                        sprites += Judge(wrong, type, stage, dir, "idle",
+                            Direction8.Pick(idles, dir, null), true, ref fellBack);
+                        sprites += Judge(wrong, type, stage, dir, "walkA",
+                            Direction8.Pick(strideA, dir, null), strideA != null, ref fellBack);
+                        sprites += Judge(wrong, type, stage, dir, "walkB",
+                            Direction8.Pick(strideB, dir, null), strideB != null, ref fellBack);
+                    }
+
+                    yield return null;
+                }
+            }
+
+            // The backhoe rides the same remap (its adult SE/NE art is mirrored) and is the
+            // one actor the player drives, so it is checked too — through its own sprite
+            // arrays, since it has no DinoDefinition and no growth stages.
+            BackhoeController bh = ctx.GM != null ? ctx.GM.TestBackhoe : null;
+            ctx.Assert(bh != null, "no backhoe in the scene — cannot check its facing art");
+            for (int d = 0; d < 8; d++)
+            {
+                var dir = (Dir8)d;
+                cells++;
+                sprites += JudgeBackhoe(wrong, dir, "idle", bh.TestDirSprite(dir), true);
+                sprites += JudgeBackhoe(wrong, dir, "rollA", bh.TestRollDirSprite(0, dir), bh.TestHasRoll);
+                sprites += JudgeBackhoe(wrong, dir, "rollB", bh.TestRollDirSprite(1, dir), bh.TestHasRoll);
+            }
+
+            const int ExpectedCells = 9 * 3 * 8 + 8;
+            ctx.Assert(cells == ExpectedCells,
+                $"only {cells}/{ExpectedCells} (actor, stage, facing) cells were reachable — the " +
+                "dino definitions or the backhoe are unwired, so this guard proved nothing");
+
+            ctx.Assert(wrong.Count == 0,
+                $"{wrong.Count} displayed sprite(s) come from the WRONG FILE, i.e. those actors " +
+                "are drawn facing the opposite way from the facing they are wired to. The " +
+                "measured audit in Assets/Scripts/Config/FacingManifest.cs and the remap that " +
+                "produced these sprites (GeneratedArtImporter.FlippedFacingPairs — keyed by " +
+                "species, STAGE and facing, and consulted by EVERY path helper) disagree. Run " +
+                "`python3 Tools/verify_facing_art.py --check` for the offline diff; if the art " +
+                "was regenerated, `--bake` the manifest, bring the importer table into step, " +
+                "re-import, then re-bake anchors with `python3 Tools/bake_builder_anchors.py`. " +
+                "Offenders: " + string.Join("; ", wrong.GetRange(0, Mathf.Min(6, wrong.Count))));
+
+            ctx.Log($"facing wiring verified against the pixel audit: {cells} cells, " +
+                    $"{sprites} sprites, {fellBack} stage fallback(s)");
+        }
+
+        /// <summary>Assert one displayed sprite comes from the file the manifest says draws
+        /// that facing, recording a failure into <paramref name="wrong"/> if not. Returns 1
+        /// when a sprite was judged, 0 when the slot is legitimately empty
+        /// (<paramref name="required"/> false); an empty REQUIRED slot is a failure, never a
+        /// skip. A sprite from another growth stage's file is the documented DinoDefinition
+        /// fallback and is judged against THAT stage's row — each generation has its own
+        /// handedness, and the file on screen is the one whose handedness matters.</summary>
+        private static int Judge(List<string> wrong, DinoType type, GrowthStage stage, Dir8 dir,
+            string pose, Sprite s, bool required, ref int fellBack)
+        {
+            if (s == null)
+            {
+                if (required)
+                {
+                    wrong.Add($"{type}/{stage}/{dir} {pose}: no sprite wired");
+                }
+
+                return 0;
+            }
+
+            if (!ParseArtName(s.name, out Dir8 file, out GrowthStage fileStage))
+            {
+                wrong.Add($"{type}/{stage}/{dir} {pose}: sprite '{s.name}' does not name a " +
+                          "facing — the generated-art naming convention changed and this " +
+                          "guard can no longer read it");
+                return 1;
+            }
+
+            if (fileStage != stage)
+            {
+                fellBack++;
+            }
+
+            Dir8 want = FacingManifest.DisplayedFacing(type, fileStage, dir);
+            if (file != want)
+            {
+                wrong.Add($"{type}/{stage}/{dir} {pose}: shows '{s.name}' (a {file} file) where " +
+                          $"the audit says {dir} must be drawn by the {want} file");
+            }
+
+            return 1;
+        }
+
+        /// <summary>Judge, for the backhoe: one art set, no growth stages.</summary>
+        private static int JudgeBackhoe(List<string> wrong, Dir8 dir, string pose, Sprite s,
+            bool required)
+        {
+            if (s == null)
+            {
+                if (required)
+                {
+                    wrong.Add($"backhoe/{dir} {pose}: no sprite wired");
+                }
+
+                return 0;
+            }
+
+            if (!ParseArtName(s.name, out Dir8 file, out GrowthStage _))
+            {
+                wrong.Add($"backhoe/{dir} {pose}: sprite '{s.name}' does not name a facing");
+                return 1;
+            }
+
+            Dir8 want = FacingManifest.DisplayedBackhoeFacing(dir);
+            if (file != want)
+            {
+                wrong.Add($"backhoe/{dir} {pose}: shows '{s.name}' (a {file} file) where the " +
+                          $"audit says {dir} must be drawn by the {want} file");
+            }
+
+            return 1;
+        }
+
+        /// <summary>Split a generated-art sprite name into the facing its FILE draws and the
+        /// growth stage it belongs to. The names are the source filenames — `trex_SE`,
+        /// `walkA_SE`, `kid_SE`, `baby_walkB_SE`, `rollA_SE` — so the facing is the tail and
+        /// the stage is the `baby_`/`kid_` prefix (no prefix = the adult set; no species
+        /// folder is named "baby" or "kid"). False if it parses as neither.</summary>
+        private static bool ParseArtName(string name, out Dir8 dir, out GrowthStage stage)
+        {
+            dir = Dir8.S;
+            stage = GrowthStage.Big;
+            if (string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+
+            int cut = name.LastIndexOf('_');
+            if (cut < 0 || cut == name.Length - 1)
+            {
+                return false;
+            }
+
+            switch (name.Substring(cut + 1))
+            {
+                case "N": dir = Dir8.N; break;
+                case "NE": dir = Dir8.NE; break;
+                case "E": dir = Dir8.E; break;
+                case "SE": dir = Dir8.SE; break;
+                case "S": dir = Dir8.S; break;
+                case "SW": dir = Dir8.SW; break;
+                case "W": dir = Dir8.W; break;
+                case "NW": dir = Dir8.NW; break;
+                default: return false;
+            }
+
+            if (name.StartsWith("baby_", StringComparison.Ordinal))
+            {
+                stage = GrowthStage.Baby;
+            }
+            else if (name.StartsWith("kid_", StringComparison.Ordinal))
+            {
+                stage = GrowthStage.Kid;
+            }
+
+            return true;
         }
     }
 }

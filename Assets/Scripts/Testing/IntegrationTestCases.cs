@@ -33,6 +33,11 @@ namespace DinoDigger.Testing
                 new TestCase("EightDirFacing",       25f, Case_EightDirFacing),
                 // 8 legs x up to 3 re-drives, each with its own distance-proportional budget.
                 new TestCase("FacingCorrectness",    90f, Case_FacingCorrectness),
+                // The other half of FacingCorrectness: that one proves the compass math and
+                // the array indexing, this one MEASURES the shipped pixels and proves the art
+                // in each slot points the way the slot is named (DinoDigger-3yb). Body:
+                // IntegrationTestCasesTown.cs.
+                new TestCase("FacingArtNotMirrored", 30f, Case_FacingArtNotMirrored),
                 new TestCase("FacingStability",      30f, Case_FacingStability),
                 new TestCase("MoundToDig",           20f, Case_MoundToDig),
                 new TestCase("DirtTileDamage",       20f, Case_DirtTileDamage),
@@ -471,8 +476,12 @@ namespace DinoDigger.Testing
             //
             // IMPORTANT: this can only validate the Dir8 index<->array-slot mapping and the
             // sector math — it has NO way to see which direction the ART actually points.
-            // The bw4 bug was mirrored/mislabeled PNGs (fixed in GeneratedArtImporter), which
-            // is invisible here; that layer needs visual QA, not this test.
+            // The bw4 bug was mirrored/mislabeled PNGs (remapped in GeneratedArtImporter),
+            // which is invisible here. That layer is FacingArtNotMirrored's job: it checks the
+            // sprite wired at every (actor, stage, facing) against the measured audit baked
+            // into FacingManifest.cs. Left to visual QA it went unnoticed for months
+            // (DinoDigger-3yb) — so if you are tempted to extend this case to cover art
+            // handedness, extend that one instead.
             Vector2[] dirs =
             {
                 new Vector2(1f, 0f), new Vector2(0f, 1f),

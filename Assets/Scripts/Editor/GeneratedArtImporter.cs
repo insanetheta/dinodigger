@@ -1937,28 +1937,79 @@ namespace DinoDigger.EditorTools
         // left-side PNGs are EXACT pixel-mirrors of the right-side ones (verified). So
         // the correctly-oriented sprite for any mis-generated facing ALREADY EXISTS as
         // its mirror partner, and we can fix a flipped facing with NO regeneration by
-        // loading its partner file into the slot (a per-actor pair-swap of the compass
-        // horizontal component). The integration FacingCorrectness test cannot detect
-        // this class of bug — it only checks Dir8-index<->array-slot consistency, which
-        // was always correct — which is why diagonals slipped through.
+        // loading its partner file into the slot (a pair-swap of the compass horizontal
+        // component). The integration FacingCorrectness test cannot detect this class of
+        // bug — it only checks Dir8-index<->array-slot consistency, which was always
+        // correct — which is why diagonals slipped through. FacingArtNotMirrored can, and
+        // does: it measures the head's side on the shipped E/W textures.
         //
-        // The table below lists only HIGH-CONFIDENCE flips found by visual audit of the
-        // ADULT idle art (unambiguous landmarks: the backhoe's loader/cab-face, dino
-        // snouts/beaks/frills). Listing only certain cases means the correction can
-        // never REGRESS an already-correct actor; any un-audited/ambiguous facing keeps
-        // its raw filename. Adult strides + backhoe rolls share each facing's handedness
-        // (they are img2img-edited FROM that facing) and are corrected via the same
-        // suffix. Baby/kid stage sets are SEPARATE generations, not yet audited, and are
-        // left on their raw names. The permanent fix is to REGENERATE with the corrected
-        // screen-relative prompt now in generate_sprites.py, after which this table
-        // should be emptied. Keyed by the right-side member (E/SE/NE) of each flipped pair.
-        private static readonly Dictionary<string, HashSet<Dir8>> FlippedFacingPairs =
-            new Dictionary<string, HashSet<Dir8>>
+        // THE TABLE IS PER (ACTOR, GROWTH STAGE, PAIR), and the stage axis is not optional
+        // (DinoDigger-3yb). Each growth stage is its own img2img generation from its own
+        // reference, so handedness does not survive the growth ladder: stegosaurus is drawn
+        // snout-LEFT at E as an adult and as a kid but snout-RIGHT as a baby, and
+        // ankylosaurus is mirrored at E/SE/NE as an adult and a kid but correct at E and NE
+        // as a baby. A per-actor table can only be wrong for two of the three stages — which
+        // it was: the version keyed by actor alone corrected the adults it listed, silently
+        // missed adult stegosaurus E/W entirely, and never reached baby/kid at all because
+        // StagePath indexed Dir8Suffix directly. Adult stegosaurus and kid ankylosaurus
+        // shipped facing backwards for months on the back of that.
+        //
+        // Entries are still only HIGH-CONFIDENCE flips, so the correction can never REGRESS
+        // an already-correct actor; an ambiguous facing keeps its raw filename. What changed
+        // is how "high confidence" is established: it is now a MEASUREMENT, not an eyeball.
+        // Every (actor, stage, facing) was scored on three independent landmarks — the
+        // eye-pair centre against the trunk axis, the eye-parallax sign (turn a head toward
+        // screen-right and the animal's own right side rotates into view, so the BIGGER eye
+        // is drawn to screen-LEFT), and the tail's mid-height reach — over the idle and both
+        // stride frames, and the survivors were confirmed against rendered contact sheets.
+        //
+        // THIS TABLE IS GUARDED, NOT TRUSTED. That measurement's verdict is baked into
+        // Assets/Scripts/Config/FacingManifest.cs, and the FacingArtNotMirrored integration
+        // case walks every (actor, stage, facing) the game wires up and asserts the sprite on
+        // screen comes from the file the manifest says draws that facing. So an entry added
+        // here that the art does not justify, an entry the audit found and this table missed,
+        // and a path helper that never calls FacingSuffix at all (StagePath, which was the
+        // whole of DinoDigger-3yb) all fail the suite. `python3 Tools/verify_facing_art.py
+        // --check` is the offline half: it re-measures the source PNGs and fails if this
+        // table, the manifest, or bake_builder_anchors.FLIPPED_FACINGS has drifted from the
+        // art. Note the guard CANNOT re-measure pixels at runtime — the shipped texture is
+        // 256px tall (the WebGL override in every dino .meta) where the audit needs the
+        // ~800px source, and no pupil survives that downsample — which is why the audit is
+        // baked rather than repeated.
+        //
+        // Strides follow their idle: walkA/walkB are img2img-edited FROM the facing they
+        // belong to, so they share its handedness and resolve through the same suffix (that
+        // is why StridePath consults this table for stage art too, not just for adults).
+        //
+        // The permanent fix is still to REGENERATE with the corrected screen-relative prompt
+        // now in generate_sprites.py, after which this table should be emptied — and any
+        // regen must be followed by `python3 Tools/bake_builder_anchors.py`, whose own copy
+        // of this table (FLIPPED_FACINGS there) must be kept in step.
+        //
+        // Keyed by the right-side member (E/SE/NE) of each flipped pair; the stage key is
+        // AdultStage for the unprefixed adult set, else the <stage> filename prefix.
+        private const string AdultStage = "adult";
+
+        private static readonly Dictionary<(string Folder, string Stage), HashSet<Dir8>>
+            FlippedFacingPairs = new Dictionary<(string, string), HashSet<Dir8>>
             {
-                { "backhoe",      new HashSet<Dir8> { Dir8.SE, Dir8.NE } },
-                { "triceratops",  new HashSet<Dir8> { Dir8.SE } },
-                { "stegosaurus",  new HashSet<Dir8> { Dir8.SE } },
-                { "ankylosaurus", new HashSet<Dir8> { Dir8.E, Dir8.SE, Dir8.NE } },
+                // ---- adult sets (<folder>_<DIR>.png / walkA_<DIR>.png / rollA_<DIR>.png)
+                { ("backhoe",         AdultStage), new HashSet<Dir8> { Dir8.SE, Dir8.NE } },
+                { ("trex",            AdultStage), new HashSet<Dir8> { Dir8.SE } },
+                { ("triceratops",     AdultStage), new HashSet<Dir8> { Dir8.SE } },
+                { ("stegosaurus",     AdultStage), new HashSet<Dir8> { Dir8.E, Dir8.SE } },
+                { ("ankylosaurus",    AdultStage), new HashSet<Dir8> { Dir8.E, Dir8.SE, Dir8.NE } },
+                { ("velociraptor",    AdultStage), new HashSet<Dir8> { Dir8.SE } },
+
+                // ---- kid sets (kid_<DIR>.png / kid_walkA_<DIR>.png)
+                { ("triceratops",     "kid"),      new HashSet<Dir8> { Dir8.SE } },
+                { ("stegosaurus",     "kid"),      new HashSet<Dir8> { Dir8.E, Dir8.SE, Dir8.NE } },
+                { ("ankylosaurus",    "kid"),      new HashSet<Dir8> { Dir8.E, Dir8.SE, Dir8.NE } },
+
+                // ---- baby sets (baby_<DIR>.png / baby_walkA_<DIR>.png)
+                { ("trex",            "baby"),     new HashSet<Dir8> { Dir8.SE } },
+                { ("stegosaurus",     "baby"),     new HashSet<Dir8> { Dir8.SE, Dir8.NE } },
+                { ("ankylosaurus",    "baby"),     new HashSet<Dir8> { Dir8.SE } },
             };
 
         // Horizontal mirror of a Dir8 (flip the E/W component; N/S unchanged).
@@ -1977,13 +2028,16 @@ namespace DinoDigger.EditorTools
             _ => d,
         };
 
-        // Adult-set filename suffix with the bw4 facing correction applied: when this
-        // actor's pair is flagged flipped, resolve to the mirror partner's file so the
-        // slot renders the correct on-screen facing.
-        private static string AdultSuffix(string folder, int dir8)
+        // Filename suffix for ONE (actor, growth stage, facing) with the bw4 facing
+        // correction applied: when that cell's pair is flagged flipped, resolve to the
+        // mirror partner's file so the slot renders the correct on-screen facing. Pass
+        // stage == null for the unprefixed adult set. EVERY path helper goes through here
+        // — the whole of DinoDigger-3yb was StagePath skipping it.
+        private static string FacingSuffix(string folder, string stage, int dir8)
         {
             var d = (Dir8)dir8;
-            if (FlippedFacingPairs.TryGetValue(folder, out HashSet<Dir8> pairs) && pairs.Contains(PairKey(d)))
+            if (FlippedFacingPairs.TryGetValue((folder, stage ?? AdultStage),
+                    out HashSet<Dir8> pairs) && pairs.Contains(PairKey(d)))
             {
                 d = MirrorDir(d);
             }
@@ -2006,12 +2060,12 @@ namespace DinoDigger.EditorTools
 
         private static Sprite LoadSprite(string assetPath) => AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
         private static string GenPath(string rel) => $"{GenRoot}/{rel}.png";
-        private static string CharPath(string folder, int dir8) => $"{GenRoot}/{folder}/{folder}_{AdultSuffix(folder, dir8)}.png";
-        private static string StagePath(string folder, string stage, int dir8) => $"{GenRoot}/{folder}/{stage}_{Dir8Suffix[dir8]}.png";
+        private static string CharPath(string folder, int dir8) => $"{GenRoot}/{folder}/{folder}_{FacingSuffix(folder, null, dir8)}.png";
+        private static string StagePath(string folder, string stage, int dir8) => $"{GenRoot}/{folder}/{stage}_{FacingSuffix(folder, stage, dir8)}.png";
         private static string StridePath(string folder, string stage, string pose, int dir8) =>
             stage == null
-                ? $"{GenRoot}/{folder}/{pose}_{AdultSuffix(folder, dir8)}.png"
-                : $"{GenRoot}/{folder}/{stage}_{pose}_{Dir8Suffix[dir8]}.png";
+                ? $"{GenRoot}/{folder}/{pose}_{FacingSuffix(folder, null, dir8)}.png"
+                : $"{GenRoot}/{folder}/{stage}_{pose}_{FacingSuffix(folder, stage, dir8)}.png";
         private static string Digital(string name) => $"{DigitalAudioDir}/{name}.ogg";
         private static string Iface(string name) => $"{InterfaceDir}/{name}.ogg";
         private static string Impact(string name) => $"{ImpactDir}/{name}.ogg";
