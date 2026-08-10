@@ -812,7 +812,7 @@ namespace DinoDigger.Overworld
                 return;
             }
 
-            BuilderPropAnchor a = BuilderPropAnchors.Get(Type, _facing);
+            BuilderPropAnchor a = BuilderPropAnchors.Get(Type, Stage, _facing);
             Bounds b = _renderer.bounds;                 // world bounds INCLUDE stage scale
             bool flip = FacesWest(_facing);
 
@@ -856,7 +856,7 @@ namespace DinoDigger.Overworld
                 return;
             }
 
-            BuilderPropAnchor a = BuilderPropAnchors.Get(Type, _facing);
+            BuilderPropAnchor a = BuilderPropAnchors.Get(Type, Stage, _facing);
             Bounds b = _renderer.bounds;
             bool flip = a.FrontX < 0.5f;                 // placed on the left half -> point left
 

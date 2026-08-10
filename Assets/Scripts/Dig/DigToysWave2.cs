@@ -659,15 +659,26 @@ namespace DinoDigger.Dig
             go.transform.position = at + new Vector3(0f, 0.15f, 0f);
 
             var sr = go.AddComponent<SpriteRenderer>();
-            // Placeholder art (see the follow-up art bead): the star particle sprite is a small
-            // bright blob, which is exactly what a glowbug should look like from across a pit.
-            sr.sprite = _lib != null && _lib.StarParticle != null ? _lib.StarParticle : null;
-            if (sr.sprite == null && _lib != null)
+
+            // A THING THAT PAYS A COIN MUST NOT LOOK LIKE THE COIN (DinoDigger-n05). This drew
+            // on the STAR PARTICLE, so the one creature in the pit read as loot — and a toddler
+            // learns what a tap means from what the thing looks like, so a star that has to be
+            // chased teaches "chase the treasure" instead of "catch the bug". The real art is a
+            // round green glowbug with legs; the star stays only as the never-invisible
+            // fallback, and it is the only rung of this chain that can lie.
+            bool realArt = _lib != null && _lib.CritterGlowbug != null;
+            if (realArt)
             {
-                sr.sprite = _lib.Treasure(0);
+                sr.sprite = _lib.CritterGlowbug;
+            }
+            else if (_lib != null)
+            {
+                sr.sprite = _lib.StarParticle != null ? _lib.StarParticle : _lib.Treasure(0);
             }
 
-            sr.color = new Color(0.85f, 1f, 0.45f);
+            // Real art is shown as painted; only the fallback blob needs the glowbug's colour
+            // pushed onto it.
+            sr.color = realArt ? Color.white : new Color(0.85f, 1f, 0.45f);
             sr.sortingOrder = 14; // above tiles, peeks and the ladder
 
             if (sr.sprite != null && sr.sprite.bounds.size.y > 0.001f)

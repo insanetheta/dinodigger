@@ -146,6 +146,56 @@ namespace DinoDigger.EditorTools
             }
         }
 
+        // THE WAY DOWN (DinoDigger-n05). The descent is the one dig beat that can only be judged
+        // by eye — the question it has to answer is "does this read as going DOWN?", and the
+        // shipped answer was "no, it reads as night falling on the same hole". Reaching it
+        // through play took ~60% of a board cleared, which is far too much friction for a
+        // flourish that has to be watched a dozen times while it is tuned.
+        [MenuItem(Menu + "Offer Ladder Down")]
+        public static void OfferLadderDown()
+        {
+            var dig = ActiveDig("Offer Ladder Down");
+            if (dig == null)
+            {
+                return;
+            }
+
+            if (dig.DemoOfferLadder())
+            {
+                Debug.Log("[Demo/Dig] The way down is standing in the pit — the wooden ladder " +
+                          "with the chevron nodding under it. Tap it, or use Descend One Layer.");
+            }
+            else
+            {
+                Debug.LogWarning("[Demo/Dig] No ladder offered: the board may have no empty cell " +
+                                 "yet (collapse a column first), or this is already the deepest " +
+                                 "layer / a mega-fossil site, which never offer one.");
+            }
+        }
+
+        [MenuItem(Menu + "Descend One Layer")]
+        public static void DescendOneLayer()
+        {
+            var dig = ActiveDig("Descend One Layer");
+            if (dig == null)
+            {
+                return;
+            }
+
+            int from = dig.DemoLayer;
+            if (dig.DemoDescend())
+            {
+                Debug.Log($"[Demo/Dig] Descending from layer {from} — watch the ladder climb away " +
+                          "above, the strata stream up past the frame and the dirt puff at its " +
+                          "foot while the camera dips.");
+            }
+            else
+            {
+                Debug.LogWarning($"[Demo/Dig] No descent from layer {from} — a layer is a one-way " +
+                                 "door and the deepest stratum has no door at all.");
+            }
+        }
+
         [MenuItem(Menu + "Slow Motion 0.25x")]
         public static void SlowMotion()
         {

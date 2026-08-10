@@ -2359,5 +2359,322 @@ namespace DinoDigger.Testing
         }
 
         private static string Join(List<int> xs) => string.Join(",", xs);
+
+        // ======================================= builder-anchor drift guard (DinoDigger-rip)
+
+        // Alpha cut + hand geometry — one-for-one with Tools/bake_builder_anchors.py.
+        // Any change to those constants must be mirrored here or this case will cry wolf.
+        // The HEAD band depth is deliberately NOT duplicated here: it is read per anchor from
+        // the baked table (see below), because re-deriving it is what made this case flaky.
+        private const float AnchorAlphaCut = 8f / 255f;
+        private const float AnchorFrontRow = 0.45f;
+        private const float AnchorNsFront = 0.28f;
+
+        // TOLERANCE, DERIVED FROM AN UNDERSTOOD MECHANISM — NOT WIDENED UNTIL QUIET.
+        //
+        // Two rasters are involved: the baker measures the source PNGs (~790px tall), this
+        // case measures the texture Unity actually ships, downsampled to 256px tall. Both
+        // read the same file — that was checked, not assumed: for the cell that first failed
+        // here (stegosaurus Kid/W) kid_W.png is the pixel-exact mirror of kid_E.png, and
+        // GeneratedArtImporter.StagePath and the baker both resolve Kid/W to it.
+        //
+        // The disagreement was the head band landing on a DISCONTINUITY. The span is a step
+        // function of band depth wherever the art has a horizontal edge near the crown: a
+        // stegosaurus' back plates all start on one scanline, so its span jumps 0.291 -> 0.366
+        // between two adjacent rows. `round(bh * depth)` then picks row 85 on the source and
+        // the equivalent of row 84 on the 256px texture, and the two straddle the step. That
+        // is the whole of the 0.296-vs-0.366 the gate reported: not noise, not a wrong file,
+        // an ill-conditioned measurement.
+        //
+        // Two changes fix it at the source, both in Tools/bake_builder_anchors.py: the baker
+        // nudges its band off any depth with a step in the window the rasters share (17 of
+        // 216 anchors move, by at most 0.006 of depth), and it SHIPS the depth it settled on
+        // as BuilderPropAnchor.HeadBand so this case measures the same band rather than
+        // re-deriving it. After both, the worst step under any shipped band is 0.015 and a
+        // simulated 256px re-measure sits within 0.0154 of the baked HeadW (median 0.0029)
+        // and 0.0039 of HeadCx.
+        //
+        // Budget: 0.015 (worst residual step) + ~0.008 (resampling and alpha threshold)
+        // ~= 0.023, rounded up for margin because the offline simulation is not Unity's exact
+        // filter. Still ~4x under the 0.13-0.43 drift that detached the gear in DinoDigger-rip,
+        // which is the failure this case exists to catch.
+        private const float AnchorTol = 0.035f;
+
+        /// <summary>REGRESSION GUARD for DinoDigger-rip. BuilderPropAnchors.cs is baked from
+        /// sprite PIXELS by Tools/bake_builder_anchors.py, so re-slicing dino art silently
+        /// invalidates it — which is exactly how the builders ended up wearing their hard hats
+        /// a body-width off their heads. This case closes that loop from the other side: it
+        /// re-measures the LIVE sprites a builder would actually display (the same
+        /// idle+walkA+walkB union, through the very sprite arrays DinoController renders, so
+        /// the bw4 flip remap and the stage sets are exercised as wired) and fails loudly with
+        /// the drift if the shipped table no longer matches the art.
+        ///
+        /// Sampling: every species x every growth stage, one facing each on a rotating stride
+        /// so the whole table is covered over the matrix, PLUS the four historically fragile
+        /// (species, stage, facing) triples pinned outright. Reading all 216 would mean ~650
+        /// GPU read-backs; this keeps the case inside its budget while leaving nowhere for a
+        /// re-slice to hide for long.</summary>
+        private IEnumerator Case_BuilderAnchorsMatchArt(TestContext ctx)
+        {
+            GameConfig cfg = ctx.GM != null ? ctx.GM.TestConfig : null;
+            ctx.Assert(cfg != null, "no GameConfig — cannot reach the dino definitions");
+
+            var samples = new List<(DinoType, GrowthStage, Dir8)>();
+            var stages = new[] { GrowthStage.Baby, GrowthStage.Kid, GrowthStage.Big };
+            int spin = 0;
+            for (int t = 0; t < 9; t++)
+            {
+                foreach (GrowthStage st in stages)
+                {
+                    // 3 and 8 are coprime, so the facing advances through all 8 over the matrix.
+                    samples.Add(((DinoType)t, st, (Dir8)(spin % 8)));
+                    spin += 3;
+                }
+            }
+
+            // The known-fragile ones, pinned so they are never left to the rotation:
+            // ankylosaurus rides the bw4 flip remap on E/SE/NE, stegosaurus SE drifted the
+            // furthest of any adult facing (0.21 world units), and the crested species are
+            // where the head band is hardest to measure.
+            samples.Add((DinoType.Ankylosaurus, GrowthStage.Big, Dir8.E));
+            samples.Add((DinoType.Stegosaurus, GrowthStage.Big, Dir8.SE));
+            samples.Add((DinoType.Parasaurolophus, GrowthStage.Kid, Dir8.N));
+            samples.Add((DinoType.Triceratops, GrowthStage.Baby, Dir8.E));
+
+            var drifts = new List<string>();
+            int measured = 0;
+            float worst = 0f;
+
+            foreach ((DinoType type, GrowthStage stage, Dir8 dir) in samples)
+            {
+                DinoDefinition def = cfg.GetDino(type);
+                if (def == null)
+                {
+                    continue;
+                }
+
+                Sprite idle = Direction8.Pick(def.StageSprites(stage), dir, null);
+                Sprite a = Direction8.Pick(def.StrideSprites(stage, 0), dir, null);
+                Sprite b = Direction8.Pick(def.StrideSprites(stage, 1), dir, null);
+                if (idle == null || a == null || b == null)
+                {
+                    continue; // stage art not generated for this species: nothing to guard
+                }
+
+                BuilderPropAnchor baked = BuilderPropAnchors.Get(type, stage, dir);
+                if (!MeasureAnchor(idle, a, b, dir, baked.HeadBand, out float headCx,
+                        out float headW, out float frontX))
+                {
+                    continue; // fully transparent read-back (headless/GPU-less run)
+                }
+
+                measured++;
+                worst = Mathf.Max(worst,
+                    Check(drifts, type, stage, dir, "HeadCx", baked.HeadCx, headCx),
+                    Mathf.Max(Check(drifts, type, stage, dir, "HeadW", baked.HeadW, headW),
+                        Check(drifts, type, stage, dir, "FrontX", baked.FrontX, frontX)));
+
+                yield return null; // spread the read-backs over frames
+            }
+
+            ctx.Assert(measured >= samples.Count / 2,
+                $"only {measured}/{samples.Count} builder-anchor samples could be measured — " +
+                "the dino sprite sets look unwired, so this guard proved nothing");
+
+            ctx.Assert(drifts.Count == 0,
+                $"BuilderPropAnchors.cs no longer matches the dino art ({drifts.Count} anchors " +
+                $"further than {AnchorTol:0.###} of the sprite width from the live pixels). " +
+                "The hard hats and mallets will hover off the crew. Re-bake with " +
+                "`python3 Tools/bake_builder_anchors.py`. Worst offenders: " +
+                string.Join("; ", drifts.GetRange(0, Mathf.Min(6, drifts.Count))));
+
+            ctx.Log($"builder anchors verified against live art: {measured} facings, " +
+                    $"max drift {worst:0.000} (tolerance {AnchorTol:0.###})");
+        }
+
+        /// <summary>Record an out-of-tolerance anchor; returns the absolute drift either way
+        /// so the case can report the worst it saw even on a clean run.</summary>
+        private static float Check(List<string> drifts, DinoType type, GrowthStage stage,
+            Dir8 dir, string field, float baked, float live)
+        {
+            float d = live - baked;
+            if (Mathf.Abs(d) > AnchorTol)
+            {
+                drifts.Add($"{type}/{stage}/{dir} {field} baked {baked:0.000} " +
+                           $"live {live:0.000} (drift {d:+0.000;-0.000})");
+            }
+
+            return Mathf.Abs(d);
+        }
+
+        /// <summary>Re-derive one (species, stage, facing) anchor from the pixels of the three
+        /// frames that share its canvas, in the SAME terms BuilderPropAnchors stores: fractions
+        /// of the full sprite canvas, which is what SpriteRenderer.bounds spans for these
+        /// FullRect sprites. Returns false when the read-back comes up empty.</summary>
+        private static bool MeasureAnchor(Sprite idle, Sprite a, Sprite b, Dir8 dir,
+            float headBand, out float headCx, out float headW, out float frontX)
+        {
+            headCx = headW = frontX = 0f;
+
+            bool[] mask = UnionAlpha(idle, a, b, out int w, out int h);
+            if (mask == null)
+            {
+                return false;
+            }
+
+            // Bounding box of the union. Row 0 is the TOP of the sprite (ReadPixels hands
+            // back bottom-up rows, and UnionAlpha flips them on the way in).
+            int x0 = w, x1 = -1, y0 = h, y1 = -1;
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (!mask[y * w + x])
+                    {
+                        continue;
+                    }
+
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+            }
+
+            if (x1 < x0 || y1 < y0)
+            {
+                return false;
+            }
+
+            int bh = y1 - y0 + 1;
+            int bw = x1 - x0 + 1;
+
+            // Head span over the band the BAKER recorded — not one re-derived here. See the
+            // tolerance note above: re-deciding the depth is what made this case flaky.
+            int rows = Mathf.Max(1, Mathf.RoundToInt(bh * headBand));
+            int hl = w, hr = -1;
+            for (int y = y0; y < y0 + rows && y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (!mask[y * w + x])
+                    {
+                        continue;
+                    }
+
+                    if (x < hl) hl = x;
+                    if (x > hr) hr = x;
+                }
+            }
+
+            if (hr < hl)
+            {
+                return false;
+            }
+
+            headCx = (hl + hr + 1) * 0.5f / w;
+            headW = (hr - hl + 1) / (float)w;
+
+            // Hand: the facing-side extreme on the 45%-down scanline; N/S park at a fixed
+            // fraction of the box because neither faces left or right.
+            bool east = dir == Dir8.E || dir == Dir8.NE || dir == Dir8.SE;
+            bool west = dir == Dir8.W || dir == Dir8.NW || dir == Dir8.SW;
+            if (!east && !west)
+            {
+                float f = dir == Dir8.N ? AnchorNsFront : 1f - AnchorNsFront;
+                frontX = (x0 + f * bw) / w;
+                return true;
+            }
+
+            int row = Mathf.Clamp(y0 + Mathf.RoundToInt(AnchorFrontRow * bh), 0, h - 1);
+            int lo = w, hi = -1;
+            for (int x = 0; x < w; x++)
+            {
+                if (!mask[row * w + x])
+                {
+                    continue;
+                }
+
+                if (x < lo) lo = x;
+                if (x > hi) hi = x;
+            }
+
+            if (hi < lo)
+            {
+                frontX = east ? (x1 + 1) / (float)w : x0 / (float)w;
+                return true;
+            }
+
+            frontX = east ? (hi + 1) / (float)w : lo / (float)w;
+            return true;
+        }
+
+        /// <summary>OR of the opaque masks of three same-canvas frames, top row first.
+        /// The dino textures ship non-readable and compressed, so the pixels come back via a
+        /// RenderTexture blit rather than GetPixels — that path works on any import setting.</summary>
+        private static bool[] UnionAlpha(Sprite s0, Sprite s1, Sprite s2, out int w, out int h)
+        {
+            w = h = 0;
+            bool[] acc = null;
+            foreach (Sprite s in new[] { s0, s1, s2 })
+            {
+                Texture2D src = s.texture;
+                if (src == null)
+                {
+                    return null;
+                }
+
+                if (acc == null)
+                {
+                    w = src.width;
+                    h = src.height;
+                    acc = new bool[w * h];
+                }
+                else if (src.width != w || src.height != h)
+                {
+                    // A facing's three frames MUST share one union box (slice_sprites.py);
+                    // if they no longer do, the art is broken in a way this case can't judge.
+                    return null;
+                }
+
+                RenderTexture rt = RenderTexture.GetTemporary(
+                    w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+                RenderTexture prev = RenderTexture.active;
+                Texture2D readback = null;
+                try
+                {
+                    Graphics.Blit(src, rt);
+                    RenderTexture.active = rt;
+                    readback = new Texture2D(w, h, TextureFormat.RGBA32, false);
+                    readback.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                    readback.Apply(false);
+
+                    Color32[] px = readback.GetPixels32();
+                    for (int y = 0; y < h; y++)
+                    {
+                        int srcRow = (h - 1 - y) * w;   // ReadPixels is bottom-up
+                        int dstRow = y * w;
+                        for (int x = 0; x < w; x++)
+                        {
+                            if (px[srcRow + x].a > AnchorAlphaCut * 255f)
+                            {
+                                acc[dstRow + x] = true;
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    RenderTexture.active = prev;
+                    RenderTexture.ReleaseTemporary(rt);
+                    if (readback != null)
+                    {
+                        Destroy(readback);
+                    }
+                }
+            }
+
+            return acc;
+        }
     }
 }

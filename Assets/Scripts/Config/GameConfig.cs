@@ -319,12 +319,19 @@ namespace DinoDigger.Config
         public float DigLadderRevealFraction = 0.6f;
 
         [Tooltip("Colour MULTIPLY applied to the dirt tiles for each layer below the first. " +
-                 "Deliberately a cool shade rather than a black: deep must read as older and " +
-                 "quieter, never as dark-and-scary (that is also why Glow ships with it).")]
-        public Color DigDeepDirtMultiply = new Color(0.62f, 0.63f, 0.78f, 1f);
+                 "WARMER and darker, never cooler: red is held high and blue is pulled down, so " +
+                 "deep reads as richer older EARTH. The first version of this multiply raised " +
+                 "blue above red and green (0.62, 0.63, 0.78), which is the colour shift of " +
+                 "dusk — the deep layer read as NIGHT FALLING on the same dig rather than as a " +
+                 "different depth (DinoDigger-n05). Still a multiply and never a black: deep " +
+                 "must be older and quieter, never dark-and-scary (that is also why Glow ships " +
+                 "with it).")]
+        public Color DigDeepDirtMultiply = new Color(0.78f, 0.60f, 0.42f, 1f);
 
-        [Tooltip("Colour MULTIPLY applied to the dig backdrop for each layer below the first.")]
-        public Color DigDeepBackgroundMultiply = new Color(0.52f, 0.55f, 0.72f, 1f);
+        [Tooltip("Colour MULTIPLY applied to the dig backdrop for each layer below the first. " +
+                 "Warm like the dirt and a shade deeper, so the pit wall recedes BEHIND the " +
+                 "tiles instead of competing with them.")]
+        public Color DigDeepBackgroundMultiply = new Color(0.62f, 0.44f, 0.30f, 1f);
 
         [Tooltip("Added to every tile's rolled hardness per layer below the first (clamped to " +
                  "a sane 1..6). Deeper dirt is older dirt.")]

@@ -97,6 +97,25 @@ RECOLOR = (
     f"{PROP_STYLE}Solid flat magenta #FF00FF background."
 )
 
+# The CREATURE style, for the one thing in this file that is ALIVE (the glowbug).
+# PROP_STYLE's whole job is to strip character cues; a critter needs them back, so
+# this is generate_sprites.STYLE's cute-eyes wording plus the same single-object pin
+# and no-shadow clause the props are held to.
+CREATURE_STYLE = (
+    "Chunky toddler-friendly cartoon creature for a preschool game. Thick bold dark "
+    "outlines (heavy uniform black outline all the way around the silhouette), bright "
+    "saturated colors, soft simple cel shading, rounded friendly chubby shapes, big "
+    "cute expressive eyes, adorable and cheerful. Flat 2D game sprite look. Absolutely "
+    "no text, no letters, no numbers, no words, no logos, no watermark. EXACTLY ONE "
+    "single creature centered in the frame - one creature only, not a set, not a row, "
+    "no duplicates, no smaller copies, no extra props of any kind anywhere in the "
+    "image. The entire background must be a single solid flat pure magenta color "
+    "#FF00FF (RGB 255,0,255) with nothing else on it, no gradient, no vignette. The "
+    "subject casts NO shadow at all: no drop shadow, no ground shadow, no contact "
+    "shadow - the area directly under and around the subject is pure flat magenta "
+    "with nothing on it. "
+)
+
 SPECS = {
     # --- crystals: one neutral master, then three 1-hop recolors ---------------
     "dig_crystal_master": dict(
@@ -196,6 +215,106 @@ SPECS = {
                 f"sparkles, no ground, no smoke wisps. "
                 f"Solid flat magenta #FF00FF background."),
         out="dust_thump"),
+
+    # --- the ladder down + its "down" affordance (DinoDigger-n05) --------------
+    # The ladder was shipping on the town's striped BARRIER SIGN as a placeholder,
+    # which reads as "do not enter" — the exact opposite of the one thing it means.
+    # PROMPT SCARS: "ladder going down into a hole" drew a whole ISOMETRIC SCENE
+    # (dirt bank, sky, grass) instead of a prop, so the framing is pinned to a flat
+    # front-on prop with nothing around it. "Rungs" alone drew a thin lattice that
+    # vanished at tile size, hence the explicit fat-rails / few-rungs count.
+    "dig_prop_ladder_down": dict(
+        prompt=(f"Generate an image. {PROP_STYLE}{READS_SMALL}"
+                f"Draw ONE chunky wooden LADDER seen flat from the front, standing "
+                f"upright and filling the frame top to bottom. It has exactly TWO very "
+                f"thick rounded vertical side rails made of warm honey-brown timber with "
+                f"simple wood-grain shading, and exactly FOUR fat chunky horizontal rungs "
+                f"evenly spaced between them, each rung a rounded wooden bar. The top of "
+                f"each rail is a rounded cap. It is a solid toy-playset ladder: fat, "
+                f"stubby and friendly, NOT thin, NOT tall and skinny, NOT a lattice. "
+                f"CRITICAL FRAMING: this is a single cut-out PROP on flat magenta - there "
+                f"is NO ground, NO hole, NO pit, NO dirt, NO wall, NO sky, NO grass, NO "
+                f"scenery, NO scene, NO perspective floor, nothing behind or beside the "
+                f"ladder at all. Just the ladder shape alone. "
+                f"Solid flat magenta #FF00FF background."),
+        out="prop_ladder_down"),
+
+    # The affordance the ladder alone cannot carry: a fat chevron the runtime bobs
+    # DOWNWARD under the prop, so "this takes you deeper" is legible with no words.
+    # Drawn as a solid chevron rather than a full arrow so it never reads as a UI
+    # button or a letter V.
+    "dig_prop_arrow_down": dict(
+        prompt=(f"Generate an image. {PROP_STYLE}{READS_SMALL}"
+                f"Draw ONE fat chunky CHEVRON STROKE pointing straight DOWN and nothing "
+                f"else. Picture a single thick rounded BAR, like a fat crayon stroke, "
+                f"bent once in the middle into a wide shallow V so that the bend points "
+                f"DOWNWARD at the bottom center and the two ends rise up to the left and "
+                f"right. The bar has a constant chunky thickness along its whole length "
+                f"and both ends are cut off with rounded caps. It is clearly wider than "
+                f"it is tall. Bright warm cream-yellow and pale gold with a thick dark "
+                f"outline all the way around the bar and one lighter highlight along its "
+                f"top edge. "
+                f"CRITICAL: it is a BENT BAR, not a filled shape - the whole area ABOVE "
+                f"the bar, BELOW the bar and INSIDE the V is empty flat magenta showing "
+                f"through. It is NOT a solid triangle, NOT a shield, NOT a pentagon, NOT "
+                f"a badge, NOT a plaque, NOT a banner, NOT a filled arrowhead, NOT a "
+                f"heart. Exactly ONE bar - not two, not three, not a stack, no second "
+                f"smaller chevron, no arrow shaft, no tail, no circle, no button, no "
+                f"ring, no border, no box behind it, no text. "
+                f"Solid flat magenta #FF00FF background."),
+        out="prop_arrow_down"),
+
+    # --- the catchable glowbug (DinoDigger-n05) --------------------------------
+    # It was drawing on the STAR PARTICLE, which reads as loot; a thing that PAYS a
+    # coin must not look like the coin. So: unmistakably ALIVE — round bug body,
+    # little legs, a glowing tail lamp — and green, never gold.
+    "dig_critter_glowbug": dict(
+        prompt=(f"Generate an image. {CREATURE_STYLE}{READS_SMALL}"
+                f"Draw ONE adorable chubby cartoon GLOWBUG (a firefly beetle) seen from "
+                f"the side-front, drawn LARGE and centered so it fills most of the frame. "
+                f"It has one fat round ball-shaped body in bright fresh lime-green and "
+                f"apple-green with a soft cel-shaded belly, two big round friendly eyes "
+                f"with white sparkle dots and a tiny happy smile, two short stubby "
+                f"antennae with round tips, and THREE tiny stubby legs along the bottom "
+                f"so it clearly reads as a living bug. At its back end is a round "
+                f"lantern-tail: a SOLID flat pale butter-yellow dome with its own thick "
+                f"dark outline all the way around it, like a little glowing bulb. Two "
+                f"small rounded mint-green wings sit on its back, each with a thick dark "
+                f"outline. "
+                f"CRITICAL: every part is SOLID and fully opaque with a hard dark outline. "
+                f"There is NO soft glow, NO halo, NO aura, NO haze, NO blur, NO fog, NO "
+                f"see-through or semi-transparent parts, NO light rays and NO coloured "
+                f"mist around the bug - the magenta comes right up to the outline "
+                f"everywhere. "
+                f"CRITICAL: it must NOT look like treasure or a collectible - there is NO "
+                f"star shape, NO star points, NO gem, NO coin, NO jewel, NO crystal, NO "
+                f"gold, NO crown, NO sparkle stars floating around it. It is a cute round "
+                f"bug. Everything is one single connected creature. "
+                f"Solid flat magenta #FF00FF background."),
+        out="critter_glowbug"),
+
+    # --- Glow the lantern bot (DinoDigger-n05) --------------------------------
+    # THE actual object in Greg's screenshots: with no art wired, DigGlow fell back
+    # to lib.StarParticle, so the child saw a giant smiley STAR perched off the edge
+    # of the pit with the (mound-sprite) charge gauge stretched under it. Same family
+    # as machines/doodle|sprinkles|tuggy: a face, a bottom-heavy chassis, one job.
+    "machine_glow": dict(
+        prompt=(f"Generate an image. {CREATURE_STYLE}{READS_SMALL}"
+                f"Draw ONE cute little cartoon LANTERN ROBOT for a preschool game, seen "
+                f"from the front, standing still. It is a small squat robot whose whole "
+                f"BODY is a chunky rounded old-fashioned camping lantern: a fat rounded "
+                f"glass lamp housing in the middle glowing warm honey-yellow, a chunky "
+                f"teal-blue metal cap on top with a rounded carry handle arching over it, "
+                f"and a chunky teal-blue metal base underneath standing on two short "
+                f"stubby rounded feet. Two big round friendly cartoon eyes with white "
+                f"sparkle dots and a small happy smile sit on the glowing lamp glass. Two "
+                f"short stubby rounded arms stick out at its sides. A soft creamy-yellow "
+                f"glow hugs the lamp housing. "
+                f"CRITICAL: exactly one robot, standing upright, bottom-heavy and stable. "
+                f"NO star shape, NO star points, NO light beam, NO rays, NO lightning "
+                f"bolt, NO wheels, NO hat, NO scenery, NO ground. "
+                f"Solid flat magenta #FF00FF background."),
+        out="glow", dir="machines"),
 }
 
 ORDER = list(SPECS)
@@ -254,8 +373,11 @@ def slice_one(name: str, pad: int = 8) -> str | None:
     img = S.clear_magenta_pockets(img)          # wide-magenta fallback
     img = S.trim(img, pad)
     img = neutralize(img)
-    os.makedirs(OUT, exist_ok=True)
-    out = os.path.join(OUT, f"{spec['out']}.png")
+    # Almost everything here is a dig prop; a spec may name a different Generated/
+    # subfolder (Glow the lantern bot belongs with the other machine friends).
+    outdir = os.path.join(REPO, "Assets", "Art", "Generated", spec.get("dir", "dig"))
+    os.makedirs(outdir, exist_ok=True)
+    out = os.path.join(outdir, f"{spec['out']}.png")
     img.save(out)
     print(f"       {out}  ({img.width}x{img.height})")
     return out

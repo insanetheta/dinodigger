@@ -89,6 +89,10 @@ namespace DinoDigger.Testing
                 new TestCase("TapPriorityOverlap",    40f, Case_TapPriorityOverlap),
                 new TestCase("PriceCurveOrdersBuilds", 90f, Case_PriceCurveOrdersBuilds),
                 new TestCase("BigDinoBuildsFaster",    45f, Case_BigDinoBuildsFaster),
+                // Re-measures live dino sprites against the baked hard-hat/mallet anchors,
+                // so a dino-art re-slice can never again leave the crew's gear floating
+                // (DinoDigger-rip). Body: IntegrationTestCasesTown.cs.
+                new TestCase("BuilderAnchorsMatchArt", 40f, Case_BuilderAnchorsMatchArt),
                 new TestCase("FruitStandSellsSurplus", 40f, Case_FruitStandSellsSurplus),
                 new TestCase("SnackBuilders",         45f, Case_SnackBuilders),
                 new TestCase("RecessTime",            45f, Case_RecessTime),

@@ -145,12 +145,19 @@ namespace DinoDigger.Dig
             var body = bodyGo.AddComponent<SpriteRenderer>();
             body.sortingOrder = MachineFriend.MachineSorting;
 
-            // PLACEHOLDER ART (see the follow-up art bead): the star particle is a round bright
-            // blob, which is a lantern from across a pit. Null-tolerant all the way down.
-            Sprite art = _lib != null ? _lib.StarParticle : null;
+            // THIS IS THE BUG GREG FOUND (DinoDigger-n05). With no art wired this drew on the
+            // STAR PARTICLE — so what a child actually saw, perched off the right-hand edge of
+            // the pit next to the dig crew, was a giant gold smiley STAR with the (mound-sprite)
+            // charge gauge stretched into a little dirt pile under it: an unexplained,
+            // collectible-looking object sitting outside the board. Glow now loads its own
+            // lantern-bot art through the same typed roster slot its three cousins use.
+            //
+            // The fallback chain is kept (a friend must never become an invisible hole in the
+            // world) but it is now the LAST resort rather than the shipped look.
+            Sprite art = _lib != null ? _lib.Machine((int)MachineKind.Glow) : null;
             if (art == null && _lib != null)
             {
-                art = _lib.MoundSprite;
+                art = _lib.StarParticle != null ? _lib.StarParticle : _lib.MoundSprite;
             }
 
             body.sprite = art;
@@ -169,7 +176,11 @@ namespace DinoDigger.Dig
             _glow = go.AddComponent<GlowBot>();
             _glow.BuildOverlays(_lib, body, GlowBot.BodyHeight, sparkle);
             _glow.Attach(this);
-            _glow.Configure(Machines, _config, _lib, GlowBot.LanternTint, awake);
+            // Real art is shown as painted (MachineFriend's own convention: white for imported
+            // art, the machine's signature colour only when it is running on the blob fallback).
+            _glow.Configure(Machines, _config, _lib,
+                art != null && _lib != null && _lib.MachineGlow == art ? Color.white : GlowBot.LanternTint,
+                awake);
 
             if (awake)
             {

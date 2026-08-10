@@ -263,9 +263,8 @@ namespace DinoDigger.Dig
             return false;
         }
 
-        /// <summary>Build the ladder prop. Placeholder art on purpose (see the follow-up art
-        /// bead): the striped construction sign reads as a built wooden thing, and every lookup
-        /// falls through to something visible rather than leaving an invisible tap target.</summary>
+        /// <summary>Build the ladder prop. Every lookup falls through to something visible
+        /// rather than leaving an invisible tap target (see <see cref="LadderSprite"/>).</summary>
         private void SpawnLadder(int row, int col)
         {
             var go = new GameObject("DigLadder");
@@ -275,7 +274,13 @@ namespace DinoDigger.Dig
             var sr = go.AddComponent<SpriteRenderer>();
             sr.sprite = LadderSprite();
             sr.sortingOrder = 12; // above the tiles (10) and their peeks (11)
-            sr.color = new Color(1f, 0.86f, 0.45f);
+
+            // REAL ART IS SHOWN AS PAINTED; only a fallback gets tinted. The old flat gold
+            // multiply existed to make the striped barrier sign read as timber, and left on the
+            // real ladder it would flatten the wood grain into one yellow slab.
+            sr.color = _lib != null && _lib.LadderDown != null
+                ? Color.white
+                : new Color(1f, 0.86f, 0.45f);
 
             // Sized to a cell and a half: a ladder is the biggest, friendliest thing in the pit
             // for the moment it is on screen, because it is the only thing the child must find.
@@ -299,8 +304,15 @@ namespace DinoDigger.Dig
             GameManager.Instance?.Audio?.Chime();
         }
 
-        /// <summary>Art for the ladder: the striped barrier sign, else the mound blob, else the
-        /// dirt sprite. Never null on a library that has any art at all.</summary>
+        /// <summary>Art for the ladder: the real wooden ladder prop, else the striped barrier
+        /// sign, else the dirt sprite. Never null on a library that has any art at all.
+        ///
+        /// THE FALLBACK CHAIN IS DELIBERATELY LOOT-FREE (DinoDigger-n05). The old chain ended
+        /// at the MOUND sprite, which is the sprite this game uses for a dig site and for every
+        /// machine's charge gauge — i.e. it made the way down look like a thing to collect. A
+        /// toddler learns what a tap means from what the thing LOOKS like, so the rule here is
+        /// that every rung of this chain must read as built scenery: a ladder, a barrier, or
+        /// plain dirt. Nothing that glitters, nothing that could be picked up.</summary>
         private Sprite LadderSprite()
         {
             if (_lib == null)
@@ -308,12 +320,12 @@ namespace DinoDigger.Dig
                 return null;
             }
 
-            if (_lib.ConstructionSign != null)
+            if (_lib.LadderDown != null)
             {
-                return _lib.ConstructionSign;
+                return _lib.LadderDown;
             }
 
-            return _lib.MoundSprite != null ? _lib.MoundSprite : _lib.Dirt(0);
+            return _lib.ConstructionSign != null ? _lib.ConstructionSign : _lib.Dirt(0);
         }
 
         /// <summary>Take the ladder down (the tap handler, and the test hook's entry point).
@@ -339,6 +351,10 @@ namespace DinoDigger.Dig
 
             _descendFromLayer = _layer;
             _descending = true;
+
+            // Where the way down WAS, captured before the prop goes: every descent cue is
+            // staged around that point, and RemoveLadder is about to null it.
+            Vector3 ladderAt = _ladder != null ? _ladder.transform.position : CellPosition(_rows - 1, _cols / 2);
             RemoveLadder();
 
             GameManager gm = GameManager.Instance;
@@ -348,6 +364,8 @@ namespace DinoDigger.Dig
             float seconds = _config != null ? Mathf.Clamp(_config.DigLadderDipSeconds, 0f, 3f) : 0.6f;
             float units = _config != null ? Mathf.Clamp(_config.DigLadderDipUnits, 0f, 6f) : 1.6f;
 
+            PlayDescentCues(ladderAt, units, seconds);
+
             if (gm != null)
             {
                 gm.DigDipCamera(units, seconds, () => BuildDeeperLayer(gen));
@@ -356,6 +374,170 @@ namespace DinoDigger.Dig
             {
                 BuildDeeperLayer(gen);
             }
+        }
+
+        // ---------------------------------------------------- the descent, made legible
+        // THE CAMERA DIP ALONE WAS NOT ENOUGH (DinoDigger-n05). A dip moves the frame, but if
+        // everything inside the frame moves with it there is no parallax and therefore no
+        // evidence of travel — the child just saw the picture get darker and read it as NIGHT
+        // FALLING, not as going down. Depth has to be shown by things passing the other way, so
+        // three cues run against the dip, none of which the descent depends on:
+        //
+        //   THE LADDER STAYS PUT while the world drops — a ghost copy of the prop that rises out
+        //     of frame. It is the one object the child was looking at, so it is the one whose
+        //     motion they will read, and a ladder receding UPWARD can only mean "we went down".
+        //   STRATA SLIDE UP past the frame: bands of earth streaming the opposite way to the
+        //     camera, the same trick a lift shaft uses.
+        //   A PUFF OF DIRT at the ladder's foot, so the descent has a physical cause.
+        //
+        // Every one of them is a plain prop with no collider, on a generation guard, destroyed
+        // when the dip ends. Nothing here can outlive its layer or eat a tap.
+        private int _descentCues;
+
+        /// <summary>TEST HOOK. Descent-cue props staged (the flourish is observable, so a case
+        /// can prove the descent is SHOWN rather than only counted).</summary>
+        internal int TestDescentCues => _descentCues;
+
+        private void PlayDescentCues(Vector3 ladderAt, float dipUnits, float dipSeconds)
+        {
+            if (_root == null && transform == null)
+            {
+                return;
+            }
+
+            Transform parent = _root != null ? _root : transform;
+            float travel = Mathf.Max(1.5f, dipUnits * 2f);
+            float seconds = Mathf.Max(0.15f, dipSeconds);
+            int gen = _siteGeneration;
+
+            // (1) The ladder climbs away above us.
+            Sprite ladderArt = LadderSprite();
+            if (ladderArt != null)
+            {
+                var ghost = new GameObject("LadderGhost");
+                ghost.transform.SetParent(parent, false);
+                ghost.transform.position = ladderAt;
+
+                var gs = ghost.AddComponent<SpriteRenderer>();
+                gs.sprite = ladderArt;
+                gs.sortingOrder = 13;
+                gs.color = _lib != null && _lib.LadderDown != null
+                    ? Color.white
+                    : new Color(1f, 0.86f, 0.45f);
+                if (ladderArt.bounds.size.y > 0.001f)
+                {
+                    float k = 1.4f / ladderArt.bounds.size.y;
+                    ghost.transform.localScale = new Vector3(k, k, 1f);
+                }
+
+                RiseAndVanish(ghost.transform, gs, ladderAt, travel * 1.15f, seconds, gen);
+                _descentCues++;
+            }
+
+            // (2) Bands of earth streaming up past the frame. Drawn from the dirt sprite so they
+            //     are the same material the pit is made of, stretched wide and squashed flat.
+            Sprite band = _lib != null ? _lib.Dirt(0) : null;
+            if (band != null && band.bounds.size.x > 0.001f && band.bounds.size.y > 0.001f)
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    var strata = new GameObject("DescentStrata");
+                    strata.transform.SetParent(parent, false);
+                    Vector3 from = new Vector3(_origin.x, ladderAt.y - 0.9f - i * 1.35f, 0.02f);
+                    strata.transform.position = from;
+
+                    var ss = strata.AddComponent<SpriteRenderer>();
+                    ss.sprite = band;
+                    ss.sortingOrder = 3; // behind every tile (10), in front of the backdrop (2)
+                    // Alternating warm earth tones so the bands read as separate strata rather
+                    // than as one moving slab.
+                    ss.color = i % 2 == 0
+                        ? new Color(0.44f, 0.30f, 0.19f, 0.9f)
+                        : new Color(0.55f, 0.38f, 0.24f, 0.9f);
+                    strata.transform.localScale = new Vector3(
+                        (_cols + 3f) / band.bounds.size.x, 0.5f / band.bounds.size.y, 1f);
+
+                    RiseAndVanish(strata.transform, ss, from, travel, seconds, gen);
+                    _descentCues++;
+                }
+            }
+
+            // (3) The dirt the way down kicks up. Crumbs, never stars: a star burst here would
+            //     say "you won something" at the exact moment nothing was won.
+            SpawnDescentDust(ladderAt);
+        }
+
+        /// <summary>Carry a cue prop straight up and fade it out, then destroy it. Guarded on the
+        /// site generation, so a cue caught by a site teardown mid-flight simply stops.</summary>
+        private void RiseAndVanish(Transform t, SpriteRenderer sr, Vector3 from, float rise,
+            float seconds, int gen)
+        {
+            Color start = sr.color;
+            Tween.Run(seconds,
+                u =>
+                {
+                    if (t == null || sr == null)
+                    {
+                        return;
+                    }
+
+                    t.position = from + new Vector3(0f, rise * u, 0f);
+                    sr.color = new Color(start.r, start.g, start.b, start.a * (1f - u * u));
+                },
+                () =>
+                {
+                    if (t != null)
+                    {
+                        Destroy(t.gameObject);
+                    }
+                },
+                Tween.EaseOutCubic);
+
+            // Backstop: a site torn down mid-dip destroys the root anyway, but a cue whose
+            // tween was cancelled must not be left hanging on the next layer's board.
+            Tween.After(seconds + 0.2f, () =>
+            {
+                if (t != null && (gen != _siteGeneration || !_open))
+                {
+                    Destroy(t.gameObject);
+                }
+            });
+        }
+
+        /// <summary>The dirt puff at the ladder's foot. Deliberately the CRUMB particle (the
+        /// game's "something broke" material), never the star — see SpawnPitBurst, which is the
+        /// reward-flavoured twin of this and is the wrong voice for a descent.</summary>
+        private void SpawnDescentDust(Vector3 at)
+        {
+            GameManager gm = GameManager.Instance;
+            if (gm == null || _lib == null)
+            {
+                return;
+            }
+
+            Sprite dust = _lib.DustPuff != null ? _lib.DustPuff : _lib.CrumbParticle;
+            if (dust == null)
+            {
+                return;
+            }
+
+            ParticleSystem ps = gm.TownCreateParticles(_root != null ? _root : transform,
+                dust, new Color(0.62f, 0.47f, 0.33f), 0.45f);
+            if (ps == null)
+            {
+                return;
+            }
+
+            ps.transform.position = at + new Vector3(0f, -0.35f, 0f);
+            ps.Emit(16);
+            _descentCues++;
+            Tween.After(2f, () =>
+            {
+                if (ps != null)
+                {
+                    Destroy(ps.gameObject);
+                }
+            });
         }
 
         /// <summary>The rebuild itself, one stratum down. Fires from the camera dip's midpoint,
@@ -409,6 +591,51 @@ namespace DinoDigger.Dig
             _descendFromLayer = -1;
         }
 
+        // ------------------------------------------------------------ DEMO SURFACE
+        // PUBLIC on purpose (see DemoDigMenu): editor scripts live in another assembly and
+        // cannot reach the internal Test* hooks, and the descent is the one beat in this file
+        // that can only be judged by eye — "does this read as going DOWN, or as night falling?"
+        // was the question that produced DinoDigger-n05, and it cannot be answered from a
+        // counter. Neither of these bypasses a RULE: the ladder still refuses a mega site and
+        // the deepest layer, and the descent still runs through the one-way door in
+        // DescendLayer. All they skip is the digging.
+
+        /// <summary>DEMO. Offer the way down right now, whatever fraction has been cleared.
+        /// Returns false when the layer cannot have one (the deepest stratum, a mega site, a
+        /// ladder already standing) or when the board has no empty cell for it to stand in yet —
+        /// collapse a column first, then ask again.</summary>
+        public bool DemoOfferLadder()
+        {
+            if (!_open || _finished || _grid == null || _ladder != null || _descending)
+            {
+                return false;
+            }
+
+            if (_layer + 1 >= MaxLayers || _mega)
+            {
+                return false;
+            }
+
+            if (!TryLadderCell(out int r, out int c))
+            {
+                return false;
+            }
+
+            SpawnLadder(r, c);
+            return true;
+        }
+
+        /// <summary>DEMO. Take the way down, with or without a ladder standing.</summary>
+        public bool DemoDescend()
+        {
+            int before = _layer;
+            DescendLayer();
+            return _descending || _layer != before;
+        }
+
+        /// <summary>DEMO. Which stratum the site is showing (0 = the surface).</summary>
+        public int DemoLayer => _layer;
+
         // ------------------------------------------------------------ TEST HOOKS
 
         /// <summary>TEST HOOK. Never offer the ladder at the next site. The twin of
@@ -431,6 +658,33 @@ namespace DinoDigger.Dig
         /// descent directly.</summary>
         internal Vector3 TestLadderPosition =>
             _ladder != null ? _ladder.transform.position : Vector3.zero;
+
+        /// <summary>TEST HOOK. The sprite the offered ladder is actually DRAWING (null when no
+        /// ladder is standing).
+        ///
+        /// Asserted rather than eyeballed because this bug shipped twice over: the prop looked
+        /// wired in the .asset while the runtime was drawing something else entirely, and no
+        /// test could tell the difference — the only evidence was a screenshot of a child's
+        /// screen. A case that reads the live renderer closes that gap.</summary>
+        internal Sprite TestLadderSprite
+        {
+            get
+            {
+                if (_ladder == null)
+                {
+                    return null;
+                }
+
+                var sr = _ladder.GetComponent<SpriteRenderer>();
+                return sr != null ? sr.sprite : null;
+            }
+        }
+
+        /// <summary>TEST HOOK. The x of the grid's leftmost and rightmost cell centres, so a case
+        /// can prove a prop stands ON the board rather than beside it.</summary>
+        internal float TestGridMinX => CellPosition(0, 0).x;
+
+        internal float TestGridMaxX => CellPosition(0, Mathf.Max(0, _cols - 1)).x;
 
         /// <summary>TEST HOOK. Fraction of this layer's tiles that have been cleared — the
         /// number the ladder's threshold is compared against.</summary>

@@ -19,6 +19,8 @@ front view into the other facings — see below).
 Tools/
   generate_sprites.py   # prompts -> OpenRouter -> Tools/raw/*.png   (costs money)
   slice_sprites.py      # Tools/raw/*.png -> Assets/Art/Generated/<group>/*.png
+  bake_builder_anchors.py  # dino PNGs -> Assets/Scripts/Config/BuilderPropAnchors.cs
+  builder_prop_anchors.json # its measurements (generated; handy for diffing a re-bake)
   .openrouter_key       # your OpenRouter API key (untracked, never printed)
   raw/                  # raw generations: <char>_{S,SE,E,NE,N}.png + item sheets
 Assets/Art/Generated/
@@ -55,7 +57,22 @@ python3 generate_sprites.py --list     # list all entry names
 python3 slice_sprites.py               # process everything in raw/
 python3 slice_sprites.py --only trex   # one entry
 python3 slice_sprites.py --pad 12      # override transparent border padding
+
+# 3. MANDATORY after ANY dino re-slice: re-bake the builder-prop anchors (free)
+python3 bake_builder_anchors.py        # rewrites Assets/Scripts/Config/BuilderPropAnchors.cs
+python3 bake_builder_anchors.py --check   # CI/pre-commit guard: nonzero if the .cs is stale
+python3 bake_builder_anchors.py --report  # drift table + per-stage divergence
+python3 bake_builder_anchors.py --verify --verify-stage kid   # visual sheet in Logs/
 ```
+
+### Why step 3 is not optional
+
+`BuilderPropAnchors.cs` is a GENERATED table of where each dino's head and working hand
+sit, measured in PIXELS, per species x growth stage x facing. Re-slicing moves every
+facing's union box, so the baked fractions stop pointing at the anatomy — which is
+exactly how the town builders ended up wearing their hard hats above their heads and
+holding their mallets in mid-air (DinoDigger-rip). The `--check` mode is the cheap guard;
+the `BuilderAnchorsMatchArt` integration case is the same check from inside the engine.
 
 If a generation comes back malformed, regenerate just that entry (`--only <name>`,
 which forces a fresh render, with up to 3 attempts built in) and re-slice it.

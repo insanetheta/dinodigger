@@ -27,6 +27,12 @@ namespace DinoDigger.Dig
         private const float SwayDegrees = 5f;
         private const float GlintSeconds = 1.6f;  // twice as eager as a sleeping machine's
 
+        // The chevron's bob: slow enough to read as "pointing", fast enough to catch an eye.
+        private const float ArrowBobRate = 3.0f;      // rad/s
+        private const float ArrowBobUnits = 0.13f;    // world units of travel
+        private const float ArrowDropUnits = 0.95f;   // world units below the ladder's centre
+        private const float ArrowHeightUnits = 0.34f; // world height of the chevron
+
         private DigModeController _owner;
         private PlaceholderLibrary _lib;
         private ParticleSystem _sparkle;
@@ -36,6 +42,13 @@ namespace DinoDigger.Dig
         private int _taps;
         private bool _consumed;
         private Vector3 _restScale = Vector3.one;
+
+        // The "down" affordance (DinoDigger-n05). A ladder says CLIMB; it does not say which
+        // WAY, and a child who has never used a ladder has no reason to assume down. The
+        // chevron is the half of the message the prop cannot carry on its own.
+        private Transform _arrow;
+        private SpriteRenderer _arrowRenderer;
+        private Vector3 _arrowRest;
 
         /// <summary>TEST HOOK. Glints emitted (proof the beacon repeats rather than firing once).</summary>
         internal int TestGlints => _glints;
@@ -57,6 +70,8 @@ namespace DinoDigger.Dig
                     new Color(1f, 0.92f, 0.55f), 0.32f);
             }
 
+            BuildArrow();
+
             // Arrive with a pop AND a ding, so the moment it earns its place lands even if the
             // child happens to be looking at the other side of the pit — the sound is what
             // turns a head the pop alone would miss.
@@ -64,6 +79,36 @@ namespace DinoDigger.Dig
             Tween.ScaleTo(transform, _restScale, 0.35f);
             gm?.Audio?.LadderDing();
             Glint();
+        }
+
+        /// <summary>Hang the down-chevron under the ladder.
+        ///
+        /// IT IS A CHILD OF THE LADDER, so it inherits the sway (the pair leans together, which
+        /// reads as one object rather than two) and goes away with it — a stray arrow left
+        /// pointing at nothing would be a second unexplained thing in the pit, which is the
+        /// whole bug this ticket exists for. The ladder's transform carries the art's fit scale,
+        /// so every offset below is divided back out to stay in WORLD units.</summary>
+        private void BuildArrow()
+        {
+            Sprite art = _lib != null ? _lib.ArrowDown : null;
+            if (art == null || art.bounds.size.y <= 0.001f)
+            {
+                return; // no chevron art: the ladder still sways, glints and works
+            }
+
+            float inv = Mathf.Abs(_restScale.y) > 0.0001f ? 1f / _restScale.y : 1f;
+
+            var go = new GameObject("LadderArrow");
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = new Vector3(0f, -ArrowDropUnits * inv, 0f);
+            go.transform.localScale = Vector3.one * (ArrowHeightUnits / art.bounds.size.y * inv);
+
+            _arrowRenderer = go.AddComponent<SpriteRenderer>();
+            _arrowRenderer.sprite = art;
+            _arrowRenderer.sortingOrder = 13; // above the ladder (12), below the critters (14)
+
+            _arrow = go.transform;
+            _arrowRest = go.transform.localPosition;
         }
 
         /// <summary>THIS LADDER HAS BEEN USED. One-way and idempotent: the collider goes off
@@ -103,6 +148,20 @@ namespace DinoDigger.Dig
 
             _swayPhase += dt * SwayRate;
             transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Sin(_swayPhase) * SwayDegrees);
+
+            // The chevron nods DOWNWARD on its own faster beat: it dips away from the ladder and
+            // eases back, so the motion itself points the way rather than just wobbling.
+            if (_arrow != null)
+            {
+                float inv = Mathf.Abs(_restScale.y) > 0.0001f ? 1f / _restScale.y : 1f;
+                float bob = (Mathf.Sin(_swayPhase * (ArrowBobRate / SwayRate)) - 1f) * 0.5f;
+                _arrow.localPosition = _arrowRest + new Vector3(0f, bob * ArrowBobUnits * inv, 0f);
+
+                if (_arrowRenderer != null)
+                {
+                    _arrowRenderer.color = new Color(1f, 1f, 1f, 0.72f - bob * 0.28f);
+                }
+            }
 
             _glintTimer -= dt;
             if (_glintTimer <= 0f)

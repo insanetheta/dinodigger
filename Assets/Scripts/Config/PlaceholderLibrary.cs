@@ -236,6 +236,22 @@ namespace DinoDigger.Config
                  "landings quietly fall back to the crumb particle.")]
         public Sprite DustPuff;
 
+        [Header("The way down (DinoDigger-n05)")]
+        [Tooltip("The LADDER DOWN prop offered once a layer has been dug out enough, and the fat " +
+                 "chevron that bobs under it so 'this takes you deeper' is legible with no words. " +
+                 "Both null-tolerant: the ladder falls back to the striped construction barrier " +
+                 "and then to a dirt sprite (never to anything that could read as loot — a " +
+                 "tappable that LOOKS collectible teaches the wrong tap), and a missing chevron " +
+                 "simply means no bobbing arrow.")]
+        public Sprite LadderDown;
+        public Sprite ArrowDown;
+
+        [Tooltip("The catchable dig CRITTER: a glowbug that hops between cleared cells and pays a " +
+                 "coin when caught. Deliberately a living bug and NOT a star/gem — a thing that " +
+                 "PAYS treasure must never look like treasure. Null falls back to the star " +
+                 "particle (the old placeholder) so the critter is never invisible.")]
+        public Sprite CritterGlowbug;
+
         [Header("Fossil bones (DinoDigger-0z5)")]
         [Tooltip("Assembled bone props indexed by BoneType (0 small bone, 1 femur, 2 rib, " +
                  "3 skull) — the whole bone that rises out of the pit once every cell of it " +
@@ -303,9 +319,11 @@ namespace DinoDigger.Config
         public Sprite MachineDoodle;      // wind-up music box on wheels (plaza)
         public Sprite MachineSprinkles;   // squat watering bot (berry garden)
         public Sprite MachineTuggy;       // palm-sized tugboat (streams)
+        public Sprite MachineGlow;        // lantern bot, perched on the deep pit's edge
 
-        /// <summary>Overworld sprite for <paramref name="machine"/> in roster order
-        /// (0 Doodle, 1 Sprinkles, 2 Tuggy), or null when that art is not imported yet.</summary>
+        /// <summary>Sprite for <paramref name="machine"/> in MachineKind order
+        /// (0 Doodle, 1 Sprinkles, 2 Tuggy, 3 Glow), or null when that art is not imported
+        /// yet.</summary>
         public Sprite Machine(int machine)
         {
             switch (machine)
@@ -313,6 +331,7 @@ namespace DinoDigger.Config
                 case 0: return MachineDoodle;
                 case 1: return MachineSprinkles;
                 case 2: return MachineTuggy;
+                case 3: return MachineGlow;
                 default: return null;
             }
         }

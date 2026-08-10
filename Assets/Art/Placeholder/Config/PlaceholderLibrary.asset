@@ -362,6 +362,8 @@ MonoBehaviour:
   - {fileID: 21300000, guid: b2589efb5cbfd413096ac36d96865a6b, type: 3}
   - {fileID: 21300000, guid: 09bccae3a7be54c6397b747ec74d4675, type: 3}
   DigBackground: {fileID: 21300000, guid: 15d8d2a167cae4da58cda5b720686a08, type: 3}
+  DigSkyColor: {r: 0.405103, g: 0.8038197, b: 0.97488266, a: 1}
+  DigSoilColor: {r: 0.63803816, g: 0.40997437, b: 0.20675345, a: 1}
   CrystalSprites:
   - {fileID: 21300000, guid: a4eaab53994434321971dba69c1a099d, type: 3}
   - {fileID: 21300000, guid: a6e5891666f4d45b79292545da8c1c3b, type: 3}
@@ -370,6 +372,9 @@ MonoBehaviour:
   PinataPot: {fileID: 21300000, guid: 62a213c4061de46199b559d4fdfd231d, type: 3}
   PinataPotCracked: {fileID: 21300000, guid: fc0015e14558e4baaa49823f2b363d88, type: 3}
   DustPuff: {fileID: 21300000, guid: 6e331695a3d7f442a9440f3f7458c8bc, type: 3}
+  LadderDown: {fileID: 21300000, guid: 871a7cf464eb1427296f4a0b2e227f0e, type: 3}
+  ArrowDown: {fileID: 21300000, guid: a7e022525881542b386e0919f98b15ed, type: 3}
+  CritterGlowbug: {fileID: 21300000, guid: d7dc5c1c5168c4c5f845b255e0b12c93, type: 3}
   BoneSprites:
   - {fileID: 21300000, guid: cefde956a9e524449858c3b3ba3ed3c3, type: 3}
   - {fileID: 21300000, guid: 99e1f3170d14b449ea655a0cd3894363, type: 3}
@@ -467,6 +472,7 @@ MonoBehaviour:
   MachineDoodle: {fileID: 21300000, guid: 7d8b16bfe565b41e3be5ba7487c3584b, type: 3}
   MachineSprinkles: {fileID: 21300000, guid: 899e1385c6ecf4d07a38916d6988eafa, type: 3}
   MachineTuggy: {fileID: 21300000, guid: e0cc581bbafde4c07a7f4bf54fc770e7, type: 3}
+  MachineGlow: {fileID: 21300000, guid: 3461341f876ef412f849b438c06af66b, type: 3}
   StarParticle: {fileID: 21300000, guid: 1e83911eeed82416888274d1f0794094, type: 3}
   HeartParticle: {fileID: 21300000, guid: 61a01d4e5e8214be29055122ed5f8b04, type: 3}
   CrumbParticle: {fileID: 21300000, guid: 6ba7d2b40cba041828410e8481bb93ec, type: 3}

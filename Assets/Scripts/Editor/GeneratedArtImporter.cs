@@ -127,16 +127,17 @@ namespace DinoDigger.EditorTools
         // state is currently a colour multiply on this same sprite (see MachineFriend), which
         // is why one sprite per machine is enough.
         //
-        // Sized by HEIGHT to a shared overworld-prop target so the three read as one family
+        // Sized by HEIGHT to a shared overworld-prop target so the four read as one family
         // whatever their raw resolution, with a BOTTOM-CENTER pivot so they stand on the
         // ground line like a building instead of floating half-sunk. Roster order matches
-        // MachineKind / PlaceholderLibrary.Machine(int): Doodle, Sprinkles, Tuggy.
+        // MachineKind / PlaceholderLibrary.Machine(int): Doodle, Sprinkles, Tuggy, Glow.
         private const float MachineTargetH = 1.1f;
         private static readonly string[] MachineRels =
         {
             "machines/doodle",     // 0  wind-up music box on wheels (plaza)
             "machines/sprinkles",  // 1  squat watering bot (berry garden)
             "machines/tuggy",      // 2  palm-sized tugboat (streams)
+            "machines/glow",       // 3  lantern bot, perched on the deep dig's edge
         };
 
         // Construction-worker props (DinoDigger-771), transparent PNGs in Generated/town/.
@@ -161,6 +162,19 @@ namespace DinoDigger.EditorTools
         // The landing/geode dust puff is a PARTICLE sprite (the emitter sets its world size), so
         // it just needs a sane import scale like the other particles.
         private const string DustPuffRel = "dig/dust_thump";
+
+        // THE WAY DOWN + THE CRITTER (DinoDigger-n05). All three used to run on placeholders
+        // that lied about what they were: the ladder drew the town's striped BARRIER sign
+        // ("do not enter" — the exact opposite of its meaning), and the critter drew the star
+        // particle, so the one thing in the pit that PAYS a coin looked like treasure.
+        //
+        // Every one of these is rescaled at runtime from its own bounds (the ladder to 1.4
+        // units, the chevron to a fraction of it, the critter to 0.45), so the import scale
+        // only has to be sane rather than exact — the one-cell fit keeps them in the same
+        // family as the dig toys.
+        private const string LadderDownRel = "dig/prop_ladder_down";
+        private const string ArrowDownRel = "dig/prop_arrow_down";
+        private const string CritterGlowbugRel = "dig/critter_glowbug";
 
         // FOSSIL BONES (DinoDigger-0z5), sliced to Generated/dig/bones/. Indexed by BoneType
         // (0 SmallBone, 1 Femur, 2 Rib, 3 Skull) — the enum is a stable contract the save keys
@@ -484,6 +498,11 @@ namespace DinoDigger.EditorTools
             ConfigureCellFit(PinataPotRel, missing);
             ConfigureCellFit(PinataPotCrackedRel, missing);
             ConfigureEach(new[] { DustPuffRel }, ParticleTargetH, missing);
+
+            // The way down + the glowbug (DinoDigger-n05), on the dig toys' one-cell terms.
+            ConfigureCellFit(LadderDownRel, missing);
+            ConfigureCellFit(ArrowDownRel, missing);
+            ConfigureCellFit(CritterGlowbugRel, missing);
 
             // Fossil bones + skeleton-board silhouettes (DinoDigger-0z5 / -5ve).
             foreach (string rel in BoneRels)
@@ -816,6 +835,14 @@ namespace DinoDigger.EditorTools
                 wired.Add($"Library: dig toys crystal x{DigCrystalRels.Length} + geode + pot " +
                           $"(whole/cracked) + dust puff (each fits a {DirtTargetH}-unit grid cell)");
 
+                // The way down + the glowbug (DinoDigger-n05). Typed, no reflection. Each stays
+                // null-tolerant at runtime: the ladder falls back to the construction barrier,
+                // the chevron simply does not appear, the critter falls back to the star.
+                lib.LadderDown = LoadSpriteTracked(LadderDownRel, missing);
+                lib.ArrowDown = LoadSpriteTracked(ArrowDownRel, missing);
+                lib.CritterGlowbug = LoadSpriteTracked(CritterGlowbugRel, missing);
+                wired.Add("Library: ladder down + down-chevron + glowbug critter (DinoDigger-n05)");
+
                 // Fossil bones, indexed by BoneType (see BoneRels). A null slot falls back at
                 // runtime to the treasure bone and then a white silhouette, so a bone ALWAYS
                 // pops something visible and the board still fills.
@@ -952,12 +979,16 @@ namespace DinoDigger.EditorTools
                 lib.MachineDoodle = LoadSprite(GenPath(MachineRels[0]));
                 lib.MachineSprinkles = LoadSprite(GenPath(MachineRels[1]));
                 lib.MachineTuggy = LoadSprite(GenPath(MachineRels[2]));
+                lib.MachineGlow = LoadSprite(GenPath(MachineRels[3]));
                 int machineCount = (lib.MachineDoodle != null ? 1 : 0) +
                                    (lib.MachineSprinkles != null ? 1 : 0) +
-                                   (lib.MachineTuggy != null ? 1 : 0);
-                wired.Add($"Library: machine friends {machineCount}/3 " +
+                                   (lib.MachineTuggy != null ? 1 : 0) +
+                                   (lib.MachineGlow != null ? 1 : 0);
+                wired.Add($"Library: machine friends {machineCount}/{MachineRels.Length} " +
                           $"(~{MachineTargetH}u tall, bottom pivot" +
-                          (machineCount == 3 ? ")" : "; missing ones fall back to a tinted blob)"));
+                          (machineCount == MachineRels.Length
+                              ? ")"
+                              : "; missing ones fall back to a tinted blob)"));
 
                 // Jurassic-earth environment set (DinoDigger-y1g). Builds/refreshes the env
                 // Tile assets, fills the typed EnvTileSet/EnvEdgeSet slots, and re-points

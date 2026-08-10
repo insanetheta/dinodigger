@@ -117,12 +117,59 @@ namespace DinoDigger.Testing
                 float clearedAtReveal = dm.TestClearedFraction;
                 int buriedBefore = dm.TestBuriedCount;
 
+                // ---- IT STANDS ON THE BOARD, AND IT LOOKS LIKE A LADDER (DinoDigger-n05) ----
+                //
+                // Both halves of this exist because a P0 came in from a screenshot rather than
+                // from a test. A child found an unexplained tappable sitting OUTSIDE the tile
+                // grid that teleported them to a darker screen; it turned out to be a different
+                // prop entirely, and nothing in the suite could have told the two apart, because
+                // every ladder assertion was about counters (shown / taken / layer) and none was
+                // about the thing on screen. So: WHERE it is, and WHAT it is drawing.
+                Vector3 ladderAt = dm.TestLadderPosition;
+                float minX = dm.TestGridMinX;
+                float maxX = dm.TestGridMaxX;
+                ctx.Assert(ladderAt.x >= minX - 0.5f && ladderAt.x <= maxX + 0.5f,
+                    $"the ladder stands at x={ladderAt.x:F2}, outside the grid's " +
+                    $"[{minX:F2}, {maxX:F2}] columns — the way down must be IN the pit, not " +
+                    "beside it, or the child cannot tell it from the scenery");
+
+                Sprite ladderArt = dm.TestLadderSprite;
+                ctx.Assert(ladderArt != null, "the ladder is drawing no sprite at all");
+
+                PlaceholderLibrary lib = gm.TestLibrary;
+                if (lib != null && lib.LadderDown != null)
+                {
+                    ctx.Assert(ladderArt == lib.LadderDown,
+                        $"the ladder is drawing '{(ladderArt != null ? ladderArt.name : "null")}' " +
+                        "while the real ladder art is imported — a wired library slot the runtime " +
+                        "does not reach is exactly how this shipped as a striped barrier sign");
+                }
+
+                // Whatever it resolved to, it must never be one of the game's LOOT sprites: a
+                // tappable that looks collectible teaches a toddler the wrong tap.
+                if (lib != null)
+                {
+                    ctx.Assert(ladderArt != lib.StarParticle && ladderArt != lib.MoundSprite,
+                        $"the ladder fell back to '{ladderArt.name}', which this game uses for " +
+                        "treasure sparkle / dig mounds — the way down must read as built scenery");
+                }
+
                 // ---- Down we go ----
                 dm.TestDescend();
                 yield return ctx.WaitFrames(2);
 
                 ctx.Assert(dm.TestLayer == 1, $"tapping the ladder left the site on layer {dm.TestLayer}");
                 ctx.Assert(dm.TestDescents == 1, $"{dm.TestDescents} descents recorded for one ladder");
+
+                // THE DESCENT IS SHOWN, NOT ONLY COUNTED (DinoDigger-n05). The camera dip alone
+                // moved the frame with nothing moving against it, so the child read the darker
+                // board as night falling rather than as depth. The cues that run the other way
+                // are what make it legible, and a flourish nothing asserts is a flourish that
+                // quietly stops firing.
+                ctx.Assert(dm.TestDescentCues > 0,
+                    "the descent staged no cues at all — the ladder climbing away, the strata " +
+                    "sliding up and the puff at its foot are the only evidence the child gets " +
+                    "that they went DOWN rather than that the light changed");
 
                 // ONE LADDER, ONE DESCENT — asserted directly rather than inferred, because the
                 // first gate run produced two. A second request from the same layer (a re-tap
