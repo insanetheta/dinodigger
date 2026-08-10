@@ -329,6 +329,11 @@ namespace DinoDigger.Testing
             // here for the same reason as every pin above: a case must never inherit state it did
             // not ask for.
             DigModeController.TestResetPrimaryToy();
+
+            // The screen seam (DinoDigger-kgm): a leaked portrait override would reframe the
+            // camera and reshape the HUD canvas for every case after it — the loudest possible
+            // leak, and the cheapest possible backstop.
+            CameraFraming.TestClearScreen();
         }
 
         private void OnLog(string condition, string stackTrace, LogType type)

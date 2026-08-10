@@ -2085,6 +2085,20 @@ namespace DinoDigger.EditorTools
             scaler.matchWidthOrHeight = 0.5f;
             canvasGo.AddComponent<GraphicRaycaster>();
 
+            // ORIENTATION BRAIN (DinoDigger-avw). Owns the reference resolution (which turns on
+            // its side in portrait) and the SafeArea rect every HUD affordance hangs off, so a
+            // notch or a home indicator is accounted for once rather than per widget. The
+            // values set above are only the serialized starting point — this component
+            // re-derives them at runtime from the live screen.
+            canvasGo.AddComponent<ResponsiveCanvas>();
+            var safeGo = new GameObject("SafeArea", typeof(RectTransform));
+            safeGo.transform.SetParent(canvasGo.transform, false);
+            var safeRt = (RectTransform)safeGo.transform;
+            safeRt.anchorMin = Vector2.zero;
+            safeRt.anchorMax = Vector2.one;
+            safeRt.offsetMin = Vector2.zero;
+            safeRt.offsetMax = Vector2.zero;
+
             Font font = null;
             try
             {
@@ -2097,9 +2111,9 @@ namespace DinoDigger.EditorTools
                 catch { font = null; }
             }
 
-            // Treasure counter (top-right).
+            // Treasure counter (top-right OF THE SAFE AREA — a notch must never eat the score).
             var counterGo = new GameObject("TreasureCounter");
-            counterGo.transform.SetParent(canvasGo.transform, false);
+            counterGo.transform.SetParent(safeGo.transform, false);
             var counterRt = counterGo.AddComponent<RectTransform>();
             counterRt.anchorMin = counterRt.anchorMax = new Vector2(1f, 1f);
             counterRt.pivot = new Vector2(1f, 1f);
@@ -2138,9 +2152,9 @@ namespace DinoDigger.EditorTools
             Wire(counter, "_countText", text);
             Wire(counter, "_iconRect", iconRt);
 
-            // Mute button (top-left) — parent-gated hold.
+            // Mute button (top-left of the safe area) — the parent gate.
             var muteGo = new GameObject("MuteButton");
-            muteGo.transform.SetParent(canvasGo.transform, false);
+            muteGo.transform.SetParent(safeGo.transform, false);
             var muteRt = muteGo.AddComponent<RectTransform>();
             muteRt.anchorMin = muteRt.anchorMax = new Vector2(0f, 1f);
             muteRt.pivot = new Vector2(0f, 1f);

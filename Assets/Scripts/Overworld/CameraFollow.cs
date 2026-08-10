@@ -8,6 +8,21 @@ namespace DinoDigger.Overworld
     /// Gently follows the backhoe with a rectangular deadzone during Roam, and
     /// eases to the dig-view center (with a zoom) during Dig. A single camera is
     /// moved between the two areas — see SceneBuilder notes.
+    ///
+    /// FRAMING IS FIT-TO-CONTENT, NOT A NUMBER (DinoDigger-kgm). This component never stores an
+    /// ortho size; it stores a <see cref="CameraFit"/> — the world rect the current view has to
+    /// show — and resolves it against the LIVE aspect every time it needs a size. Two things
+    /// fall out of that for free:
+    ///
+    ///   PORTRAIT WORKS. Ortho is half the VERTICAL extent, so a fixed size crops horizontally
+    ///     the moment the screen gets narrow (the dig grid was clipped at 9:19.5). Deriving the
+    ///     size from content makes every aspect correct by construction.
+    ///   ROTATING IS FREE. The size is re-derived, not remembered — including from inside a
+    ///     transition tween, which reads the fit on every step and therefore LANDS on the right
+    ///     size even if the device turned halfway through the glide.
+    ///
+    /// The config's ortho values survive as LANDSCAPE BASELINES (minimums), so a desktop or a
+    /// phone held sideways frames exactly what it always did.
     /// </summary>
     public class CameraFollow : MonoBehaviour
     {
@@ -20,6 +35,15 @@ namespace DinoDigger.Overworld
         private bool _focusMode;   // parked on a focus point (nest ceremony, town tour) — no roam follow
         private bool _transitioning;
 
+        // The framing the camera is AT, or (mid-transition) the one it is easing TOWARD. This
+        // is the single source of truth for size: nothing else may write orthographicSize.
+        private CameraFit _fit;
+
+        // Aspect the current size was derived from. A change here — a phone rotating, a WebGL
+        // canvas resizing under a browser rotate — is the whole reframe trigger.
+        private float _appliedAspect = -1f;
+        private const float AspectEpsilon = 0.0005f;
+
         // The camera move currently in flight. Every transition below stops the previous one
         // before starting its own: two live tweens would both write transform.position each
         // frame and the loser would still be fighting for it. This is what lets a glide be
@@ -31,6 +55,9 @@ namespace DinoDigger.Overworld
         internal bool TestFocused => _focusMode;
         internal bool TestTransitioning => _transitioning;
         internal Transform TestTarget => _target;
+        internal float TestOrthoSize => _camera != null ? _camera.orthographicSize : 0f;
+        internal CameraFit TestFit => _fit;
+        internal float TestAppliedAspect => _appliedAspect;
 
         private void Awake()
         {
@@ -45,17 +72,94 @@ namespace DinoDigger.Overworld
             _camera = cam;
             _target = target;
             _config = config;
-            if (_camera != null && _config != null)
+            if (_camera != null)
             {
                 _camera.orthographic = true;
-                _camera.orthographicSize = _config.RoamOrthoSize;
+                SetFraming(RoamFit());
             }
         }
 
         public void SetTarget(Transform target) => _target = target;
 
+        /// <summary>The overworld framing: a target visible world WIDTH floored at the landscape
+        /// baseline, so landscape is untouched and portrait zooms out instead of showing a
+        /// letterbox slot of island.</summary>
+        private CameraFit RoamFit()
+        {
+            return _config != null ? _config.RoamFit() : CameraFit.Fixed(5.5f);
+        }
+
+        /// <summary>The ceremony / attract-tour push-in framing.</summary>
+        private CameraFit FocusFit()
+        {
+            return _config != null ? _config.CeremonyFit() : CameraFit.Fixed(4f);
+        }
+
+        /// <summary>Adopt a framing and apply it NOW. Used at boot and by the snap hooks; the
+        /// transitions below adopt the framing first and let their tween ease into it.</summary>
+        private void SetFraming(CameraFit fit)
+        {
+            _fit = fit;
+            if (_camera != null)
+            {
+                _appliedAspect = CameraFraming.ScreenAspect;
+                _camera.orthographicSize = _fit.Ortho(_appliedAspect);
+            }
+        }
+
+        /// <summary>The size the ACTIVE framing wants on the screen as it is right now. Every
+        /// transition tween lerps toward this rather than toward a value captured when it
+        /// started, which is what makes a rotate mid-glide land on the correct final size
+        /// instead of on the size the old orientation asked for.</summary>
+        private float TargetOrtho()
+        {
+            _appliedAspect = CameraFraming.ScreenAspect;
+            return _fit.Ortho(_appliedAspect);
+        }
+
+        /// <summary>
+        /// LIVE REFRAMING. Polls the aspect once a frame — a float compare, cheaper than the
+        /// event plumbing it would replace — and re-derives the size whenever the screen
+        /// changes shape. This is the whole answer to "the browser canvas resizes on rotate":
+        /// there is nothing to subscribe to in WebGL that beats noticing.
+        ///
+        /// Mid-transition it only records the new aspect and gets out of the way: the tween is
+        /// already reading <see cref="TargetOrtho"/> every step, and a second writer would fight
+        /// it for the same frame.
+        /// </summary>
+        private void ApplyFramingIfAspectChanged()
+        {
+            if (_camera == null)
+            {
+                return;
+            }
+
+            float aspect = CameraFraming.ScreenAspect;
+            if (Mathf.Abs(aspect - _appliedAspect) < AspectEpsilon)
+            {
+                return;
+            }
+
+            _appliedAspect = aspect;
+            if (_transitioning)
+            {
+                return;
+            }
+
+            if (!_fit.IsValid)
+            {
+                _fit = RoamFit();
+            }
+
+            _camera.orthographicSize = _fit.Ortho(aspect);
+        }
+
         private void LateUpdate()
         {
+            // Reframing runs BEFORE the follow guard: a rotate has to be answered while parked
+            // in the dig view or on a ceremony too, not only while roaming.
+            ApplyFramingIfAspectChanged();
+
             if (_digMode || _focusMode || _transitioning || _target == null || _camera == null || _config == null)
             {
                 return;
@@ -85,28 +189,21 @@ namespace DinoDigger.Overworld
             transform.position = next;
         }
 
-        /// <summary>Ease into the dig view centered on <paramref name="digCenter"/> at the
-        /// config's standard dig framing.</summary>
-        public void EnterDig(Vector3 digCenter, System.Action onArrived)
-        {
-            EnterDig(digCenter, _config != null ? _config.DigOrthoSize : 3.2f, onArrived);
-        }
-
         /// <summary>Ease into the dig view at a framing the SITE chose. A mega-fossil dig
         /// (DinoDigger-84f) opens a much bigger pit and needs a wider frame, and the site is the
-        /// only thing that knows how big its own board is — so the size travels in with the
-        /// centre rather than being read from config here.</summary>
-        public void EnterDig(Vector3 digCenter, float orthoSize, System.Action onArrived)
+        /// only thing that knows how big its own board is — so the FIT travels in with the
+        /// centre rather than being read from config here. A fit rather than a size, so the
+        /// same request frames the pit correctly on any screen and keeps doing so if the screen
+        /// changes shape while the camera is still flying in.</summary>
+        public void EnterDig(Vector3 digCenter, CameraFit fit, System.Action onArrived)
         {
             _digCenter = digCenter;
             _transitioning = true;
+            _fit = fit.IsValid ? fit : CameraFit.Fixed(_config != null ? _config.DigOrthoSize : 3.2f);
             Vector3 from = transform.position;
             Vector3 to = new Vector3(digCenter.x, digCenter.y, from.z);
             float dur = _config != null ? _config.TransitionSeconds : 0.5f;
             float fromSize = _camera != null ? _camera.orthographicSize : 5.5f;
-            float toSize = orthoSize > 0.1f
-                ? orthoSize
-                : (_config != null ? _config.DigOrthoSize : 3.2f);
 
             Tween.Stop(_move);
             _move = Tween.Run(dur, t =>
@@ -117,7 +214,7 @@ namespace DinoDigger.Overworld
                 }
 
                 transform.position = Vector3.Lerp(from, to, t);
-                _camera.orthographicSize = Mathf.Lerp(fromSize, toSize, t);
+                _camera.orthographicSize = Mathf.Lerp(fromSize, TargetOrtho(), t);
             }, () =>
             {
                 _move = null;
@@ -136,11 +233,11 @@ namespace DinoDigger.Overworld
         {
             _focusMode = true;
             _transitioning = true;
+            _fit = FocusFit();
             Vector3 from = transform.position;
             Vector3 to = new Vector3(worldPoint.x, worldPoint.y, from.z);
             float dur = _config != null ? _config.TransitionSeconds : 0.5f;
             float fromSize = _camera != null ? _camera.orthographicSize : 5.5f;
-            float toSize = _config != null ? _config.CeremonyOrthoSize : 4f;
 
             Tween.Stop(_move);
             _move = Tween.Run(dur, t =>
@@ -151,7 +248,7 @@ namespace DinoDigger.Overworld
                 }
 
                 transform.position = Vector3.Lerp(from, to, t);
-                _camera.orthographicSize = Mathf.Lerp(fromSize, toSize, t);
+                _camera.orthographicSize = Mathf.Lerp(fromSize, TargetOrtho(), t);
             }, () =>
             {
                 _move = null;
@@ -165,13 +262,13 @@ namespace DinoDigger.Overworld
         {
             _focusMode = false;
             _transitioning = true;
+            _fit = RoamFit();
             Vector3 from = transform.position;
             Vector3 to = _target != null
                 ? new Vector3(_target.position.x, _target.position.y, from.z)
                 : from;
             float dur = _config != null ? _config.TransitionSeconds : 0.5f;
             float fromSize = _camera != null ? _camera.orthographicSize : 4f;
-            float toSize = _config != null ? _config.RoamOrthoSize : 5.5f;
 
             Tween.Stop(_move);
             _move = Tween.Run(dur, t =>
@@ -182,7 +279,7 @@ namespace DinoDigger.Overworld
                 }
 
                 transform.position = Vector3.Lerp(from, to, t);
-                _camera.orthographicSize = Mathf.Lerp(fromSize, toSize, t);
+                _camera.orthographicSize = Mathf.Lerp(fromSize, TargetOrtho(), t);
             }, () =>
             {
                 _move = null;
@@ -202,10 +299,7 @@ namespace DinoDigger.Overworld
             _digMode = false;
             _focusMode = false;
 
-            if (_camera != null && _config != null)
-            {
-                _camera.orthographicSize = _config.RoamOrthoSize;
-            }
+            SetFraming(RoamFit());
 
             if (_target != null)
             {
@@ -325,13 +419,13 @@ namespace DinoDigger.Overworld
         {
             _digMode = false;
             _transitioning = true;
+            _fit = RoamFit();
             Vector3 from = transform.position;
             Vector3 to = _target != null
                 ? new Vector3(_target.position.x, _target.position.y, from.z)
                 : from;
             float dur = _config != null ? _config.TransitionSeconds : 0.5f;
             float fromSize = _camera != null ? _camera.orthographicSize : 3.2f;
-            float toSize = _config != null ? _config.RoamOrthoSize : 5.5f;
 
             Tween.Stop(_move);
             _move = Tween.Run(dur, t =>
@@ -342,7 +436,7 @@ namespace DinoDigger.Overworld
                 }
 
                 transform.position = Vector3.Lerp(from, to, t);
-                _camera.orthographicSize = Mathf.Lerp(fromSize, toSize, t);
+                _camera.orthographicSize = Mathf.Lerp(fromSize, TargetOrtho(), t);
             }, () =>
             {
                 _move = null;

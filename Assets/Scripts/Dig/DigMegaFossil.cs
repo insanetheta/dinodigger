@@ -51,8 +51,9 @@ namespace DinoDigger.Dig
         private DinoType _megaSpecies;
         private int _megaBonesPlanned;
 
-        /// <summary>Camera ortho size this site wants — the mega pit needs a wider frame than
-        /// the standard board. Read by GameManager when it hands the camera to the dig.</summary>
+        /// <summary>LANDSCAPE BASELINE ortho size for this site — the framing this game shipped
+        /// with, held as a MINIMUM by <see cref="DigFit"/> so no aspect can zoom in tighter than
+        /// the desktop look. The mega pit's baseline is bigger because its board is.</summary>
         public float DigOrthoSize
         {
             get
@@ -63,6 +64,31 @@ namespace DinoDigger.Dig
                 }
 
                 return _mega ? _config.DigMegaOrthoSize : _config.DigOrthoSize;
+            }
+        }
+
+        /// <summary>The framing REQUEST this site hands the camera (DinoDigger-kgm): the content
+        /// rect its own board needs, floored at the landscape baseline above.
+        ///
+        /// A request rather than a number, because a number is only right at one aspect — and
+        /// because the extents come from the live grid, the mega pit needs no separate constant
+        /// at all: 7x9 simply reports a bigger rect than 5x7 and the same fit frames both.</summary>
+        public CameraFit DigFit
+        {
+            get
+            {
+                float halfW = _frameHalfWidth;
+                float halfH = _frameHalfHeight;
+                if (halfW <= 0.0001f || halfH <= 0.0001f)
+                {
+                    // Asked before the board was built (or after a teardown): answer from the
+                    // grid size this site WOULD open, so the framing is never a guess.
+                    ResolveGridSize(out int rows, out int cols);
+                    ComputeDigFrame(rows, cols, out float _, out halfW, out halfH);
+                }
+
+                return CameraFit.Content(halfW, halfH, 0f, DigOrthoSize,
+                    _config != null ? _config.DigMaxOrthoSize : 16f);
             }
         }
 

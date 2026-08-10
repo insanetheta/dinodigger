@@ -165,6 +165,17 @@ namespace DinoDigger.Testing
                 // value in a finally, but keeping it late means a missed restore cannot silence
                 // the cases above it. Body lives in IntegrationTestCasesAudio.cs.
                 new TestCase("AudioHooksFire",       45f, Case_AudioHooksFire),
+                // PORTRAIT-FIRST FRAMING (DinoDigger-kgm / -avw). Bodies live in
+                // IntegrationTestCasesFraming.cs. Late, and in this order, because the two live
+                // ones SUBSTITUTE A PHONE-SHAPED SCREEN for a few frames: the camera and the HUD
+                // canvas both reframe while they run, and anything measuring screen positions
+                // during that would be measuring a different device. Each hands the real screen
+                // back in a finally, and the runner clears the override again between cases.
+                new TestCase("DigFitsPortrait",       10f, Case_DigFitsPortrait),
+                new TestCase("MegaDigFitsPortrait",   10f, Case_MegaDigFitsPortrait),
+                new TestCase("RoamZoomsOutInPortrait", 10f, Case_RoamZoomsOutInPortrait),
+                new TestCase("AspectChangeReframesLive", 30f, Case_AspectChangeReframesLive),
+                new TestCase("PortraitHudOnScreen",   20f, Case_PortraitHudOnScreen),
                 new TestCase("NoConsoleErrors",       5f, Case_NoConsoleErrors),
             };
         }

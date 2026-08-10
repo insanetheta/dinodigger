@@ -34,15 +34,19 @@ namespace DinoDigger.UI
     /// </summary>
     public class SkeletonBoard : MonoBehaviour
     {
-        // ---- layout, in CanvasScaler reference pixels (1920x1080) ----
+        // ---- layout, in CanvasScaler reference pixels ----
+        // The card itself is a fixed size; the TRAY reflows around it (see TrayLayout), because
+        // a 1760-wide row of five cards is a landscape shape and a phone held upright is not.
         private const float CardWidth = 320f;
         private const float CardHeight = 440f;
         private const float CardPitch = 340f;
+        private const float CardRowGap = 20f;
+        private const float TrayPadX = 60f;
+        private const float TrayPadY = 100f;
+        private const float CloseOverhang = 70f;   // the X pokes above the tray's top edge
         private const float SilhouetteWidth = 260f;
         private const float SilhouetteHeight = 300f;
         private const float SlotSize = 84f;
-        private const float PanelWidth = 1760f;
-        private const float PanelHeight = 540f;
         private const float ButtonSize = 120f;
 
         // ---- palette ----
@@ -69,8 +73,16 @@ namespace DinoDigger.UI
         private PlaceholderLibrary _library;
         private GameConfig _config;
         private RectTransform _panel;      // the whole modal (backdrop + cards), toggled on open
-        private RectTransform _button;     // the HUD bone button
+        private RectTransform _tray;       // the card tray inside it — this is what reflows
+        private RectTransform _button;     // the HUD bone button (parked in the safe area)
+        private ResponsiveCanvas _responsive;
         private readonly List<Card> _cards = new List<Card>();
+
+        // Last frame the tray was laid out for. A rotate changes it and nothing else does, so
+        // comparing it is how the modal reflows live without a layout pass every frame.
+        private Rect _laidOutFor = new Rect(-1f, -1f, -1f, -1f);
+        private int _cols = 1;
+        private int _rows = 1;
 
         private bool _open;
         private int _opens;                // test-observable
@@ -86,6 +98,35 @@ namespace DinoDigger.UI
         internal int TestCardCount => _cards.Count;
         internal int TestCompletionCelebrations => _completionCelebrations;
         internal bool TestButtonVisible => _button != null && _button.gameObject.activeSelf;
+        internal int TestTrayColumns => _cols;
+        internal int TestTrayRows => _rows;
+        internal Vector2 TestTraySize => _tray != null ? _tray.sizeDelta : Vector2.zero;
+        internal float TestTrayScale => _tray != null ? _tray.localScale.x : 0f;
+        internal RectTransform TestButtonRect => _button;
+
+        /// <summary>TEST HOOK. Where a card ends up in CANVAS-LOCAL units, tray scale and all —
+        /// i.e. the rect a child's eye actually has to find on the glass.</summary>
+        internal Rect TestCardRect(int index)
+        {
+            if (_tray == null || index < 0 || index >= _cards.Count || _cards[index] == null
+                || _cards[index].Root == null)
+            {
+                return default;
+            }
+
+            float s = _tray.localScale.x;
+            Vector2 centre = _tray.anchoredPosition + _cards[index].Root.anchoredPosition * s;
+            Vector2 size = _cards[index].Root.sizeDelta * s;
+            return new Rect(centre - size * 0.5f, size);
+        }
+
+        /// <summary>TEST HOOK. Lay the tray out for a frame of this size, in canvas-local units.
+        /// The editor cannot rotate a phone, so a case hands the REAL layout code a portrait
+        /// rect and then reads back where the cards landed.</summary>
+        internal void TestLayoutFor(Rect frame)
+        {
+            LayoutTray(frame);
+        }
 
         /// <summary>TEST HOOK. Press the HUD bone button (opens the board).</summary>
         internal void TestPressButton()
@@ -159,6 +200,11 @@ namespace DinoDigger.UI
                 return null;
             }
 
+            // The orientation brain owns the safe-area rect the HUD button has to live inside,
+            // and publishes the frame the modal lays itself out in (DinoDigger-avw). Ensure is
+            // idempotent, so asking here costs nothing when the scene already has one.
+            ResponsiveCanvas responsive = ResponsiveCanvas.Ensure(canvas);
+
             var go = new GameObject("SkeletonBoard", typeof(RectTransform));
             go.transform.SetParent(canvas.transform, false);
             var rt = (RectTransform)go.transform;
@@ -167,11 +213,29 @@ namespace DinoDigger.UI
             var board = go.AddComponent<SkeletonBoard>();
             board._library = library;
             board._config = config;
-            board.BuildButton(rt);
+            board._responsive = responsive;
+            board.BuildButton(
+                responsive != null && responsive.SafeArea != null ? responsive.SafeArea : rt);
             board.BuildPanel(rt);
+            board.LayoutTray(board.Frame());
             board.Close();
             board.Refresh();
             return board;
+        }
+
+        /// <summary>The bone button lives in the SAFE AREA, not on the board root — it is HUD,
+        /// and a notch would eat it. So it outlives this component's own hierarchy and has to be
+        /// cleaned up by hand.</summary>
+        private void OnDestroy()
+        {
+            // Scene teardown takes the whole canvas with it; destroying into a closing scene is
+            // how you earn console noise for nothing.
+            if (_button == null || _button.parent == transform || !gameObject.scene.isLoaded)
+            {
+                return;
+            }
+
+            Destroy(_button.gameObject);
         }
 
         private void BuildButton(RectTransform parent)
@@ -232,20 +296,18 @@ namespace DinoDigger.UI
             // board itself never closes it — only the backdrop and the X do.
             var trayGo = new GameObject("Tray", typeof(RectTransform));
             trayGo.transform.SetParent(_panel, false);
-            var tray = (RectTransform)trayGo.transform;
-            tray.anchorMin = tray.anchorMax = new Vector2(0.5f, 0.5f);
-            tray.pivot = new Vector2(0.5f, 0.5f);
-            tray.anchoredPosition = new Vector2(0f, 20f);
-            tray.sizeDelta = new Vector2(PanelWidth, PanelHeight);
+            _tray = (RectTransform)trayGo.transform;
+            _tray.anchorMin = _tray.anchorMax = new Vector2(0.5f, 0.5f);
+            _tray.pivot = new Vector2(0.5f, 0.5f);
             var trayImg = trayGo.AddComponent<Image>();
             trayImg.color = PanelTint;
 
             for (int i = 0; i < SkeletonPlan.Species.Length; i++)
             {
-                _cards.Add(BuildCard(tray, SkeletonPlan.Species[i], i));
+                _cards.Add(BuildCard(_tray, SkeletonPlan.Species[i], i));
             }
 
-            BuildCloseButton(tray);
+            BuildCloseButton(_tray);
         }
 
         private Card BuildCard(RectTransform tray, DinoType species, int index)
@@ -257,8 +319,7 @@ namespace DinoDigger.UI
             card.Root = (RectTransform)go.transform;
             card.Root.anchorMin = card.Root.anchorMax = new Vector2(0.5f, 0.5f);
             card.Root.pivot = new Vector2(0.5f, 0.5f);
-            card.Root.anchoredPosition = new Vector2((index - 2) * CardPitch, 0f);
-            card.Root.sizeDelta = new Vector2(CardWidth, CardHeight);
+            card.Root.sizeDelta = new Vector2(CardWidth, CardHeight);   // placed by LayoutTray
             var back = go.AddComponent<Image>();
             back.color = CardTint;
 
@@ -350,6 +411,85 @@ namespace DinoDigger.UI
             img.raycastTarget = false; // the disc behind owns the tap
         }
 
+        // ------------------------------------------------------------ tray reflow
+
+        /// <summary>
+        /// PURE. How the cards pack into a frame this wide (DinoDigger-avw).
+        ///
+        /// The board was authored as one landscape ROW of five cards, which needs 1760 reference
+        /// units of width — more than a portrait canvas HAS, so in portrait the outer cards
+        /// simply ran off the screen. Fitting as many cards per row as the frame can actually
+        /// hold and wrapping the rest turns that into a column-ish grid on a phone (5 cards
+        /// become 2x3) while landscape still resolves to the exact 5x1 / 1760x540 tray this
+        /// shipped with — the reflow is invisible on a desktop by arithmetic, not by a branch.
+        /// </summary>
+        internal static void TrayLayout(int cardCount, Vector2 frame,
+            out int cols, out int rows, out Vector2 traySize)
+        {
+            int n = Mathf.Max(1, cardCount);
+            int fits = Mathf.FloorToInt((frame.x - TrayPadX) / CardPitch);
+            cols = Mathf.Clamp(fits, 1, n);
+            rows = Mathf.CeilToInt(n / (float)cols);
+            traySize = new Vector2(
+                cols * CardPitch + TrayPadX,
+                rows * CardHeight + (rows - 1) * CardRowGap + TrayPadY);
+        }
+
+        /// <summary>The canvas-local rect the modal may use: the safe area when there is an
+        /// orientation brain to ask, else the whole canvas.</summary>
+        private Rect Frame()
+        {
+            if (_responsive != null)
+            {
+                return _responsive.SafeRect;
+            }
+
+            var canvasRect = transform.parent as RectTransform;
+            Vector2 size = canvasRect != null ? canvasRect.rect.size : ResponsiveUI.LandscapeReference;
+            return new Rect(-size.x * 0.5f, -size.y * 0.5f, size.x, size.y);
+        }
+
+        /// <summary>Pack the cards for <paramref name="frame"/> and centre the tray in it. The
+        /// last row is centred on its own so a 5-into-2 wrap reads as a deliberate shape rather
+        /// than a leftover; the whole tray then scales down if even the packed shape is bigger
+        /// than the frame, so "every card is on screen" is true by construction rather than by
+        /// tuning.</summary>
+        private void LayoutTray(Rect frame)
+        {
+            if (_tray == null)
+            {
+                return;
+            }
+
+            _laidOutFor = frame;
+            TrayLayout(_cards.Count, frame.size, out _cols, out _rows, out Vector2 traySize);
+            _tray.sizeDelta = traySize;
+
+            for (int i = 0; i < _cards.Count; i++)
+            {
+                if (_cards[i] == null || _cards[i].Root == null)
+                {
+                    continue;
+                }
+
+                int row = i / _cols;
+                int rowStart = row * _cols;
+                int inRow = Mathf.Min(_cols, _cards.Count - rowStart);
+                int col = i - rowStart;
+
+                _cards[i].Root.anchoredPosition = new Vector2(
+                    (col - (inRow - 1) * 0.5f) * CardPitch,
+                    -(row - (_rows - 1) * 0.5f) * (CardHeight + CardRowGap));
+            }
+
+            float scale = ResponsiveUI.FitScale(
+                new Vector2(traySize.x, traySize.y + CloseOverhang), frame.size);
+            _tray.localScale = new Vector3(scale, scale, 1f);
+            // Centred on the SAFE rect (not the canvas), keeping the small upward bias the
+            // landscape layout has always had so the tray sits above the thumb.
+            _tray.anchoredPosition = frame.center + new Vector2(0f, 20f * scale);
+        }
+
         private static void Stretch(RectTransform rt)
         {
             rt.anchorMin = Vector2.zero;
@@ -360,6 +500,17 @@ namespace DinoDigger.UI
         }
 
         // ----------------------------------------------------------- open / close
+
+        /// <summary>A board that was baked into a scene rather than built by <see cref="Build"/>
+        /// still needs the orientation brain — and Ensure is idempotent, so the built path
+        /// simply finds the same one a moment later.</summary>
+        private void Awake()
+        {
+            if (_responsive == null)
+            {
+                _responsive = ResponsiveCanvas.Ensure(GetComponentInParent<Canvas>());
+            }
+        }
 
         private void OnEnable()
         {
@@ -412,6 +563,15 @@ namespace DinoDigger.UI
         /// event — a save restored mid-collection has bones but fires no bank.</summary>
         private void Update()
         {
+            // LIVE REFLOW (DinoDigger-avw): the frame changes when the device rotates or the
+            // WebGL canvas resizes, and nothing else. Comparing it is what keeps a board that
+            // was open across a rotate from ending up half off the screen.
+            Rect frame = Frame();
+            if (_tray != null && frame != _laidOutFor)
+            {
+                LayoutTray(frame);
+            }
+
             if (_button != null)
             {
                 bool show = GameManager.Instance != null && GameManager.Instance.AnyBoneBanked;

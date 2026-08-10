@@ -49,6 +49,10 @@ namespace DinoDigger.Core
         [SerializeField] private SkeletonBoard _skeletonBoard;
         [SerializeField] private DinoMaticController _dinoMatic;
 
+        // The HUD's orientation brain (DinoDigger-avw) — ensured at boot for exactly the same
+        // reason as the two above, and before them: the board's button lives in its safe rect.
+        private ResponsiveCanvas _responsiveCanvas;
+
         [Header("Audio sources")]
         [SerializeField] private int _sfxVoices = 6;
 
@@ -523,8 +527,24 @@ namespace DinoDigger.Core
                 _muteButton.Bind(Audio, _config);
             }
 
+            EnsureResponsiveCanvas();
             EnsureSkeletonBoard();
             EnsureDinoMatic();
+        }
+
+        /// <summary>Self-heal the HUD's orientation brain (DinoDigger-avw), on the same terms as
+        /// the board below: a scene baked before it existed has a canvas with no safe-area rect
+        /// and a landscape-only scaler, and this gives it both without a scene rebuild. Runs
+        /// BEFORE the board, which parks its bone button inside the rect this creates.</summary>
+        private void EnsureResponsiveCanvas()
+        {
+            if (_responsiveCanvas != null)
+            {
+                return;
+            }
+
+            Canvas canvas = FindAnyObjectByType<Canvas>();
+            _responsiveCanvas = ResponsiveCanvas.Ensure(canvas);
         }
 
         /// <summary>Self-heal the skeleton board (DinoDigger-5ve). A scene serialized before the
@@ -1335,8 +1355,10 @@ namespace DinoDigger.Core
             if (_cameraFollow != null)
             {
                 // The site decides its own framing: a mega pit needs a wider one than the
-                // standard board, so the ortho size travels with the DigCenter.
-                _cameraFollow.EnterDig(_digMode.DigCenter, _digMode.DigOrthoSize,
+                // standard board, so the FIT (the content rect its grid + machine occupy, not a
+                // fixed ortho size) travels with the DigCenter and the camera resolves it
+                // against whatever shape the screen currently is — DinoDigger-kgm.
+                _cameraFollow.EnterDig(_digMode.DigCenter, _digMode.DigFit,
                     () => State.Set(GameState.Dig));
             }
             else
@@ -3403,6 +3425,7 @@ namespace DinoDigger.Core
 
         // ---- Fossil finale (DinoDigger-5ve / -3rz) ----
         internal SkeletonBoard TestSkeletonBoard => _skeletonBoard;
+        internal ResponsiveCanvas TestResponsiveCanvas => _responsiveCanvas;
         internal DinoMaticController TestDinoMatic => _dinoMatic;
         internal bool TestRevivalPending => RevivalPending;
         internal bool TestAllSkeletonsRevived => AllSkeletonsRevived();

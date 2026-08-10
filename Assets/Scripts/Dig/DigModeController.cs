@@ -395,14 +395,27 @@ namespace DinoDigger.Dig
         // DIG-VIEW STAGING (close-up cutaway): the body renders BIG (2.4 units
         // tall vs 1.3 in the overworld), parked at the LEFT end of the surface
         // line, MIRRORED (flipX) so its rear arm-mount faces the grid — a real
-        // backhoe digs over its rear. The camera frames body + grid via DigCenter
-        // (computed in BuildGrid) and GameConfig.DigOrthoSize 4.2:
-        // y in [-5.7, +2.7], x in +-6.72 at 16:10.
+        // backhoe digs over its rear. The camera frames body + grid + the arm's
+        // whole working sweep via ComputeDigFrame below: for rows=5 that is
+        // y in [-5.7, +2.7] (half-height 4.2 — the shipped DigOrthoSize) and
+        // x in +-5.9 about the dig origin, at EVERY aspect (DinoDigger-kgm).
         private const float SurfaceY = 0.1f;   // surface line above the dig origin
         private const float DigBodyH = 2.4f;   // dig-view body height (close-up scale)
         private const float BodyRestX = -3.0f;  // parked body center, left of the grid
         private const float MountX = 0.95f;  // shoulder offset from body center
         private const float MountY = 0.15f;  //   (rear-top of the mirrored body)
+        // Dig-view body HALF WIDTH. The armless body art is ~1.05:1, so at 2.4
+        // units tall it draws ~2.52 wide; rounded up because a machine kissing
+        // the screen edge reads as broken framing even when nothing is missing.
+        private const float DigBodyHalfW = 1.3f;
+
+        // Framing margins baked into the dig's content rect (see ComputeDigFrame).
+        // The top one is what keeps the ARM in shot: the boom tops out at +20 deg
+        // from a 1.45-high shoulder and the gooseneck art's crest rides ~1.0 above
+        // the pin line, so the arm's sweep peaks at ~2.63 — under the 2.7 roof.
+        private const float FrameMarginTop = 0.2f;
+        private const float FrameMarginBottom = 0.7f;
+        private const float FrameMarginX = 0.35f;
 
         // Segment lengths (world units). Reach 6.5 from the shoulder (~1.45 above
         // the surface) covers the deepest row (aim y -4.75 => 6.2 drop); for far
@@ -485,8 +498,65 @@ namespace DinoDigger.Dig
         private float _stickRelShownDeg = RestStickDeg - RestBoomDeg;
         private float _scoopShownDeg = RestScoop;
 
+        // The live site's content half-rect (ComputeDigFrame, captured in BuildGrid). Cached
+        // rather than recomputed so a rotation mid-dig reframes off the board that is actually
+        // on screen, even if config was edited since it was built.
+        private float _frameHalfWidth;
+        private float _frameHalfHeight;
+
         public Vector3 DigCenter { get; private set; }
         public bool IsOpen => _open;
+
+        /// <summary>
+        /// PURE. The world half-rect a dig site must keep on screen, relative to the DIG ORIGIN
+        /// (the grid's top-centre) — the input to the camera's fit (DinoDigger-kgm).
+        ///
+        /// This is computed from the ACTUAL BOARD rather than from a constant, which is what
+        /// lets one function frame the ordinary 5x7 pit and the mega-fossil 7x9 pit alike: a
+        /// bigger grid simply reports bigger extents. Three things have to be inside it:
+        ///
+        ///   THE GRID. Tiles are 1 unit and sit at (c - (cols-1)/2, -(r+1)), so the board spans
+        ///     +-cols/2 across and y in [-0.5, -(rows + 0.5)].
+        ///   THE BODY, ANYWHERE IT TRAVELS. The excavator scoots along the surface to reach far
+        ///     columns (see UpdateBodyLean), so the frame has to hold its parked position AND
+        ///     both ends of that traverse, clamped exactly the way the live lean is.
+        ///   THE ARM'S SWEEP. Vertically that is the roof term below (the boom's crest sits just
+        ///     under it); horizontally the wrist only ever visits tiles, which the grid term
+        ///     already covers, and the bucket's overhang is what FrameMarginX is for.
+        ///
+        /// <paramref name="centerY"/> is the framing centre (x is the origin's own x — the frame
+        /// is deliberately symmetric about the grid, which is what keeps the shipped landscape
+        /// composition identical). <paramref name="halfHeight"/> for rows=5 comes out at exactly
+        /// 4.2, the ortho size this game has always used on a 16:10 screen.
+        /// </summary>
+        public static void ComputeDigFrame(int rows, int cols,
+            out float centerY, out float halfWidth, out float halfHeight)
+        {
+            int r = Mathf.Max(1, rows);
+            int c = Mathf.Max(1, cols);
+
+            // Vertical: the body's roof (with the arm's crest under it) down past the last row.
+            float frameTop = SurfaceY + DigBodyH + FrameMarginTop;
+            float frameBottom = -(r + FrameMarginBottom);
+            centerY = (frameTop + frameBottom) * 0.5f;
+            halfHeight = (frameTop - frameBottom) * 0.5f;
+
+            // Horizontal: the grid's outer tile edges...
+            float gridHalf = (c - 1) * 0.5f;      // outermost column CENTRES
+            float gridEdge = gridHalf + 0.5f;     // ...and their outer edges (tiles are 1 unit)
+
+            // ...and the body at both ends of its traverse. Same expression the live lean uses,
+            // so the frame can never disagree with where the machine actually goes.
+            float restShoulderX = BodyRestX + MountX;
+            float leanLeft = Mathf.Clamp(
+                -gridHalf * ShoulderTrackGain + ShoulderTrackBias - restShoulderX, LeanMin, LeanMax);
+            float leanRight = Mathf.Clamp(
+                gridHalf * ShoulderTrackGain + ShoulderTrackBias - restShoulderX, LeanMin, LeanMax);
+            float bodyLeft = BodyRestX + leanLeft - DigBodyHalfW;
+            float bodyRight = BodyRestX + leanRight + DigBodyHalfW;
+
+            halfWidth = Mathf.Max(gridEdge, Mathf.Max(-bodyLeft, bodyRight)) + FrameMarginX;
+        }
 
         // ------------------------------------------------------------ TEST HOOKS
         // Marked internal for the integration test runner. Read-only views over the
@@ -1153,12 +1223,14 @@ namespace DinoDigger.Dig
                 }
             }
 
-            // Frame body + grid: midpoint between the body's roof (with margin)
-            // and the deepest tile row (with margin). Rows=5 => y = -1.5; paired
-            // with GameConfig.DigOrthoSize 4.2 the frame spans y in [-5.7, +2.7].
-            float frameTop = SurfaceY + DigBodyH + 0.2f;
-            float frameBottom = -(_rows + 0.7f);
-            DigCenter = origin + new Vector3(0f, (frameTop + frameBottom) * 0.5f, 0f);
+            // Frame body + grid + arm sweep. ComputeDigFrame owns the whole rect (centre AND
+            // extents) so the camera's fit and this centre can never drift apart; rows=5 still
+            // yields y = -1.5 with a half-height of 4.2, exactly as it always has.
+            ComputeDigFrame(_rows, _cols, out float frameCenterY,
+                out float frameHalfW, out float frameHalfH);
+            DigCenter = origin + new Vector3(0f, frameCenterY, 0f);
+            _frameHalfWidth = frameHalfW;
+            _frameHalfHeight = frameHalfH;
         }
 
         /// <summary>Roll one dirt tile's break-tap hardness, LOW-biased so most tiles crumble

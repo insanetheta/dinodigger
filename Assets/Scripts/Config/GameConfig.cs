@@ -466,6 +466,12 @@ namespace DinoDigger.Config
         public float DinoWanderRadius = 1.2f;
         public float DinoEatSpeed = 4.0f;
 
+        // ---- Camera framing (DinoDigger-kgm) ---------------------------------
+        // EVERY ORTHO NUMBER BELOW IS A LANDSCAPE BASELINE, NOT A FRAMING. Ortho size is half
+        // the VERTICAL extent, so one number is only correct at one aspect — see
+        // Core.CameraFraming. The camera derives its actual size from CONTENT plus the live
+        // aspect and uses these as MINIMUMS, which is what keeps the desktop/landscape look
+        // pixel-identical to what shipped while portrait stops clipping the playfield.
         [Header("Camera")]
         public float RoamOrthoSize = 5.5f;
         // Dig view frames the close-up 2.4-unit backhoe body ABOVE the surface
@@ -478,6 +484,55 @@ namespace DinoDigger.Config
         public float CameraFollowLerp = 3.0f;
         public Vector2 CameraDeadzone = new Vector2(1.2f, 0.8f);
         public float TransitionSeconds = 0.5f;
+
+        [Tooltip("OVERWORLD TARGET VISIBLE WORLD WIDTH, in units. The roam camera keeps this " +
+                 "much world across the screen at every aspect, floored at RoamOrthoSize. " +
+                 "TUNED AT 2x THE BASELINE ON PURPOSE: half of 11 is exactly 5.5, so every " +
+                 "LANDSCAPE aspect frames precisely as it always did (5.5/aspect <= 5.5 once " +
+                 "aspect >= 1, so the floor wins outright), while portrait ends up showing the " +
+                 "SAME AMOUNT OF ISLAND as landscape — turning the phone changes the shape of " +
+                 "the view, not how much world is in it. Today portrait shows 5.1 units of " +
+                 "width against landscape's 23.8, which is the bug.")]
+        public float RoamViewWidth = 11f;
+
+        [Tooltip("Absurdity ceiling on the roam framing — a browser window dragged into a " +
+                 "sliver must not turn the island into a map. Set clear of real handsets " +
+                 "(9:19.5 asks for 11.9, 9:21 for 12.8), so it only ever catches nonsense.")]
+        public float RoamMaxOrthoSize = 14f;
+
+        [Tooltip("Target visible world WIDTH for the revival ceremony / attract-tour push-in " +
+                 "(the machine plus the new baby, with room around them). Same 2x-the-baseline " +
+                 "rule as RoamViewWidth, so it only bites in portrait — where CeremonyOrthoSize " +
+                 "alone would crop the pair.")]
+        public float CeremonyViewWidth = 8f;
+
+        [Tooltip("Absurdity ceiling on the ceremony framing.")]
+        public float CeremonyMaxOrthoSize = 10f;
+
+        [Tooltip("Absurdity ceiling on the dig framing. Deliberately generous: the dig's " +
+                 "content (grid + body + arm reach) MUST fit, so this only exists to stop a " +
+                 "degenerate window from producing a nonsense camera.")]
+        public float DigMaxOrthoSize = 16f;
+
+        /// <summary>The overworld framing request: a target visible world width, floored at the
+        /// landscape baseline. Derived here rather than in CameraFollow so the numbers and the
+        /// tooltips that explain them live together.</summary>
+        public Core.CameraFit RoamFit()
+        {
+            float baseline = Mathf.Max(0.5f, RoamOrthoSize);
+            return Core.CameraFit.Content(
+                Mathf.Max(0f, RoamViewWidth) * 0.5f, baseline, 0f,
+                baseline, Mathf.Max(baseline, RoamMaxOrthoSize));
+        }
+
+        /// <summary>The ceremony / attract-tour push-in framing request.</summary>
+        public Core.CameraFit CeremonyFit()
+        {
+            float baseline = Mathf.Max(0.5f, CeremonyOrthoSize);
+            return Core.CameraFit.Content(
+                Mathf.Max(0f, CeremonyViewWidth) * 0.5f, baseline, 0f,
+                baseline, Mathf.Max(baseline, CeremonyMaxOrthoSize));
+        }
 
         // THE EGG-SHARD NEST IS RETIRED (save v5, DinoDigger-5ve). Its escalating requirement
         // curve lived here; it now lives — frozen — as Managers.SaveData.LegacyShardsPerHatch,
